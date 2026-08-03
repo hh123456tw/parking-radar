@@ -1,0 +1,26 @@
+/* 深色底搭配橘紅警示，讓分數層級在展示時一眼可辨識。 */
+:root { --bg:#0e1116; --panel:#171c24; --line:#2a3340; --text:#f7f8fa; --muted:#9aa6b2; --orange:#ff8a3d; --red:#ff4d4f; --yellow:#f6c344; --green:#4ecb8d; }
+* { box-sizing:border-box; }
+body { margin:0; background:radial-gradient(circle at top right,#2a1715 0,#0e1116 35%); color:var(--text); font-family:"Noto Sans TC",system-ui,sans-serif; line-height:1.6; }
+.hero, main, footer { width:min(1120px,calc(100% - 32px)); margin:auto; }
+.hero { padding:56px 0 28px; }
+.hero h1 { margin:4px 0; font-size:clamp(2.2rem,7vw,5rem); line-height:1; }
+.eyebrow { color:var(--orange); letter-spacing:.15em; font-weight:700; }
+main { display:grid; gap:24px; padding-bottom:48px; }
+section, .score-grid article { background:rgba(23,28,36,.94); border:1px solid var(--line); border-radius:18px; padding:20px; }
+.input-row, .manual-grid { display:grid; grid-template-columns:1fr auto; gap:12px; }
+input, select, button { min-height:46px; border-radius:10px; border:1px solid var(--line); padding:0 14px; font:inherit; }
+input, select { background:#0f141b; color:var(--text); }
+button { border:0; background:var(--orange); color:#1b1008; font-weight:800; cursor:pointer; }
+.score-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; background:none; border:0; padding:0; }
+.card-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; background:none; border:0; padding:0; }
+.score-grid strong { display:block; margin-top:8px; font-size:1.7rem; }
+.parking-card { border-left:5px solid var(--green); }
+.parking-card.warning { border-left-color:var(--yellow); }
+.parking-card.avoid { border-left-color:var(--red); }
+.map-layout { display:grid; grid-template-columns:2fr 1fr; gap:20px; }
+#map { height:430px; border-radius:14px; }
+#status.error { color:#ff9294; }
+#status.success { color:#7de2ad; }
+footer { color:var(--muted); padding:8px 0 40px; font-size:.9rem; }
+@media (max-width:760px) { .score-grid,.card-grid,.map-layout,.manual-grid { grid-template-columns:1fr; } .input-row { grid-template-columns:1fr; } #map { height:340px; } }
