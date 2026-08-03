@@ -1,0 +1,15 @@
+[Unit]
+Description=Parking Hell Radar Flask application
+After=network.target mysql.service
+
+[Service]
+User=parking
+Group=www-data
+WorkingDirectory=/opt/parking-hell
+EnvironmentFile=/opt/parking-hell/.env
+ExecStart=/opt/parking-hell/.venv/bin/gunicorn --workers 1 --bind 127.0.0.1:8000 --timeout 60 app:app
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
