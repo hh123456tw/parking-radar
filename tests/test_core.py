@@ -126,3 +126,65 @@ def test_fetch_current_lots_passes_freshness_and_district_as_parameters():
     assert "ROW_NUMBER()" in sql
     assert params == (45, "信義區")
     assert rows == [{"lot_id": "TPE0001"}]
+
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from collector import parse_dynamic, parse_static
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def load_fixture(name):
+    """讀取固定官方格式，讓測試不依賴網路內容。"""
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def test_static_parser_uses_exact_id_and_wgs84_entrance():
+    payload = load_fixture("taipei_static.json")
+    lots = parse_static(payload, {"TPE0001"})
+    assert lots[0]["lot_id"] == "TPE0001"
+    assert lots[0]["operator_type"] == "民營停車場"
+    assert lots[0]["latitude"] == 25.0552
+    assert lots[0]["longitude"] == 121.5242
+    assert lots[0]["supports_realtime"] is True
+    assert lots[1]["supports_realtime"] is False
+
+
+def test_dynamic_parser_keeps_only_nonnegative_values():
+    payload = load_fixture("taipei_dynamic.json")
+    captured = datetime(2026, 8, 3, 10, 1, tzinfo=timezone.utc)
+    snapshots = parse_dynamic(payload, captured)
+    assert snapshots == [{
+        "lot_id": "TPE0001", "available_spaces": 8,
+        "source_updated_at": datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc),
+        "captured_at": captured,
+    }, {
+        "lot_id": "TPE0003", "available_spaces": 999,
+        "source_updated_at": datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc),
+        "captured_at": captured,
+    }]
+
+
+import collector
+
+
+def test_collect_once_filters_available_over_total_and_commits(monkeypatch):
+    static = load_fixture("taipei_static.json")
+    dynamic = load_fixture("taipei_dynamic.json")
+    connection = type("Connection", (), {
+        "committed": False, "rolled_back": False,
+        "commit": lambda self: setattr(self, "committed", True),
+        "rollback": lambda self: setattr(self, "rolled_back", True),
+        "close": lambda self: None,
+    })()
+    monkeypatch.setattr(collector, "fetch_json", lambda url, timeout=15: static if "alldesc" in url else dynamic)
+    monkeypatch.setattr(collector, "get_connection", lambda: connection)
+    monkeypatch.setattr(collector, "upsert_parking_lots", lambda conn, rows: len(rows))
+    saved = []
+    monkeypatch.setattr(collector, "insert_snapshots", lambda conn, rows: saved.extend(rows) or len(rows))
+    result = collector.collect_once()
+    assert [row["lot_id"] for row in saved] == ["TPE0001"]
+    assert result == {"lots": 2, "snapshots": 1}
+    assert connection.committed is True

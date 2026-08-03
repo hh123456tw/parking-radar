@@ -1,0 +1,4 @@
+{"data":{"UPDATETIME":"2026-08-03T18:00:00+08:00","park":[
+  {"id":"TPE0001","area":"中山區","name":"測試民營停車場","type2":"民營停車場","address":"長春路17號地下1層","payex":"100元/時","serviceTime":"00:00:00-23:59:59","totalcar":17,"EntranceCoord":{"EntrancecoordInfo":[{"Xcod":"25.0552","Ycod":"121.5242","Address":"入口"}]}},
+  {"id":"139","area":"士林區","name":"無即時資料停車場","address":"福國路70號","payex":"","totalcar":30,"EntranceCoord":{}}
+]}}

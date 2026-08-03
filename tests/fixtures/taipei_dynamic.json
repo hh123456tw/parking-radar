@@ -1,0 +1,5 @@
+{"data":{"UPDATETIME":"2026-08-03T18:00:00+08:00","park":[
+  {"id":"TPE0001","availablecar":8},
+  {"id":"TPE0002","availablecar":-9},
+  {"id":"TPE0003","availablecar":999}
+]}}
