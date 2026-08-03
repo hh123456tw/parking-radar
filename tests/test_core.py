@@ -2,6 +2,7 @@
 
 from app import create_app
 from config import Config
+from zoneinfo import ZoneInfo
 
 
 def test_config_has_locked_analysis_constants():
@@ -188,3 +189,39 @@ def test_collect_once_filters_available_over_total_and_commits(monkeypatch):
     assert [row["lot_id"] for row in saved] == ["TPE0001"]
     assert result == {"lots": 2, "snapshots": 1}
     assert connection.committed is True
+
+
+from datetime import timedelta
+from analysis import (build_history_series, summarize_hour_comparison,
+                      summarize_matching_history)
+
+
+def history_row(local_day, hour, available):
+    """建立臺北時間樣本，再轉成資料庫使用的 UTC。"""
+    local = datetime(2026, 8, local_day, hour, tzinfo=ZoneInfo("Asia/Taipei"))
+    return {"captured_at": local.astimezone(timezone.utc),
+            "total_spaces": 100, "available_spaces": available}
+
+
+def test_history_requires_three_same_day_type_and_hour_samples():
+    arrival = datetime(2026, 8, 8, 18, tzinfo=ZoneInfo("Asia/Taipei"))
+    insufficient = [history_row(1, 18, 10), history_row(2, 18, 20)]
+    assert summarize_matching_history(insufficient, arrival)["hell_score"] is None
+    enough = insufficient + [history_row(8, 18, 30)]
+    summary = summarize_matching_history(enough, arrival)
+    assert summary == {"hell_score": 80.0, "sample_count": 3, "day_type": "weekend", "hour": 18}
+
+
+def test_history_series_has_iso_time_and_available_spaces():
+    rows = [history_row(1, 18, 10)]
+    point = build_history_series(rows)[0]
+    assert point["available_spaces"] == 10
+    assert point["captured_at"].endswith("+08:00")
+
+
+def test_weekday_weekend_comparison_reports_both_groups():
+    rows = [history_row(day, 18, 50) for day in (3, 4, 5)]
+    rows += [history_row(day, 18, 20) for day in (1, 2, 8)]
+    comparison = summarize_hour_comparison(rows, 18)
+    assert comparison["weekday"] == {"hell_score": 50.0, "sample_count": 3}
+    assert comparison["weekend"] == {"hell_score": 80.0, "sample_count": 3}

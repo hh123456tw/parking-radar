@@ -1,6 +1,12 @@
 """純分析函式：負責清洗、地獄指數、距離、推薦與歷史統計。"""
 
+from datetime import datetime
 from math import asin, cos, radians, sin, sqrt
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+
+TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 
 
 def clean_available(total_spaces, available_spaces):
@@ -94,3 +100,54 @@ def rank_candidates(rows, destination_lat, destination_lon, radius_m=1500):
         )
         candidates.append(item)
     return sorted(candidates, key=lambda item: item["recommendation_score"], reverse=True)
+
+
+def day_type(local_dt):
+    """星期一至五回傳 weekday，星期六日回傳 weekend。"""
+    return "weekday" if local_dt.weekday() < 5 else "weekend"
+
+
+def summarize_matching_history(rows, arrival_time, min_samples=3):
+    """計算與抵達時間同日別、同整點小時的平均地獄指數。"""
+    local_arrival = arrival_time.astimezone(TAIPEI_TZ)
+    target_type = day_type(local_arrival)
+    target_hour = local_arrival.hour
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return {"hell_score": None, "sample_count": 0,
+                "day_type": target_type, "hour": target_hour}
+    frame["local_time"] = pd.to_datetime(frame["captured_at"], utc=True).dt.tz_convert("Asia/Taipei")
+    frame["day_type"] = frame["local_time"].dt.weekday.map(
+        lambda value: "weekday" if value < 5 else "weekend")
+    frame["hour"] = frame["local_time"].dt.hour
+    frame["hell_score"] = frame.apply(
+        lambda row: hell_score(row["total_spaces"], row["available_spaces"]), axis=1)
+    matched = frame[(frame["day_type"] == target_type) &
+                    (frame["hour"] == target_hour)]["hell_score"].dropna()
+    result = {"hell_score": None, "sample_count": int(len(matched)),
+              "day_type": target_type, "hour": target_hour}
+    if len(matched) >= min_samples:
+        result["hell_score"] = round(float(matched.mean()), 2)
+    return result
+
+
+def summarize_hour_comparison(rows, hour, min_samples=3):
+    """比較指定整點的平日與週末平均分數；各組都獨立套用三筆門檻。"""
+    results = {kind: {"hell_score": None, "sample_count": 0}
+               for kind in ("weekday", "weekend")}
+    for kind, target in (
+        ("weekday", datetime(2024, 1, 1, hour, tzinfo=TAIPEI_TZ)),
+        ("weekend", datetime(2024, 1, 6, hour, tzinfo=TAIPEI_TZ)),
+    ):
+        summary = summarize_matching_history(rows, target, min_samples)
+        results[kind] = {"hell_score": summary["hell_score"],
+                         "sample_count": summary["sample_count"]}
+    return results
+
+
+def build_history_series(rows):
+    """將最近七天快照轉成 Chart.js 可直接使用的臺北時間序列。"""
+    return [{
+        "captured_at": row["captured_at"].astimezone(TAIPEI_TZ).isoformat(),
+        "available_spaces": int(row["available_spaces"]),
+    } for row in rows if clean_available(row["total_spaces"], row["available_spaces"]) is not None]
