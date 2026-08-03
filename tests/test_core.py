@@ -262,3 +262,26 @@ def test_geocoder_parses_first_taipei_result_and_saves(monkeypatch):
     result = geocode_address("市府路1號", fake_connection, http_get=lambda *_a, **_k: response)
     assert result["latitude"] == 25.0375
     assert saved[0]["normalized_address"] == "臺北市市府路1號"
+
+
+import pytest
+from ai_service import IntentServiceError, ParkingIntent, parse_parking_query
+
+
+def test_intent_schema_rejects_non_taipei_district():
+    with pytest.raises(ValueError):
+        ParkingIntent(intent="recommend", original_destination="板橋車站",
+                      address=None, district="板橋區", arrival_time=None,
+                      missing_fields=[])
+
+
+def test_parse_query_uses_structured_output_and_context(monkeypatch):
+    output = """{"intent":"compare","original_destination":"臺北市政府",
+      "address":"臺北市信義區市府路1號","district":"信義區",
+      "arrival_time":"2026-08-08T18:00:00+08:00","missing_fields":[]}"""
+    interaction = type("Interaction", (), {"output_text": output})()
+    interactions = type("Interactions", (), {"create": lambda self, **kwargs: interaction})()
+    fake_client = type("Client", (), {"interactions": interactions})()
+    result = parse_parking_query("那週末呢？", {"destination": "臺北市政府"}, fake_client)
+    assert result.intent == "compare"
+    assert result.district == "信義區"
