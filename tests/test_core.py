@@ -219,6 +219,13 @@ def test_history_series_has_iso_time_and_available_spaces():
     assert point["captured_at"].endswith("+08:00")
 
 
+def test_history_series_treats_naive_db_times_as_utc():
+    """資料庫回傳的無時區 UTC 時間必須先補上 UTC，避免主機時區偏移。"""
+    naive = datetime(2026, 8, 3, 2, 0)
+    point = build_history_series([{"captured_at": naive, "total_spaces": 100, "available_spaces": 10}])[0]
+    assert point["captured_at"] == "2026-08-03T10:00:00+08:00"
+
+
 def test_weekday_weekend_comparison_reports_both_groups():
     rows = [history_row(day, 18, 50) for day in (3, 4, 5)]
     rows += [history_row(day, 18, 20) for day in (1, 2, 8)]

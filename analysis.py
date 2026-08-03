@@ -1,6 +1,6 @@
 """純分析函式：負責清洗、地獄指數、距離、推薦與歷史統計。"""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from math import asin, cos, radians, sin, sqrt
 from zoneinfo import ZoneInfo
 
@@ -147,7 +147,16 @@ def summarize_hour_comparison(rows, hour, min_samples=3):
 
 def build_history_series(rows):
     """將最近七天快照轉成 Chart.js 可直接使用的臺北時間序列。"""
-    return [{
-        "captured_at": row["captured_at"].astimezone(TAIPEI_TZ).isoformat(),
-        "available_spaces": int(row["available_spaces"]),
-    } for row in rows if clean_available(row["total_spaces"], row["available_spaces"]) is not None]
+    points = []
+    for row in rows:
+        if clean_available(row["total_spaces"], row["available_spaces"]) is None:
+            continue
+        captured = row["captured_at"]
+        # PyMySQL 回傳無時區的 UTC 時間，先補上 UTC 再轉臺北時間，避免受主機時區影響。
+        if captured.tzinfo is None:
+            captured = captured.replace(tzinfo=timezone.utc)
+        points.append({
+            "captured_at": captured.astimezone(TAIPEI_TZ).isoformat(),
+            "available_spaces": int(row["available_spaces"]),
+        })
+    return points
