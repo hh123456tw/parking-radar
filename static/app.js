@@ -19,8 +19,8 @@ async function submitQuery(payload) {
     throw new Error(data.error || "查詢失敗");
   }
   renderSummary(data); renderCards(data); renderMap(data);
-  if (data.recommendations.length) await loadHistory(data.recommendations[0].lot_id);
-  showStatus("分析完成；數字來自官方資料與固定公式。", "success");
+  const historyOk = data.recommendations.length ? await loadHistory(data.recommendations[0].lot_id) : true;
+  if (historyOk) showStatus("分析完成；數字來自官方資料與固定公式。", "success");
 }
 
 document.querySelector("#chat-form").addEventListener("submit", async event => {
@@ -55,7 +55,7 @@ function renderCards(data) {
   const cards = [...data.recommendations.map(x=>parkingCard(x)), ...data.warning.map(x=>parkingCard(x,"warning")), ...data.avoid.map(x=>parkingCard(x,"avoid"))];
   document.querySelector("#recommendations").innerHTML = cards.join("") || "<p>目前沒有符合條件的停車場。</p>";
   document.querySelector("#nearest").innerHTML = data.nearest.map(x=>`<li><button type="button" data-lot="${x.lot_id}">${x.lot_name}<br>${formatDistance(x.distance_m)}</button></li>`).join("");
-  document.querySelectorAll("[data-lot]").forEach(button=>button.addEventListener("click",()=>loadHistory(button.dataset.lot)));
+  document.querySelectorAll("[data-lot]").forEach(button=>button.addEventListener("click",()=>loadHistory(button.dataset.lot).catch(err => showStatus(err.message, "error"))));
 }
 function renderMap(data) {
   markerLayer.clearLayers();
@@ -71,9 +71,10 @@ function renderMap(data) {
 }
 async function loadHistory(lotId) {
   const response = await fetch(`/api/parking/${encodeURIComponent(lotId)}/history`); const data = await response.json();
-  if (!response.ok) return showStatus(data.error,"error");
+  if (!response.ok) { showStatus(data.error,"error"); return false; }
   const labels=data.points.map(x=>new Date(x.captured_at).toLocaleString("zh-TW")); const values=data.points.map(x=>x.available_spaces);
   if (historyChart) historyChart.destroy();
   historyChart=new Chart(document.querySelector("#history-chart"),{type:"line",data:{labels,datasets:[{label:"剩餘汽車位",data:values,borderColor:"#ff8a3d",backgroundColor:"#ff8a3d33",fill:true,tension:.25}]},options:{responsive:true,scales:{y:{beginAtZero:true}}}});
   document.querySelector("#history-note").textContent = data.points.length ? `共 ${data.points.length} 筆有效歷史資料` : "歷史樣本尚不足";
+  return true;
 }

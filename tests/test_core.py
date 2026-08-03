@@ -288,6 +288,7 @@ def test_parse_query_uses_structured_output_and_context(monkeypatch):
 
 
 import app as app_module
+from app import validate_parsed_query
 
 
 def test_manual_query_returns_deterministic_groups(monkeypatch):
@@ -309,6 +310,35 @@ def test_manual_query_returns_deterministic_groups(monkeypatch):
     assert response.status_code == 200
     assert body["recommendations"][0]["lot_id"] == "TPE1"
     assert body["destination"]["display_address"] == "臺北市政府"
+
+
+def test_manual_query_updated_at_treats_naive_db_times_as_utc(monkeypatch):
+    """updated_at 的無時區 UTC 必須補上 UTC 再轉臺北時區，避免瀏覽器誤讀。"""
+    fake_connection = type("Connection", (), {"close": lambda self: None})()
+    monkeypatch.setattr(app_module, "get_connection", lambda: fake_connection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda address, conn: {
+        "display_address": "臺北市政府", "latitude": 25.0375, "longitude": 121.5637})
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda conn, district=None, freshness_minutes=45: [{
+        "lot_id": "TPE1", "lot_name": "A場", "district": "信義區", "address": "市府路",
+        "operator_type": "民營停車場", "total_spaces": 100, "available_spaces": 20,
+        "latitude": 25.0376, "longitude": 121.5638,
+        "captured_at": datetime(2026, 8, 3, 10)}])
+    monkeypatch.setattr(app_module, "attach_history", lambda conn, rows, arrival: rows)
+    client = create_app({"TESTING": True, "SECRET_KEY": "test"}).test_client()
+    response = client.post("/api/query", json={
+        "mode": "manual", "address": "市府路1號", "district": "信義區",
+        "arrival_time": "2026-08-03T18:00:00+08:00"})
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["updated_at"].endswith("+08:00")
+    assert body["updated_at"] == "2026-08-03T18:00:00+08:00"
+
+
+def test_chat_naive_arrival_time_is_rejected():
+    """聊天路徑的無時區抵達時間必須拒絕，與手動路徑一致。"""
+    with pytest.raises(ValueError, match="抵達時間必須包含時區"):
+        validate_parsed_query({"intent": "recommend", "address": "臺北市市府路1號",
+                               "district": None, "arrival_time": "2026-08-03T18:00:00"})
 
 
 def test_chat_failure_returns_manual_fallback(monkeypatch):

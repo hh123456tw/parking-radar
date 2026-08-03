@@ -42,6 +42,8 @@ def validate_parsed_query(parsed):
         raise ValueError("請提供預計抵達時間")
     if isinstance(parsed["arrival_time"], str):
         parsed["arrival_time"] = datetime.fromisoformat(parsed["arrival_time"])
+        if parsed["arrival_time"].tzinfo is None:
+            raise ValueError("抵達時間必須包含時區")
     return parsed
 
 
@@ -136,6 +138,9 @@ def create_app(test_config=None):
                            arrival_time=parsed["arrival_time"].isoformat(),
                            lot_id=ranked[0]["lot_id"] if ranked else None)
             updated_at = max((row["captured_at"] for row in rows), default=None)
+            if updated_at is not None and updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            updated_at = updated_at.astimezone(ZoneInfo("Asia/Taipei")).isoformat() if updated_at else None
             return jsonify(destination=destination_json, current={
                 "district_score": district_hell_score(score_rows),
                 "valid_lot_count": len(score_rows)},
@@ -143,7 +148,7 @@ def create_app(test_config=None):
                          "sample_count": first.get("history_sample_count", 0) if first else 0,
                          "comparison": first.get("history_comparison") if first else None},
                 intent=parsed["intent"],
-                updated_at=updated_at.isoformat() if updated_at else None, **groups)
+                updated_at=updated_at, **groups)
         except Exception:
             app.logger.exception("停車查詢失敗")
             return jsonify(error="服務暫時無法使用，請稍後再試"), 503
