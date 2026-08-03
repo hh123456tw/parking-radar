@@ -102,6 +102,33 @@ def rank_candidates(rows, destination_lat, destination_lon, radius_m=1500):
     return sorted(candidates, key=lambda item: item["recommendation_score"], reverse=True)
 
 
+def split_recommendation_groups(ranked):
+    """產生前三名、最近、小心與避雷群組，讓前端只負責呈現。"""
+    with_distance = [row for row in ranked if row.get("distance_m") is not None]
+    nearest = sorted(with_distance, key=lambda item: item["distance_m"])[:3]
+    warning = [row for row in ranked if 85 <= row["hell_score"] < 95]
+    avoid = [row for row in ranked if row["available_spaces"] <= 3 or row["hell_score"] >= 95]
+    return {
+        "recommendations": ranked[:3], "nearest": nearest,
+        "warning": warning[:3], "avoid": avoid[:3],
+    }
+
+
+def rank_district_candidates(rows):
+    """手動行政區模式不計距離，只依即時 80% 與歷史 20% 排序。"""
+    ranked = []
+    for row in rows:
+        current = hell_score(row["total_spaces"], row["available_spaces"])
+        if current is None:
+            continue
+        historical = row.get("historical_hell_score")
+        score = (100 - current) if historical is None else (100 - current) * 0.8 + (100 - historical) * 0.2
+        item = dict(row, distance_m=None, hell_score=current,
+                    hell_label=hell_label(current), recommendation_score=round(score, 2))
+        ranked.append(item)
+    return sorted(ranked, key=lambda item: item["recommendation_score"], reverse=True)
+
+
 def day_type(local_dt):
     """星期一至五回傳 weekday，星期六日回傳 weekend。"""
     return "weekday" if local_dt.weekday() < 5 else "weekend"

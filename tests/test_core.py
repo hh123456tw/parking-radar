@@ -285,3 +285,36 @@ def test_parse_query_uses_structured_output_and_context(monkeypatch):
     result = parse_parking_query("那週末呢？", {"destination": "臺北市政府"}, fake_client)
     assert result.intent == "compare"
     assert result.district == "信義區"
+
+
+import app as app_module
+
+
+def test_manual_query_returns_deterministic_groups(monkeypatch):
+    fake_connection = type("Connection", (), {"close": lambda self: None})()
+    monkeypatch.setattr(app_module, "get_connection", lambda: fake_connection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda address, conn: {
+        "display_address": "臺北市政府", "latitude": 25.0375, "longitude": 121.5637})
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda conn, district=None, freshness_minutes=45: [{
+        "lot_id": "TPE1", "lot_name": "A場", "district": "信義區", "address": "市府路",
+        "operator_type": "民營停車場", "total_spaces": 100, "available_spaces": 20,
+        "latitude": 25.0376, "longitude": 121.5638,
+        "captured_at": datetime(2026, 8, 3, 10, tzinfo=timezone.utc)}])
+    monkeypatch.setattr(app_module, "attach_history", lambda conn, rows, arrival: rows)
+    client = create_app({"TESTING": True, "SECRET_KEY": "test"}).test_client()
+    response = client.post("/api/query", json={
+        "mode": "manual", "address": "市府路1號", "district": "信義區",
+        "arrival_time": "2026-08-03T18:00:00+08:00"})
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["recommendations"][0]["lot_id"] == "TPE1"
+    assert body["destination"]["display_address"] == "臺北市政府"
+
+
+def test_chat_failure_returns_manual_fallback(monkeypatch):
+    monkeypatch.setattr(app_module, "parse_parking_query",
+                        lambda *_a, **_k: (_ for _ in ()).throw(IntentServiceError("失敗")))
+    client = create_app({"TESTING": True, "SECRET_KEY": "test"}).test_client()
+    response = client.post("/api/query", json={"mode": "chat", "message": "我要去市政府"})
+    assert response.status_code == 503
+    assert response.get_json()["fallback"] == "manual"

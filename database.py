@@ -96,6 +96,25 @@ def fetch_history(connection, lot_id, start_utc, end_utc):
         return list(cursor.fetchall())
 
 
+def fetch_matching_history(connection, lot_ids, start_utc, end_utc):
+    """一次取得候選場站歷史，避免每個場站各查一次造成 N+1。"""
+    if not lot_ids:
+        return []
+    placeholders = ",".join(["%s"] * len(lot_ids))
+    sql = f"""
+        SELECT s.lot_id, s.available_spaces, s.captured_at, l.total_spaces
+        FROM parking_snapshots s
+        JOIN parking_lots l ON l.lot_id = s.lot_id
+        WHERE s.lot_id IN ({placeholders})
+          AND s.captured_at BETWEEN %s AND %s
+        ORDER BY s.lot_id, s.captured_at
+    """
+    params = tuple(lot_ids) + (start_utc, end_utc)
+    with connection.cursor() as cursor:
+        cursor.execute(sql, params)
+        return list(cursor.fetchall())
+
+
 def get_cached_geocode(connection, normalized_address):
     """依主鍵查詢地址快取；不存在時回傳 None。"""
     with connection.cursor() as cursor:
