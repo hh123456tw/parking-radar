@@ -232,3 +232,33 @@ def test_weekday_weekend_comparison_reports_both_groups():
     comparison = summarize_hour_comparison(rows, 18)
     assert comparison["weekday"] == {"hell_score": 50.0, "sample_count": 3}
     assert comparison["weekend"] == {"hell_score": 80.0, "sample_count": 3}
+
+
+from geocoder import geocode_address, normalize_address
+
+
+def test_normalize_address_adds_taipei_and_removes_spaces():
+    assert normalize_address(" 信義區 忠孝東路五段 7 號 ") == "臺北市信義區忠孝東路五段7號"
+    assert normalize_address("台北市中山區長春路17號") == "臺北市中山區長春路17號"
+
+
+def test_geocoder_returns_cache_without_http(monkeypatch):
+    cached = {"normalized_address": "臺北市信義區市府路1號", "display_address": "臺北市政府",
+              "latitude": 25.0375, "longitude": 121.5637}
+    monkeypatch.setattr("geocoder.get_cached_geocode", lambda conn, key: cached)
+    result = geocode_address("市府路1號", object(), http_get=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError()))
+    assert result == cached
+
+
+def test_geocoder_parses_first_taipei_result_and_saves(monkeypatch):
+    monkeypatch.setattr("geocoder.get_cached_geocode", lambda conn, key: None)
+    saved = []
+    monkeypatch.setattr("geocoder.save_cached_geocode", lambda conn, row: saved.append(row))
+    response = type("Response", (), {
+        "raise_for_status": lambda self: None,
+        "json": lambda self: [{"display_name": "臺北市政府, 信義區, 臺北市", "lat": "25.0375", "lon": "121.5637"}],
+    })()
+    fake_connection = type("Connection", (), {"commit": lambda self: None})()
+    result = geocode_address("市府路1號", fake_connection, http_get=lambda *_a, **_k: response)
+    assert result["latitude"] == 25.0375
+    assert saved[0]["normalized_address"] == "臺北市市府路1號"
