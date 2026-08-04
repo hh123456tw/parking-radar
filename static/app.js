@@ -12,15 +12,35 @@ document.querySelector("#arrival-time").value = localNow;
 
 async function submitQuery(payload) {
   showStatus("正在分析停車難度…", "");
-  const response = await fetch("/api/query", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
-  const data = await response.json();
-  if (!response.ok) {
-    if (data.fallback === "manual") document.querySelector("#manual-panel").open = true;
-    throw new Error(data.error || "查詢失敗");
+  // 對話服務最慢 15 秒就中止，避免外部 API 讓畫面永久停在分析中。
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch("/api/query", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload), signal:controller.signal,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      if (data.fallback === "manual") document.querySelector("#manual-panel").open = true;
+      throw new Error(data.error || "查詢失敗");
+    }
+    renderSummary(data); renderCards(data); renderMap(data);
+    showStatus("分析完成；數字來自官方資料與固定公式。", "success");
+    // 歷史圖在背景載入，不阻擋已完成的停車卡片與狀態訊息。
+    if (data.recommendations.length) {
+      loadHistory(data.recommendations[0].lot_id)
+        .catch(error => showStatus(error.message, "error"));
+    }
+  } catch (error) {
+    if (error.name === "AbortError") {
+      document.querySelector("#manual-panel").open = true;
+      throw new Error("分析逾時，請重試或改用手動查詢");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  renderSummary(data); renderCards(data); renderMap(data);
-  const historyOk = data.recommendations.length ? await loadHistory(data.recommendations[0].lot_id) : true;
-  if (historyOk) showStatus("分析完成；數字來自官方資料與固定公式。", "success");
 }
 
 document.querySelector("#chat-form").addEventListener("submit", async event => {

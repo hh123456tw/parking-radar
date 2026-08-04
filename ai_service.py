@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 from google import genai
+from google.genai import errors, types
 from pydantic import BaseModel, field_validator
 from config import Config
 
@@ -56,13 +57,24 @@ def parse_parking_query(message, context=None, client=None):
     if client is None and not Config.GEMINI_API_KEY:
         raise IntentServiceError("Gemini 尚未設定")
     try:
-        client = client or genai.Client(api_key=Config.GEMINI_API_KEY)
-        interaction = client.interactions.create(
-            model=Config.GEMINI_MODEL,
-            input=_prompt(message, context),
-            response_format={"type": "text", "mime_type": "application/json",
-                             "schema": ParkingIntent.model_json_schema()},
+        client = client or genai.Client(
+            api_key=Config.GEMINI_API_KEY,
+            http_options=types.HttpOptions(
+                timeout=Config.GEMINI_TIMEOUT_MS,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
         )
-        return ParkingIntent.model_validate_json(interaction.output_text)
+        response = client.models.generate_content(
+            model=Config.GEMINI_MODEL,
+            contents=_prompt(message, context),
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=ParkingIntent.model_json_schema(),
+            ),
+        )
+        return ParkingIntent.model_validate_json(response.text)
+    except errors.ServerError as exc:
+        raise IntentServiceError(
+            "Gemini目前忙碌，請稍後重試或改用手動查詢") from exc
     except Exception as exc:
         raise IntentServiceError("目前無法理解問題，請改用手動查詢") from exc

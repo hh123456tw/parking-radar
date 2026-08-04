@@ -17,6 +17,7 @@ class Config:
     MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "parking_hell")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    GEMINI_TIMEOUT_MS = 12_000
     NOMINATIM_USER_AGENT = os.getenv(
         "NOMINATIM_USER_AGENT", "parking-hell-radar-student-project/1.0"
     )

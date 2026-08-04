@@ -56,25 +56,47 @@ def test_intent_schema_rejects_non_taipei_district():
 def test_gemini_request_includes_context_model_and_json_schema():
     """移除上一輪狀態、模型或 schema 時，此契約測試必須失敗。"""
     captured = {}
-    interaction = type("Interaction", (), {"output_text": valid_intent_json()})()
+    response = type("Response", (), {"text": valid_intent_json()})()
 
-    class RecordingInteractions:
-        def create(self, **kwargs):
+    class RecordingModels:
+        def generate_content(self, **kwargs):
             captured.update(kwargs)
-            return interaction
+            return response
 
-    client = type("Client", (), {"interactions": RecordingInteractions()})()
+    client = type("Client", (), {"models": RecordingModels()})()
 
     result = parse_parking_query(
         "那週末呢？", {"destination": "臺北市政府", "district": "信義區"}, client)
 
     assert result.intent == "compare"
     assert captured["model"] == Config.GEMINI_MODEL
-    assert "臺北市政府" in captured["input"]
-    assert "上一輪狀態" in captured["input"]
-    assert captured["response_format"]["mime_type"] == "application/json"
-    schema = captured["response_format"]["schema"]
+    assert "臺北市政府" in captured["contents"]
+    assert "上一輪狀態" in captured["contents"]
+    assert captured["config"].response_mime_type == "application/json"
+    schema = captured["config"].response_json_schema
     assert {"intent", "address", "district", "arrival_time"} <= set(schema["properties"])
+
+
+def test_default_gemini_client_has_bounded_request_timeout(monkeypatch):
+    """外部模型未回應時，SDK 必須在固定時間內結束等待。"""
+    captured = {}
+    response = type("Response", (), {"text": valid_intent_json()})()
+    models = type(
+        "Models", (), {"generate_content": lambda self, **_kwargs: response})()
+    fake_client = type("Client", (), {"models": models})()
+
+    def fake_client_factory(**kwargs):
+        captured.update(kwargs)
+        return fake_client
+
+    monkeypatch.setattr(ai_service.genai, "Client", fake_client_factory)
+    monkeypatch.setattr(ai_service.Config, "GEMINI_API_KEY", "test-key")
+
+    result = parse_parking_query("我要去信義區")
+
+    assert result.district == "信義區"
+    assert captured["http_options"].timeout == 12_000
+    assert captured["http_options"].retry_options.attempts == 1
 
 
 def test_gemini_without_api_key_uses_manual_fallback(monkeypatch):
@@ -87,13 +109,27 @@ def test_gemini_without_api_key_uses_manual_fallback(monkeypatch):
 
 def test_gemini_malformed_output_becomes_service_error():
     """模型回傳非 JSON 時，不得讓 Pydantic 例外洩漏到 Flask。"""
-    interaction = type("Interaction", (), {"output_text": "not-json"})()
-    interactions = type(
-        "Interactions", (), {"create": lambda self, **_kwargs: interaction})()
-    client = type("Client", (), {"interactions": interactions})()
+    response = type("Response", (), {"text": "not-json"})()
+    models = type(
+        "Models", (), {"generate_content": lambda self, **_kwargs: response})()
+    client = type("Client", (), {"models": models})()
 
     with pytest.raises(IntentServiceError, match="目前無法理解問題"):
         parse_parking_query("我要去市政府", client=client)
+
+
+def test_gemini_high_demand_has_clear_retry_message():
+    """模型高流量 503 應說明服務忙碌，不可誤導成使用者問法錯誤。"""
+    def raise_busy(**_kwargs):
+        raise ai_service.errors.ServerError(
+            503, {"error": {"message": "high demand"}})
+
+    models = type("Models", (), {"generate_content": lambda self, **kwargs:
+                  raise_busy(**kwargs)})()
+    client = type("Client", (), {"models": models})()
+
+    with pytest.raises(IntentServiceError, match="Gemini目前忙碌"):
+        parse_parking_query("我要去信義區", client=client)
 
 
 def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):

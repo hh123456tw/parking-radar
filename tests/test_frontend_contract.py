@@ -18,3 +18,13 @@ def test_decision_cards_keep_required_data_and_actions():
     assert 'target="_blank"' in script
     assert 'rel="noopener noreferrer"' in script
     assert 'data-lot="${escapeHtml(lot.lot_id)}"' in script
+
+
+def test_query_has_timeout_and_history_does_not_block_cards():
+    """Gemini 或歷史 API 變慢時，頁面不得永久停在分析中。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "new AbortController()" in script
+    assert "controller.abort(), 15000" in script
+    assert "分析逾時，請重試或改用手動查詢" in script
+    assert "await loadHistory" not in script
