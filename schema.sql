@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS parking_lots (
     operator_type VARCHAR(40) NOT NULL,
     total_spaces INT NOT NULL,
     fee_info TEXT,
-    service_time VARCHAR(80),
+    -- 官方文字目前可能超過 80 字元，保留餘裕避免匯入失敗。
+    service_time VARCHAR(255),
     latitude DECIMAL(10, 7),
     longitude DECIMAL(10, 7),
     supports_realtime BOOLEAN NOT NULL DEFAULT FALSE,

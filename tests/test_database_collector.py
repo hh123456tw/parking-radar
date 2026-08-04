@@ -131,6 +131,7 @@ def test_fetch_current_lots_supports_all_city_and_district_queries():
     database.fetch_current_lots(city_connection, freshness_minutes=45)
     city_sql, city_params = city_connection.spy_cursor.calls[0]
     assert "ROW_NUMBER()" in city_sql
+    assert "s.source_updated_at AS snapshot_updated_at" in city_sql
     assert "AND district = %s" not in city_sql
     assert city_params == (45,)
 

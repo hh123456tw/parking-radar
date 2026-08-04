@@ -61,7 +61,8 @@ def fetch_current_lots(connection, district=None, freshness_minutes=45):
     """取得每個停車場 45 分鐘內最新有效快照，可選擇行政區。"""
     sql = """
         SELECT * FROM (
-            SELECT l.*, s.available_spaces, s.source_updated_at,
+            SELECT l.*, s.available_spaces,
+                   s.source_updated_at AS snapshot_updated_at,
                    s.captured_at,
                    ROW_NUMBER() OVER (
                        PARTITION BY l.lot_id ORDER BY s.captured_at DESC

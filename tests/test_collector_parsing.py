@@ -77,6 +77,12 @@ def test_source_time_without_offset_is_interpreted_as_taipei_time():
         2026, 8, 3, 10, 0, tzinfo=timezone.utc)
 
 
+def test_source_time_accepts_current_taipei_cst_format():
+    """官方 API 的英文 CST 日期格式應視為臺北時間並轉成 UTC。"""
+    assert collector.parse_source_time("Tue Aug 04 12:04:00 CST 2026") == datetime(
+        2026, 8, 4, 4, 4, tzinfo=timezone.utc)
+
+
 def test_fetch_json_uses_timeout_and_checks_http_status(monkeypatch):
     """下載官方資料必須設定 timeout 並在解析前檢查 HTTP 狀態。"""
     payload = {"data": {"park": []}}

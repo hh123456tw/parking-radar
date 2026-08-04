@@ -13,8 +13,12 @@ TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 
 
 def parse_source_time(value):
-    """將官方 ISO 時間轉成帶 UTC 時區的 datetime。"""
-    parsed = datetime.fromisoformat(value)
+    """將官方 ISO 或英文 CST 時間轉成帶 UTC 時區的 datetime。"""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        # 臺北 API 目前也可能回傳 Tue Aug 04 12:04:00 CST 2026。
+        parsed = datetime.strptime(value, "%a %b %d %H:%M:%S CST %Y")
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=TAIPEI_TZ)
     return parsed.astimezone(timezone.utc)
