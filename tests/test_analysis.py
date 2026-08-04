@@ -3,6 +3,9 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+import pytest
+
+import analysis
 from analysis import (
     build_history_series,
     clean_available,
@@ -38,6 +41,66 @@ def candidate(lot_id, available, latitude=25.0330, longitude=121.5654, history=N
         "latitude": latitude, "longitude": longitude,
         "historical_hell_score": history,
     }
+
+
+def decision_row(**overrides):
+    """建立決策說明測試所需的完整候選停車場。"""
+    row = {
+        "lot_id": "SAFE", "total_spaces": 5, "available_spaces": 5,
+        "hell_score": 0.0, "recommendation_score": 91.66,
+        "distance_m": 312.5, "historical_hell_score": None,
+        "history_sample_count": 1,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_explain_candidate_translates_scores_into_reasons():
+    result = analysis.explain_candidate(decision_row())
+
+    assert result["decision_status"] == "recommended"
+    assert result["decision_label"] == "建議前往"
+    assert result["pressure_label"] == "低"
+    assert result["recommendation_label"] == "高"
+    assert result["reasons"] == [
+        "目前 5 / 5 格可停，空位充足",
+        "距目的地近，約 312 公尺",
+        "歷史樣本不足，未納入判斷",
+    ]
+
+
+@pytest.mark.parametrize(("row", "status", "label", "action"), [
+    (decision_row(available_spaces=1, hell_score=80.0),
+     "avoid", "不建議前往", "建議改看推薦前往清單"),
+    (decision_row(available_spaces=5, total_spaces=50, hell_score=90.0),
+     "warning", "有滿場風險", "建議保留下一個選擇"),
+])
+def test_explain_candidate_adds_risk_action(row, status, label, action):
+    result = analysis.explain_candidate(row)
+
+    assert result["decision_status"] == status
+    assert result["decision_label"] == label
+    assert action in result["reasons"]
+    assert len(result["reasons"]) <= 3
+
+
+def test_decision_groups_are_mutually_exclusive():
+    ranked = [
+        decision_row(lot_id="SAFE"),
+        decision_row(lot_id="WARN", total_spaces=50, available_spaces=5,
+                     hell_score=90.0, recommendation_score=70.0),
+        decision_row(lot_id="AVOID", total_spaces=8, available_spaces=1,
+                     hell_score=87.5, recommendation_score=40.0),
+    ]
+
+    groups = analysis.split_recommendation_groups(ranked)
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == ["SAFE"]
+    assert [row["lot_id"] for row in groups["warning"]] == ["WARN"]
+    assert [row["lot_id"] for row in groups["avoid"]] == ["AVOID"]
+    ids = [row["lot_id"] for name in ("recommendations", "warning", "avoid")
+           for row in groups[name]]
+    assert len(ids) == len(set(ids))
 
 
 def test_config_has_locked_analysis_constants():
@@ -112,15 +175,19 @@ def test_district_ranking_uses_history_and_excludes_invalid_rows():
 
 
 def test_split_groups_keeps_nearest_warning_and_avoid_semantics():
-    """前三名推薦依分數，最近清單依距離，警告與避雷依固定門檻。"""
+    """群組互斥：推薦只含建議前往，最近清單依距離，警告與避雷依固定門檻。"""
     ranked = [
-        {"lot_id": "safe", "distance_m": 800, "hell_score": 50, "available_spaces": 50},
-        {"lot_id": "warning", "distance_m": 200, "hell_score": 90, "available_spaces": 10},
-        {"lot_id": "avoid", "distance_m": 300, "hell_score": 97, "available_spaces": 2},
-        {"lot_id": "district", "distance_m": None, "hell_score": 40, "available_spaces": 60},
+        {"lot_id": "safe", "total_spaces": 100, "distance_m": 800, "hell_score": 50,
+         "available_spaces": 50, "recommendation_score": 80.0},
+        {"lot_id": "warning", "total_spaces": 100, "distance_m": 200, "hell_score": 90,
+         "available_spaces": 10, "recommendation_score": 70.0},
+        {"lot_id": "avoid", "total_spaces": 100, "distance_m": 300, "hell_score": 97,
+         "available_spaces": 2, "recommendation_score": 40.0},
+        {"lot_id": "district", "total_spaces": 100, "distance_m": None, "hell_score": 40,
+         "available_spaces": 60, "recommendation_score": 75.0},
     ]
     groups = split_recommendation_groups(ranked)
-    assert [row["lot_id"] for row in groups["recommendations"]] == ["safe", "warning", "avoid"]
+    assert [row["lot_id"] for row in groups["recommendations"]] == ["safe", "district"]
     assert [row["lot_id"] for row in groups["nearest"]] == ["warning", "avoid", "safe"]
     assert [row["lot_id"] for row in groups["warning"]] == ["warning"]
     assert [row["lot_id"] for row in groups["avoid"]] == ["avoid"]

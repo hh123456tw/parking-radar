@@ -102,15 +102,97 @@ def rank_candidates(rows, destination_lat, destination_lon, radius_m=1500):
     return sorted(candidates, key=lambda item: item["recommendation_score"], reverse=True)
 
 
+def _pressure_label(score):
+    """把停車壓力分數翻譯成低、中、高、極高。"""
+    if score >= 95:
+        return "極高"
+    if score >= 85:
+        return "高"
+    if score >= 60:
+        return "中"
+    return "低"
+
+
+def _recommendation_label(score):
+    """把綜合推薦分數翻譯成高、中、低。"""
+    if score >= 80:
+        return "高"
+    if score >= 60:
+        return "中"
+    return "低"
+
+
+def explain_candidate(row, min_history_samples=3):
+    """用固定規則產生決策狀態與最多三條白話原因。"""
+    item = dict(row)
+    available = int(item["available_spaces"])
+    total = int(item["total_spaces"])
+    pressure = float(item["hell_score"])
+    recommendation = float(item["recommendation_score"])
+
+    if available <= 3 or pressure >= 95:
+        status, label = "avoid", "不建議前往"
+    elif pressure >= 85:
+        status, label = "warning", "有滿場風險"
+    else:
+        status, label = "recommended", "建議前往"
+
+    if available == 0:
+        availability_reason = "目前已滿場"
+    elif available <= 3:
+        availability_reason = f"目前只剩 {available} 格，抵達前可能滿場"
+    elif pressure >= 85:
+        availability_reason = f"目前 {available} / {total} 格可停，滿場風險偏高"
+    else:
+        availability_reason = f"目前 {available} / {total} 格可停，空位充足"
+
+    distance = item.get("distance_m")
+    if distance is None:
+        distance_reason = "目前以行政區整體狀況比較"
+    elif distance <= 500:
+        distance_reason = f"距目的地近，約 {round(distance)} 公尺"
+    elif distance <= 1000:
+        distance_reason = f"距目的地約 {round(distance)} 公尺"
+    else:
+        distance_reason = f"距目的地較遠，約 {distance / 1000:.1f} 公里"
+
+    if status == "avoid":
+        final_reason = "建議改看推薦前往清單"
+    elif status == "warning":
+        final_reason = "建議保留下一個選擇"
+    elif (item.get("history_sample_count") or 0) < min_history_samples:
+        final_reason = "歷史樣本不足，未納入判斷"
+    else:
+        historical = item.get("historical_hell_score")
+        final_reason = (
+            f"相同時段歷史停車壓力約 {round(historical)} 分"
+            if historical is not None else "歷史樣本不足，未納入判斷"
+        )
+
+    item.update(
+        decision_status=status,
+        decision_label=label,
+        pressure_label=_pressure_label(pressure),
+        recommendation_label=_recommendation_label(recommendation),
+        reasons=[availability_reason, distance_reason, final_reason],
+    )
+    return item
+
+
 def split_recommendation_groups(ranked):
-    """產生前三名、最近、小心與避雷群組，讓前端只負責呈現。"""
-    with_distance = [row for row in ranked if row.get("distance_m") is not None]
+    """加入決策說明並產生互斥的推薦、警示與避雷群組。"""
+    explained = [explain_candidate(row) for row in ranked]
+    with_distance = [row for row in explained if row.get("distance_m") is not None]
     nearest = sorted(with_distance, key=lambda item: item["distance_m"])[:3]
-    warning = [row for row in ranked if 85 <= row["hell_score"] < 95]
-    avoid = [row for row in ranked if row["available_spaces"] <= 3 or row["hell_score"] >= 95]
+    recommendations = [
+        row for row in explained if row["decision_status"] == "recommended"][:3]
+    warning = [row for row in explained if row["decision_status"] == "warning"][:3]
+    avoid = [row for row in explained if row["decision_status"] == "avoid"][:3]
     return {
-        "recommendations": ranked[:3], "nearest": nearest,
-        "warning": warning[:3], "avoid": avoid[:3],
+        "recommendations": recommendations,
+        "nearest": nearest,
+        "warning": warning,
+        "avoid": avoid,
     }
 
 
