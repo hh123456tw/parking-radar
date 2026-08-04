@@ -31,15 +31,20 @@ def parse_manual_payload(payload):
             "district": district or None, "arrival_time": arrival}
 
 
-def validate_parsed_query(parsed):
-    """統一驗證 Gemini 與手動結果，避免缺少條件時進入資料庫分析。"""
-    if parsed.get("missing_fields"):
-        names = "、".join(parsed["missing_fields"])
+def validate_parsed_query(parsed, now=None):
+    """驗證 Gemini 結果；未指定抵達時間時，自動使用台北現在時間。"""
+    missing_fields = [
+        name for name in parsed.get("missing_fields", [])
+        if name != "arrival_time"
+    ]
+    parsed["missing_fields"] = missing_fields
+    if missing_fields:
+        names = "、".join(missing_fields)
         raise ValueError(f"還需要：{names}")
     if not parsed.get("address") and not parsed.get("district"):
         raise ValueError("請提供臺北市地址或行政區")
     if parsed.get("arrival_time") is None:
-        raise ValueError("請提供預計抵達時間")
+        parsed["arrival_time"] = now or datetime.now(ZoneInfo("Asia/Taipei"))
     if isinstance(parsed["arrival_time"], str):
         parsed["arrival_time"] = datetime.fromisoformat(parsed["arrival_time"])
         if parsed["arrival_time"].tzinfo is None:

@@ -18,7 +18,7 @@ Copy-Item .env.example .env
 mysql -u root -p -e "CREATE DATABASE parking_hell CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 Get-Content -Raw schema.sql | mysql -u root -p parking_hell
 python collector.py --once
-python -m pytest tests/test_core.py -v
+python -m pytest -q
 flask --app app run --debug
 ```
 
@@ -30,8 +30,10 @@ flask --app app run --debug
 | `MYSQL_HOST` / `MYSQL_PORT` | MySQL 位址，部署時固定 localhost:3306 |
 | `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` | 專題資料庫帳號與名稱 |
 | `GEMINI_API_KEY` | 留空時停用對話並使用手動表單 |
-| `GEMINI_MODEL` | 預設 `gemini-3.5-flash` |
+| `GEMINI_MODEL` | 預設 `gemini-3.5-flash-lite` |
 | `NOMINATIM_USER_AGENT` | 必須包含可辨識的專題名稱與聯絡資訊 |
+
+對話只說目的地而未指定抵達時間時，系統會自動使用 `Asia/Taipei` 的目前時間。
 
 ## 計算與資料清洗
 

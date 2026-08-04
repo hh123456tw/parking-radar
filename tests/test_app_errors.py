@@ -79,11 +79,38 @@ def test_manual_query_validation_returns_json_400(payload, message):
     ({"missing_fields": [], "address": None, "district": None,
       "arrival_time": "2026-08-04T18:00:00+08:00"},
      "請提供臺北市地址或行政區"),
-    ({"missing_fields": [], "address": "臺北市政府", "district": None,
-      "arrival_time": None},
-     "請提供預計抵達時間"),
 ])
 def test_chat_structured_fields_are_validated_before_database(parsed, message):
     """Gemini 結構合法仍可能缺必要值，必須在 DB 查詢前拒絕。"""
     with pytest.raises(ValueError, match=message):
         app_module.validate_parsed_query(parsed)
+
+
+def test_chat_missing_arrival_time_defaults_to_taipei_now():
+    """只說目的地時，以台北現在時間查詢，不要求使用者再補 arrival_time。"""
+    now = app_module.datetime.fromisoformat("2026-08-04T19:20:00+08:00")
+    parsed = {
+        "missing_fields": ["arrival_time"],
+        "address": "臺北市政府",
+        "district": None,
+        "arrival_time": None,
+    }
+
+    result = app_module.validate_parsed_query(parsed, now=now)
+
+    assert result["arrival_time"] == now
+    assert result["missing_fields"] == []
+
+
+def test_chat_still_rejects_other_missing_fields_when_time_defaults():
+    """自動補現在時間後，地址等真正必要欄位仍不可略過。"""
+    now = app_module.datetime.fromisoformat("2026-08-04T19:20:00+08:00")
+    parsed = {
+        "missing_fields": ["address", "arrival_time"],
+        "address": None,
+        "district": None,
+        "arrival_time": None,
+    }
+
+    with pytest.raises(ValueError, match="還需要：address"):
+        app_module.validate_parsed_query(parsed, now=now)
