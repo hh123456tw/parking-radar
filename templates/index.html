@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="zh-Hant">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,10 +8,11 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='location-v3') }}">
 </head>
+
 <body>
   <header class="hero">
     <p class="eyebrow">TAIPEI PARKING DECISION TOOL</p>
-    <h1>停車地獄雷達</h1>
+    <h1>台北停車地獄雷達</h1>
     <p>現在有多難停？哪裡值得去？用即時資料與歷史參考做決定。</p>
     <p class="data-times" aria-live="polite">
       <span id="official-updated-at">官方資料時間：尚未查詢</span>
@@ -21,13 +23,16 @@
     <section class="query-panel">
       <form id="chat-form">
         <label for="message">直接告訴我目的地</label>
-        <div class="input-row"><input id="message" required placeholder="例如：今晚六點去臺北市政府，哪裡比較好停？"><button>分析</button></div>
+        <div class="input-row"><input id="message" required placeholder="例如：今晚六點去臺北市政府，哪裡比較好停？"><button>分析</button>
+        </div>
       </form>
       <details id="manual-panel">
         <summary>Gemini 無法使用？改用手動查詢</summary>
         <form id="manual-form" class="manual-grid">
           <label>地址<input id="address" placeholder="信義區市府路1號"></label>
-          <label>行政區<select id="district"><option value="">由地址判斷</option></select></label>
+          <label>行政區<select id="district">
+              <option value="">由地址判斷</option>
+            </select></label>
           <label>抵達時間<input id="arrival-time" type="datetime-local" required></label>
           <button>手動分析</button>
         </form>
@@ -40,22 +45,44 @@
       </section>
     </section>
     <div id="result-content">
-    <section class="summary-panel" aria-label="分析摘要">
-      <div class="destination-summary"><span>目的地</span><strong id="destination">—</strong></div>
-      <div class="summary-metrics">
-        <article><span>目前停車狀況</span><strong id="district-status">—</strong><small id="district-score">尚未分析</small></article>
-        <article><span>有效停車場</span><strong id="valid-count">—</strong><small>已排除過期與無效資料</small></article>
-      </div>
-      <p id="data-notice" class="data-notice" hidden></p>
-    </section>
-    <section><div class="section-heading"><div><h2>首選停車場</h2><p class="section-note">先排除高風險，再按距離排序；低風險不足三個時才補入備選。</p></div></div><div id="recommendations" class="card-grid"></div></section>
-    <section id="other-section" hidden><h2>其他附近場站</h2><p class="section-note">空位較少或不建議前往的場站，保留給你比較。</p><div id="other-lots" class="compact-list"></div></section>
-    <section class="map-layout"><div><h2>首選位置</h2><div id="map"></div></div><aside><h2>地圖上的首選</h2><ol id="map-priorities" class="map-priorities"></ol></aside></section>
-    <section id="history-section" class="history-section" hidden>
-      <h2 id="history-title">空位變化</h2>
-      <p id="history-note">選擇停車場後載入歷史參考。</p>
-      <div id="history-chart-shell" class="history-chart-shell" hidden><canvas id="history-chart"></canvas></div>
-    </section>
+      <section class="summary-panel" aria-label="分析摘要">
+        <div class="destination-summary"><span>目的地</span><strong id="destination">—</strong></div>
+        <div class="summary-metrics">
+          <article><span>目前停車狀況</span><strong id="district-status">—</strong><small id="district-score">尚未分析</small>
+          </article>
+          <article><span>有效停車場</span><strong id="valid-count">—</strong><small>已排除過期與無效資料</small></article>
+        </div>
+        <p id="data-notice" class="data-notice" hidden></p>
+      </section>
+      <section>
+        <div class="section-heading">
+          <div>
+            <h2>首選停車場</h2>
+            <p class="section-note">先排除高風險，再按距離排序；低風險不足三個時才補入備選。</p>
+          </div>
+        </div>
+        <div id="recommendations" class="card-grid"></div>
+      </section>
+      <section id="other-section" hidden>
+        <h2>其他附近場站</h2>
+        <p class="section-note">空位較少或不建議前往的場站，保留給你比較。</p>
+        <div id="other-lots" class="compact-list"></div>
+      </section>
+      <section class="map-layout">
+        <div>
+          <h2>首選位置</h2>
+          <div id="map"></div>
+        </div>
+        <aside>
+          <h2>地圖上的首選</h2>
+          <ol id="map-priorities" class="map-priorities"></ol>
+        </aside>
+      </section>
+      <section id="history-section" class="history-section" hidden>
+        <h2 id="history-title">空位變化</h2>
+        <p id="history-note">選擇停車場後載入歷史參考。</p>
+        <div id="history-chart-shell" class="history-chart-shell" hidden><canvas id="history-chart"></canvas></div>
+      </section>
     </div>
   </main>
   <footer>資料來源：臺北市資料大平臺｜地圖 © OpenStreetMap contributors｜歷史資料僅供參考，非空位預測。</footer>
@@ -63,4 +90,5 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="{{ url_for('static', filename='app.js', v='location-v3') }}"></script>
 </body>
+
 </html>
