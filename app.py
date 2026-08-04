@@ -98,6 +98,8 @@ def create_app(test_config=None):
     def query_parking():
         """解析手動或聊天輸入，交由固定函式產生可驗證的停車結果。"""
         payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify(error="JSON 內容必須是物件"), 400
         try:
             if payload.get("mode") == "chat":
                 parsed = parse_parking_query(payload.get("message", ""), dict(session)).model_dump()
@@ -109,8 +111,9 @@ def create_app(test_config=None):
         except (KeyError, TypeError, ValueError) as exc:
             return jsonify(error=str(exc)), 400
 
-        connection = get_connection()
+        connection = None
         try:
+            connection = get_connection()
             destination = geocode_address(parsed.get("address"), connection) if parsed.get("address") else None
             if parsed.get("address") and destination is None:
                 return jsonify(error="找不到地址，請修正或改選行政區", fallback="district"), 422
@@ -153,22 +156,25 @@ def create_app(test_config=None):
             app.logger.exception("停車查詢失敗")
             return jsonify(error="服務暫時無法使用，請稍後再試"), 503
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     @app.get("/api/parking/<lot_id>/history")
     def parking_history(lot_id):
         """回傳單一場站最近七天的有效空位序列供唯一折線圖使用。"""
         end_utc = datetime.now(timezone.utc)
         start_utc = end_utc - timedelta(days=7)
-        connection = get_connection()
+        connection = None
         try:
+            connection = get_connection()
             rows = fetch_history(connection, lot_id, start_utc, end_utc)
             return jsonify(lot_id=lot_id, points=build_history_series(rows))
         except Exception:
             app.logger.exception("歷史查詢失敗")
             return jsonify(error="暫時無法取得歷史資料"), 503
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     return app
 
