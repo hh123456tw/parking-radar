@@ -24,7 +24,7 @@ class Config:
         "NOMINATIM_USER_AGENT", "parking-hell-radar-student-project/1.0"
     )
     SEARCH_RADIUS_M = 1500
-    FRESHNESS_MINUTES = 5
+    FRESHNESS_MINUTES = 45
     ON_DEMAND_FETCH_TIMEOUT_SECONDS = 5
     AUTO_REFRESH_ENABLED = True
     MIN_HISTORY_SAMPLES = 3

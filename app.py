@@ -262,10 +262,14 @@ def create_app(test_config=None):
                 return jsonify(error="找不到地址，請修正或改選行政區",
                                fallback="district"), 422
 
+            # 地理快取查詢可能已建立 MySQL 交易快照；先關閉，避免補抓後仍讀到舊資料。
+            connection.close()
+            connection = None
             if app.config.get("AUTO_REFRESH_ENABLED", True):
                 data_status, data_notice = ensure_fresh_parking_data()
             else:
                 data_status, data_notice = "fresh", None
+            connection = get_connection()
             freshness = Config.FRESHNESS_MINUTES if data_status == "fresh" else None
             rows = fetch_current_lots(connection, parsed.get("district"), freshness)
             if destination:

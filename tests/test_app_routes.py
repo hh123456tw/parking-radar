@@ -128,6 +128,44 @@ def test_district_only_query_uses_real_history_and_district_ranking(monkeypatch)
     assert connection.closed is True
 
 
+def test_query_reads_parking_data_from_connection_opened_after_refresh(monkeypatch):
+    """補抓完成後必須用新交易讀取，避免圖卡顯示更新前的空位。"""
+    state = {"refreshed": False}
+
+    class SnapshotConnection(CloseTrackingConnection):
+        def __init__(self):
+            super().__init__()
+            # 模擬 MySQL REPEATABLE READ：連線建立後固定看到當時版本。
+            self.sees_fresh_data = state["refreshed"]
+
+    monkeypatch.setattr(app_module, "get_connection", SnapshotConnection)
+
+    def refresh_data():
+        state["refreshed"] = True
+        return "fresh", None
+
+    monkeypatch.setattr(app_module, "ensure_fresh_parking_data", refresh_data)
+
+    def current_lots(connection, *_args):
+        row = lot_row()
+        row["available_spaces"] = 30 if connection.sees_fresh_data else 1
+        return [row]
+
+    monkeypatch.setattr(app_module, "fetch_current_lots", current_lots)
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+    client = app_module.create_app({
+        "TESTING": True, "SECRET_KEY": "test", "AUTO_REFRESH_ENABLED": True,
+    }).test_client()
+
+    response = client.post("/api/query", json={
+        "mode": "manual", "district": "信義區",
+        "arrival_time": "2026-08-05T10:00:00+08:00",
+    })
+
+    assert response.status_code == 200
+    assert response.get_json()["current"]["district_score"] == 70.0
+
+
 def test_query_returns_official_and_collection_times_in_taipei(monkeypatch):
     """官方時間與抓取時間都要從 MySQL UTC 正確轉成台北時間。"""
     connection = CloseTrackingConnection()
