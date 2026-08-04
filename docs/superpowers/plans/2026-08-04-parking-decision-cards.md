@@ -17,6 +17,8 @@
 - Decision groups must be mutually exclusive: `avoid` takes precedence over `warning`, which takes precedence over `recommended`.
 - `avoid` means `available_spaces <= 3` or `hell_score >= 95`; `warning` means a non-avoid lot with `85 <= hell_score < 95`; all other valid candidates are `recommended`.
 - Google Maps links open a new tab with `rel="noopener noreferrer"` and use coordinates before address search text.
+- The API and page show separate `official_updated_at` and `collected_at` values converted from UTC to `Asia/Taipei`; legacy `updated_at` remains equal to `collected_at`.
+- Run `collector.py --once` through operating-system scheduling every 15 minutes; do not add a scheduler to Flask.
 - Every new Python function and non-obvious JavaScript or CSS rule receives a concise Traditional Chinese comment.
 - Keep desktop cards at three columns and mobile cards at one column.
 - Preserve the existing history chart, map markers, manual query, chat query, and error handling.
@@ -26,11 +28,11 @@
 ## File Structure
 
 - Modify `analysis.py`: own deterministic decision status, labels, reasons, and mutually exclusive grouping.
-- Modify `app.py`: include the new analysis fields in the existing public candidate JSON allowlist.
+- Modify `app.py`: include decision fields in candidate JSON and return separate official and collection times.
 - Modify `static/app.js`: own full-address formatting, Google Maps URL construction, card markup, and card button events.
 - Modify `static/style.css`: own approved A-card hierarchy, state colours, capacity bar, reason panel, and actions.
 - Modify `templates/index.html`: add a concise explanation above the cards if needed; do not add a page.
-- Modify `README.md`: document that Gemini parses intent while Python explains recommendations.
+- Modify `README.md`: document the analysis boundary, dual timestamps, Windows scheduling, and 15-minute GCP cron.
 - Modify `tests/test_analysis.py`: verify status boundaries, reason text, score labels, and non-overlapping groups.
 - Modify `tests/test_app_routes.py`: verify the API preserves decision fields and existing parking fields.
 - Create `tests/test_frontend_contract.py`: protect the Google Maps, address, capacity, reason, and history hooks without adding a JavaScript test framework.
@@ -271,7 +273,7 @@ git commit -m "feat: explain parking recommendations with fixed rules"
 
 ---
 
-### Task 2: Publish Decision Fields Through the Flask API
+### Task 2: Publish Decision Fields and Data Freshness Through the Flask API
 
 **Files:**
 - Modify: `app.py:69-83`
@@ -280,6 +282,7 @@ git commit -m "feat: explain parking recommendations with fixed rules"
 **Interfaces:**
 - Consumes: explained candidate dictionaries returned by `split_recommendation_groups`.
 - Produces: public candidate JSON containing `decision_status: str`, `decision_label: str`, `pressure_label: str`, `recommendation_label: str`, `reasons: list[str]`, plus existing `address`, `district`, `total_spaces`, `available_spaces`, `latitude`, `longitude`, and score fields.
+- Produces: top-level `official_updated_at: str | None`, `collected_at: str | None`, and backward-compatible `updated_at == collected_at`.
 
 - [ ] **Step 1: Write a failing public candidate test**
 
@@ -340,7 +343,87 @@ Run:
 
 Expected: all selected tests PASS.
 
-- [ ] **Step 5: Exercise the live API contract**
+- [ ] **Step 5: Write a failing dual-timestamp route test**
+
+Extend the existing timestamp test in `tests/test_app_routes.py` so its fake row contains both database times:
+
+```python
+def test_query_returns_official_and_collection_times_in_taipei(monkeypatch):
+    """官方時間與抓取時間都要從 MySQL UTC 正確轉成台北時間。"""
+    connection = CloseTrackingConnection()
+    row = lot_row(datetime(2026, 8, 3, 10))
+    row["snapshot_updated_at"] = datetime(2026, 8, 3, 9, 55)
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [row])
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "district": "信義區",
+        "arrival_time": "2026-08-03T18:00:00+08:00",
+    })
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["official_updated_at"] == "2026-08-03T17:55:00+08:00"
+    assert body["collected_at"] == "2026-08-03T18:00:00+08:00"
+    assert body["updated_at"] == body["collected_at"]
+```
+
+- [ ] **Step 6: Run the timestamp test and verify RED**
+
+Run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_app_routes.py::test_query_returns_official_and_collection_times_in_taipei -q
+```
+
+Expected: FAIL because the response has only `updated_at`.
+
+- [ ] **Step 7: Return both timestamps without duplicating timezone logic**
+
+Add this helper near the other route helpers in `app.py`:
+
+```python
+def taipei_iso(value):
+    """把 MySQL 的 naive UTC datetime 轉成台北 ISO 字串。"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(ZoneInfo("Asia/Taipei")).isoformat()
+```
+
+Replace the single `updated_at` calculation in `query_parking` with:
+
+```python
+            collected_at = taipei_iso(max(
+                (row["captured_at"] for row in rows), default=None))
+            official_updated_at = taipei_iso(max(
+                (row.get("snapshot_updated_at") for row in rows
+                 if row.get("snapshot_updated_at") is not None),
+                default=None,
+            ))
+```
+
+Add these keys to `jsonify`:
+
+```python
+                official_updated_at=official_updated_at,
+                collected_at=collected_at,
+                updated_at=collected_at,
+```
+
+- [ ] **Step 8: Run all route and error tests**
+
+Run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_app_routes.py tests\test_app_errors.py -q
+```
+
+Expected: all selected tests PASS.
+
+- [ ] **Step 9: Exercise the live API contract**
 
 With the local Flask server and populated MySQL running, execute:
 
@@ -360,12 +443,14 @@ required = {
 }
 print("DECISION_CARD_CONTRACT_OK", required <= set(card))
 print("REASON_COUNT", len(card["reasons"]))
+print("OFFICIAL_UPDATED_AT", data["official_updated_at"])
+print("COLLECTED_AT", data["collected_at"])
 '@ | .\.venv\Scripts\python.exe -
 ```
 
-Expected: `DECISION_CARD_CONTRACT_OK True` and `REASON_COUNT 3`. Do not print API keys or database credentials.
+Expected: `DECISION_CARD_CONTRACT_OK True`, `REASON_COUNT 3`, and two non-empty Taiwan-offset timestamp strings. Do not print API keys or database credentials.
 
-- [ ] **Step 6: Commit Task 2**
+- [ ] **Step 10: Commit Task 2**
 
 ```powershell
 git add app.py tests/test_app_routes.py
@@ -407,6 +492,8 @@ def test_decision_cards_keep_required_data_and_actions():
     assert "https://www.google.com/maps/search/?api=1&query=" in script
     assert "lot.total_spaces" in script
     assert "lot.reasons" in script
+    assert "data.official_updated_at" in script
+    assert "data.collected_at" in script
     assert 'target="_blank"' in script
     assert 'rel="noopener noreferrer"' in script
     assert 'data-lot="${lot.lot_id}"' in script
@@ -554,11 +641,59 @@ In `templates/index.html`, keep the heading `推薦與避雷` and add this sente
 <p class="section-note">依即時空位、距離與歷史資料，用固定規則說明判斷原因。</p>
 ```
 
+Replace the single `#updated-at` node in the hero with:
+
+```html
+<p class="data-times" aria-live="polite">
+  <span id="official-updated-at">官方資料時間：尚未查詢</span>
+  <span id="collected-at">系統最後抓取：尚未查詢</span>
+</p>
+```
+
+Update `renderSummary` in `static/app.js`:
+
+```javascript
+  const officialTime = data.official_updated_at
+    ? new Date(data.official_updated_at).toLocaleString("zh-TW") : "無資料";
+  const collectedTime = data.collected_at
+    ? new Date(data.collected_at).toLocaleString("zh-TW") : "無資料";
+  document.querySelector("#official-updated-at").textContent =
+    `官方資料時間：${officialTime}`;
+  document.querySelector("#collected-at").textContent =
+    `系統最後抓取：${collectedTime}`;
+```
+
+Add `.data-times` styling that wraps on small screens and keeps both timestamps visually secondary.
+
 In `README.md`, add under `計算與資料清洗`:
 
 ```markdown
 - 圖卡的推薦、警示、避雷與白話原因全部由 Python 固定規則產生；Gemini 只解析對話條件。
 - 停車場地址與 Google 地圖連結使用既有座標或地址，不使用付費 Google Maps API。
+- 頁面分開顯示官方動態資料時間與本系統抓取時間，避免誤判資料新鮮度。
+```
+
+Under `Windows 本機啟動`, document optional 15-minute Windows Task Scheduler registration:
+
+```powershell
+$projectRoot = (Resolve-Path .).Path
+$action = New-ScheduledTaskAction `
+  -Execute "$projectRoot\.venv\Scripts\python.exe" `
+  -Argument "collector.py --once" `
+  -WorkingDirectory $projectRoot
+$trigger = New-ScheduledTaskTrigger `
+  -Once -At (Get-Date).AddMinutes(1) `
+  -RepetitionInterval (New-TimeSpan -Minutes 15)
+Register-ScheduledTask `
+  -TaskName "ParkingRadarCollector" `
+  -Action $action -Trigger $trigger `
+  -Description "每 15 分鐘收集臺北市停車快照"
+```
+
+Change the existing GCP cron from `*/30` to:
+
+```cron
+*/15 * * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python collector.py --once >> /opt/parking-hell/collector.log 2>&1
 ```
 
 - [ ] **Step 8: Run frontend and full regression checks**
@@ -586,6 +721,7 @@ Run the local Flask app, submit `我要去資策會`, and inspect desktop and na
 - Recommended, warning, and avoid cards use green, yellow, and red state colours.
 - Exact raw scores are not the main heading and the three reasons explain the status.
 - No parking lot appears in more than one of the three decision groups.
+- The hero shows separate, correctly labelled official and collection times.
 
 - [ ] **Step 10: Commit Task 3**
 
@@ -603,4 +739,6 @@ git commit -m "feat: render explainable parking decision cards"
 - [ ] Run `.\.venv\Scripts\python.exe -m compileall -q app.py ai_service.py analysis.py collector.py config.py database.py geocoder.py` and confirm exit code 0.
 - [ ] Run `node --check static\app.js` and confirm exit code 0.
 - [ ] Submit both `我要去信義區` and `我要去資策會` against the live API and confirm HTTP 200.
+- [ ] Confirm both live responses contain non-empty `official_updated_at` and `collected_at` values with `+08:00` offsets.
+- [ ] Confirm README contains the GCP `*/15` cron and Windows 15-minute task instructions.
 - [ ] Inspect `git status --short`; preserve the existing user-owned `.env.example` MySQL changes unless the user explicitly asks to commit them.
