@@ -153,6 +153,41 @@ def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):
     assert result == cached
 
 
+def test_nominatim_queries_reorder_taipei_house_address():
+    """完整臺北門牌應優先改成 Nominatim 較容易辨識的地址順序。"""
+    assert geocoder.nominatim_queries("臺北市信義區西村里市府路1號") == [
+        "1, 市府路, 西村里, 信義區, 臺北市",
+        "臺北市信義區西村里市府路1號",
+    ]
+
+
+def test_geocode_uses_reordered_taipei_house_address(monkeypatch):
+    """手動輸入完整門牌時，第一個外部查詢就應使用重排後的地址。"""
+    requested_queries = []
+    saved = []
+    connection = CommitConnection()
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
+    monkeypatch.setattr(geocoder, "save_cached_geocode",
+                        lambda _connection, row: saved.append(row))
+    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
+
+    def fake_get(_url, **kwargs):
+        requested_queries.append(kwargs["params"]["q"])
+        return JsonResponse([{
+            "display_name": "臺北市政府, 1, 市府路, 西村里, 信義區, 臺北市",
+            "lat": "25.0375170", "lon": "121.5644506",
+        }])
+
+    result = geocoder.geocode_address(
+        "臺北市信義區西村里市府路1號", connection, http_get=fake_get)
+
+    assert requested_queries == ["1, 市府路, 西村里, 信義區, 臺北市"]
+    assert result["latitude"] == 25.037517
+    assert result["longitude"] == 121.5644506
+    assert saved[0]["normalized_address"] == "臺北市信義區西村里市府路1號"
+    assert connection.commits == 1
+
+
 def test_nominatim_request_uses_policy_headers_and_saves_cache(monkeypatch):
     """Nominatim 請求必須限制一筆、臺灣範圍、逾時並帶可辨識 User-Agent。"""
     captured = {}

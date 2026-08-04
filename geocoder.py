@@ -19,6 +19,27 @@ def normalize_address(address):
     return normalized
 
 
+def nominatim_queries(address):
+    """建立查詢候選；完整臺北門牌優先改成門牌、道路、行政區順序。"""
+    normalized = normalize_address(address)
+    match = re.match(
+        r"^臺北市(?P<district>.+?區)(?:(?P<village>.+?里))?"
+        r"(?P<street>.+?)(?P<number>\d+(?:-\d+)?號)$",
+        normalized,
+    )
+    if not match:
+        return [normalized]
+
+    parts = [
+        match.group("number").removesuffix("號"),
+        match.group("street"),
+    ]
+    if match.group("village"):
+        parts.append(match.group("village"))
+    parts.extend([match.group("district"), "臺北市"])
+    return [", ".join(parts), normalized]
+
+
 def _respect_rate_limit():
     """確保同一程序兩次公共 Nominatim 請求至少間隔一秒。"""
     global _last_request_at
@@ -34,21 +55,27 @@ def geocode_address(address, connection, http_get=requests.get):
     cached = get_cached_geocode(connection, key)
     if cached:
         return cached
-    _respect_rate_limit()
-    response = http_get(
-        NOMINATIM_URL,
-        params={"q": key, "format": "jsonv2", "limit": 1, "countrycodes": "tw"},
-        headers={"User-Agent": Config.NOMINATIM_USER_AGENT}, timeout=8,
-    )
-    response.raise_for_status()
-    items = response.json()
-    if not items or "臺北市" not in items[0].get("display_name", ""):
-        return None
-    result = {
-        "normalized_address": key, "display_address": items[0]["display_name"],
-        "latitude": float(items[0]["lat"]), "longitude": float(items[0]["lon"]),
-        "cached_at": datetime.now(timezone.utc),
-    }
-    save_cached_geocode(connection, result)
-    connection.commit()
-    return result
+
+    for query in nominatim_queries(address):
+        _respect_rate_limit()
+        response = http_get(
+            NOMINATIM_URL,
+            params={"q": query, "format": "jsonv2", "limit": 1,
+                    "countrycodes": "tw"},
+            headers={"User-Agent": Config.NOMINATIM_USER_AGENT}, timeout=8,
+        )
+        response.raise_for_status()
+        items = response.json()
+        if not items or "臺北市" not in items[0].get("display_name", ""):
+            continue
+        result = {
+            "normalized_address": key,
+            "display_address": items[0]["display_name"],
+            "latitude": float(items[0]["lat"]),
+            "longitude": float(items[0]["lon"]),
+            "cached_at": datetime.now(timezone.utc),
+        }
+        save_cached_geocode(connection, result)
+        connection.commit()
+        return result
+    return None
