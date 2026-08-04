@@ -6,7 +6,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 from google import genai
 from google.genai import errors, types
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from config import Config
 
 TAIPEI_DISTRICTS = {
@@ -19,6 +19,20 @@ class IntentServiceError(RuntimeError):
     """表示 Gemini 未設定、逾時、回應無效或服務失敗。"""
 
 
+class LocationCandidate(BaseModel):
+    """Gemini 提出的臺北地點候選；地址仍須經 Nominatim 驗證。"""
+    name: str
+    address: str
+    district: str | None = None
+
+    @field_validator("district")
+    @classmethod
+    def validate_district(cls, value):
+        if value is not None and value not in TAIPEI_DISTRICTS:
+            raise ValueError("只支援臺北市十二行政區")
+        return value
+
+
 class ParkingIntent(BaseModel):
     """限定 Gemini 能交給後端的欄位與三種停車意圖。"""
     intent: Literal["recommend", "history", "compare"]
@@ -27,6 +41,7 @@ class ParkingIntent(BaseModel):
     district: str | None
     arrival_time: datetime | None
     missing_fields: list[str]
+    location_candidates: list[LocationCandidate] = Field(default_factory=list)
 
     @field_validator("district")
     @classmethod
@@ -44,8 +59,11 @@ def _prompt(message, context):
 不得提供停車場、空位、距離、分數、SQL 或一般聊天答案。
 必要資訊不足時列入 missing_fields，不得猜測。
 original_destination 只是保留使用者原話的選填欄位，不得列入 missing_fields。
-若使用者提供臺北市地標但沒有完整地址，請保留 original_destination，
-address 可回傳該地標名稱，讓後端地址服務解析。
+若使用者提供模糊、口語、分店或多據點地標，請保留 original_destination，
+address 可保留原地標名稱，並在 location_candidates 提供最多 3 個最可能的
+臺北市正式地點。每個候選必須包含可供地址服務驗證的完整門牌與行政區。
+若只有一個可信地點也可提供 1 個候選；純行政區查詢則回傳空陣列。
+不得虛構臺北市以外的候選，也不得把停車場當成目的地候選。
 若能辨識地標所在行政區，district 必須填入，協助地址服務排除同名地點。
 若使用者沒有提抵達時間，arrival_time 請回傳 null，且不要把 arrival_time
 列入 missing_fields；後端會自動使用 Asia/Taipei 的現在時間。

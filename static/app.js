@@ -19,6 +19,7 @@ const localNow = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
 document.querySelector("#arrival-time").value = localNow;
 
 async function submitQuery(payload) {
+  hideLocationChoices();
   showStatus("正在分析並確認官方停車資料…", "");
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), QUERY_TIMEOUT_MS);
@@ -34,6 +35,13 @@ async function submitQuery(payload) {
       if (data.fallback === "manual") document.querySelector("#manual-panel").open = true;
       throw new Error(data.error || "查詢失敗");
     }
+    if (data.needs_location_choice) {
+      document.querySelector("#result-content").hidden = true;
+      renderLocationChoices(data);
+      showStatus(`找到 ${data.location_choices.length} 個可能地點，請先選擇。`, "");
+      return;
+    }
+    document.querySelector("#result-content").hidden = false;
     renderSummary(data);
     renderCards(data);
     renderMap(data);
@@ -80,6 +88,39 @@ function showStatus(message, type) {
   const node = document.querySelector("#status");
   node.textContent = message;
   node.className = type;
+}
+
+function hideLocationChoices() {
+  document.querySelector("#location-choice-section").hidden = true;
+  document.querySelector("#location-choices").innerHTML = "";
+}
+
+function renderLocationChoices(data) {
+  const section = document.querySelector("#location-choice-section");
+  const choices = data.location_choices || [];
+  section.hidden = false;
+  document.querySelector("#location-choices").innerHTML = choices.map(
+    (choice, index) => `<button type="button" data-location-choice="${index}">
+      <strong>${escapeHtml(choice.name)}</strong>
+      <span>${escapeHtml(choice.address)}</span>
+    </button>`).join("");
+
+  document.querySelectorAll("[data-location-choice]").forEach(button => {
+    button.addEventListener("click", async () => {
+      const choice = choices[Number(button.dataset.locationChoice)];
+      try {
+        await submitQuery({
+          mode:"manual",
+          address:choice.address,
+          district:choice.district || "",
+          arrival_time:data.arrival_time,
+          destination_label:`${choice.name}（${choice.address}）`,
+        });
+      } catch (error) {
+        showStatus(error.message, "error");
+      }
+    });
+  });
 }
 
 function formatDistance(value) {

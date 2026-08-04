@@ -241,19 +241,36 @@ def test_chat_landmark_alias_replaces_gemini_district_guess():
         "台北車站（臺北市中正區北平西路3號）"
 
 
-def test_chat_ambiguous_landmark_returns_actionable_error(monkeypatch):
-    """資策會有多個據點時，API 應要求完整地址而不是回報查無地址。"""
+def test_chat_ambiguous_landmark_returns_clickable_choices(monkeypatch):
+    """多據點地標應先回傳已驗證候選，不執行停車分析。"""
     monkeypatch.setattr(app_module, "parse_parking_query", lambda *_args: ParkingIntent(
         intent="recommend", original_destination="資策會", address="資策會",
         district="松山區", arrival_time=None, missing_fields=[],
+        location_candidates=[
+            {"name": "資策會數位教育研究所", "address": "臺北市大安區信義路三段153號",
+             "district": "大安區"},
+            {"name": "資策會數位轉型研究院", "address": "臺北市松山區民生東路四段133號",
+             "district": "松山區"},
+        ],
     ))
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_candidates", lambda *_args: [
+        {"name": "資策會數位教育研究所", "address": "臺北市大安區信義路三段153號",
+         "district": "大安區", "display_address": "信義路三段153號, 臺北市",
+         "latitude": 25.03, "longitude": 121.54},
+        {"name": "資策會數位轉型研究院", "address": "臺北市松山區民生東路四段133號",
+         "district": "松山區", "display_address": "民生東路四段133號, 臺北市",
+         "latitude": 25.06, "longitude": 121.55},
+    ])
 
     response = make_client().post(
         "/api/query", json={"mode": "chat", "message": "我要去資策會"})
 
-    assert response.status_code == 400
-    assert response.get_json()["error"] == \
-        "資策會有多個臺北據點，請輸入完整地址或單位名稱"
+    data = response.get_json()
+    assert response.status_code == 200
+    assert data["needs_location_choice"] is True
+    assert len(data["location_choices"]) == 2
+    assert data["location_choices"][0]["district"] == "大安區"
 
 
 def test_chat_service_failure_returns_manual_fallback(monkeypatch):

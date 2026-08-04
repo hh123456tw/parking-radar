@@ -18,17 +18,9 @@ LANDMARK_ALIASES = {
     "臺北市政府": "臺北市信義區市府路1號",
 }
 
-# 多據點機構不能由系統猜測，以免把使用者帶到錯誤行政區。
-AMBIGUOUS_LANDMARKS = {
-    "資策會": "資策會有多個臺北據點，請輸入完整地址或單位名稱",
-}
-
-
 def resolve_known_landmark(name):
-    """把少量單一地標換成門牌；多據點地標要求使用者補充。"""
+    """只把少量穩定展示地標換成門牌，其餘交給通用候選流程。"""
     key = re.sub(r"\s+", "", name.strip()).replace("台北市", "臺北市")
-    if key in AMBIGUOUS_LANDMARKS:
-        raise ValueError(AMBIGUOUS_LANDMARKS[key])
     return LANDMARK_ALIASES.get(key, name.strip())
 
 
@@ -101,3 +93,32 @@ def geocode_address(address, connection, http_get=requests.get):
         connection.commit()
         return result
     return None
+
+
+def geocode_candidates(candidates, connection, http_get=requests.get, limit=3):
+    """驗證最多三個 Gemini 地址候選，排除查無資料與重複座標。"""
+    verified = []
+    seen_coordinates = set()
+    for candidate in candidates[:limit]:
+        address = (candidate.get("address") or "").strip()
+        if not address:
+            continue
+        result = geocode_address(address, connection, http_get=http_get)
+        if result is None:
+            continue
+        coordinate_key = (
+            round(float(result["latitude"]), 5),
+            round(float(result["longitude"]), 5),
+        )
+        if coordinate_key in seen_coordinates:
+            continue
+        seen_coordinates.add(coordinate_key)
+        verified.append({
+            "name": (candidate.get("name") or result["display_address"]).strip(),
+            "address": address,
+            "district": candidate.get("district"),
+            "display_address": result["display_address"],
+            "latitude": float(result["latitude"]),
+            "longitude": float(result["longitude"]),
+        })
+    return verified

@@ -51,3 +51,17 @@ def test_promoted_backup_card_keeps_warning_label():
 
     assert 'const rankLabel = isBackup ? "備選" : "首選"' in script
     assert 'class="parking-card ${cardTone}"' in script
+
+
+def test_location_choices_are_clickable_and_reuse_manual_query():
+    """模糊地標候選必須顯示成按鈕，點擊後沿用既有手動查詢 API。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+
+    assert "needs_location_choice" in script
+    assert 'data-location-choice="${index}"' in script
+    assert 'mode:"manual"' in script
+    assert 'destination_label:`${choice.name}（${choice.address}）`' in script
+    assert 'id="location-choice-section"' in template
+    assert 'id="result-content"' in template
+    assert 'document.querySelector("#result-content").hidden = true' in script

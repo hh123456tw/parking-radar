@@ -76,6 +76,7 @@ def test_gemini_request_includes_context_model_and_json_schema():
     assert captured["config"].response_mime_type == "application/json"
     schema = captured["config"].response_json_schema
     assert {"intent", "address", "district", "arrival_time"} <= set(schema["properties"])
+    assert "location_candidates" in schema["properties"]
 
 
 def test_default_gemini_client_has_bounded_request_timeout(monkeypatch):
@@ -179,14 +180,36 @@ def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):
     assert result == cached
 
 
-def test_known_landmarks_use_fixed_addresses_and_ambiguous_one_asks_user():
-    """單一地標使用固定門牌，多據點的資策會不得猜測行政區。"""
+def test_known_landmarks_use_fixed_addresses_and_other_names_stay_generic():
+    """固定展示地標轉門牌，其餘名稱保留給通用候選流程。"""
     assert geocoder.resolve_known_landmark("台北車站") == \
         "臺北市中正區北平西路3號"
     assert geocoder.resolve_known_landmark("臺北市政府") == \
         "臺北市信義區市府路1號"
-    with pytest.raises(ValueError, match="資策會有多個臺北據點"):
-        geocoder.resolve_known_landmark("資策會")
+    assert geocoder.resolve_known_landmark("資策會") == "資策會"
+
+
+def test_geocode_candidates_validates_and_deduplicates(monkeypatch):
+    """候選地址只保留可定位且座標不同的前三個結果。"""
+    results = {
+        "地址A": {"display_address": "地點A, 臺北市", "latitude": 25.04,
+                 "longitude": 121.54},
+        "地址B": {"display_address": "地點B, 臺北市", "latitude": 25.04,
+                 "longitude": 121.54},
+        "地址C": None,
+    }
+    monkeypatch.setattr(
+        geocoder, "geocode_address",
+        lambda address, *_args, **_kwargs: results[address],
+    )
+
+    verified = geocoder.geocode_candidates([
+        {"name": "A", "address": "地址A", "district": "大安區"},
+        {"name": "B", "address": "地址B", "district": "大安區"},
+        {"name": "C", "address": "地址C", "district": "信義區"},
+    ], object())
+
+    assert [row["name"] for row in verified] == ["A"]
 
 
 def test_landmark_query_with_city_suffix_does_not_duplicate_taipei():

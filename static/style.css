@@ -51,6 +51,18 @@ summary { color:#c7d1db; cursor:pointer; }
 .summary-metrics small { display:block; color:var(--muted); }
 .data-notice { grid-column:1/-1; margin:0; padding:10px 13px; border-left:4px solid var(--yellow); color:#ffe39a; background:#2b2618; border-radius:8px; }
 
+/* 模糊地標只在需要時顯示最多三個選項，不新增獨立搜尋頁。 */
+.location-choice-panel { margin-top:16px; padding:16px; border:1px solid #3b4653; border-radius:12px; background:var(--panel-2); }
+.location-choice-panel h2, .location-choice-panel p { margin-top:0; }
+.location-choice-panel p { color:var(--muted); }
+.location-choice-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.location-choice-grid button {
+  display:grid; gap:5px; min-height:92px; padding:14px; border:1px solid #465463;
+  border-radius:10px; color:var(--text); text-align:left; background:#18222c; cursor:pointer;
+}
+.location-choice-grid button:hover, .location-choice-grid button:focus-visible { border-color:var(--orange); }
+.location-choice-grid span { color:var(--muted); line-height:1.45; }
+
 /* 首選卡只呈現做決定需要的資料，移除重複原因框與抽象分數。 */
 .card-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
 .parking-card {
@@ -129,6 +141,7 @@ footer { padding:8px 0 40px; color:var(--muted); font-size:.88rem; }
   .manual-grid { grid-template-columns:1fr 1fr; }
   .summary-panel, .map-layout { grid-template-columns:1fr; }
   .card-grid { grid-template-columns:1fr; }
+  .location-choice-grid { grid-template-columns:1fr; }
   .parking-card { min-height:0; }
 }
 @media (max-width:680px) {

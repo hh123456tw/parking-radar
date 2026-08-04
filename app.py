@@ -16,7 +16,7 @@ from collector import collect_once
 from database import (fetch_current_lots, fetch_history,
                       fetch_latest_snapshot_time, fetch_matching_history,
                       get_connection)
-from geocoder import geocode_address, resolve_known_landmark
+from geocoder import geocode_address, geocode_candidates, resolve_known_landmark
 
 _refresh_lock = Lock()
 
@@ -77,6 +77,7 @@ def parse_manual_payload(payload):
     """驗證手動表單並回傳與 Gemini 相同概念的普通字典。"""
     district = (payload.get("district") or "").strip()
     address = (payload.get("address") or "").strip()
+    destination_label = (payload.get("destination_label") or "").strip()
     if not district and not address:
         raise ValueError("請輸入地址或選擇行政區")
     if district and district not in TAIPEI_DISTRICTS:
@@ -85,7 +86,8 @@ def parse_manual_payload(payload):
     if arrival.tzinfo is None:
         raise ValueError("抵達時間必須包含時區")
     return {"intent": "recommend", "address": address or None,
-            "district": district or None, "arrival_time": arrival}
+            "district": district or None, "arrival_time": arrival,
+            "destination_label": destination_label or None}
 
 
 def validate_parsed_query(parsed, now=None):
@@ -215,14 +217,39 @@ def create_app(test_config=None):
 
         connection = None
         try:
+            connection = get_connection()
+            verified_choices = geocode_candidates(
+                parsed.get("location_candidates", []), connection)
+            if len(verified_choices) > 1:
+                return jsonify(
+                    needs_location_choice=True,
+                    location_choices=verified_choices,
+                    arrival_time=parsed["arrival_time"].isoformat(),
+                    intent=parsed["intent"],
+                )
+
+            if verified_choices:
+                choice = verified_choices[0]
+                parsed["address"] = choice["address"]
+                parsed["district"] = choice["district"] or parsed.get("district")
+                parsed["destination_label"] = \
+                    f'{choice["name"]}（{choice["address"]}）'
+                destination = {
+                    "display_address": choice["display_address"],
+                    "latitude": choice["latitude"],
+                    "longitude": choice["longitude"],
+                }
+            else:
+                destination = geocode_address(
+                    parsed.get("address"), connection) if parsed.get("address") else None
+            if parsed.get("address") and destination is None:
+                return jsonify(error="找不到地址，請修正或改選行政區",
+                               fallback="district"), 422
+
             if app.config.get("AUTO_REFRESH_ENABLED", True):
                 data_status, data_notice = ensure_fresh_parking_data()
             else:
                 data_status, data_notice = "fresh", None
-            connection = get_connection()
-            destination = geocode_address(parsed.get("address"), connection) if parsed.get("address") else None
-            if parsed.get("address") and destination is None:
-                return jsonify(error="找不到地址，請修正或改選行政區", fallback="district"), 422
             freshness = Config.FRESHNESS_MINUTES if data_status == "fresh" else None
             rows = fetch_current_lots(connection, parsed.get("district"), freshness)
             if destination:
