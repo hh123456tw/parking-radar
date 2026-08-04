@@ -72,6 +72,7 @@ def test_gemini_request_includes_context_model_and_json_schema():
     assert captured["model"] == Config.GEMINI_MODEL
     assert "臺北市政府" in captured["contents"]
     assert "上一輪狀態" in captured["contents"]
+    assert "地標所在行政區" in captured["contents"]
     assert captured["config"].response_mime_type == "application/json"
     schema = captured["config"].response_json_schema
     assert {"intent", "address", "district", "arrival_time"} <= set(schema["properties"])
@@ -118,18 +119,43 @@ def test_gemini_malformed_output_becomes_service_error():
         parse_parking_query("我要去市政府", client=client)
 
 
-def test_gemini_high_demand_has_clear_retry_message():
-    """模型高流量 503 應說明服務忙碌，不可誤導成使用者問法錯誤。"""
-    def raise_busy(**_kwargs):
+def test_gemini_high_demand_uses_flash_lite_fallback():
+    """3.5 Lite 高流量時，應自動改用已驗證可用的免費 Lite 模型。"""
+    requested_models = []
+    response = type("Response", (), {"text": valid_intent_json()})()
+
+    def generate_content(_self, **kwargs):
+        requested_models.append(kwargs["model"])
+        if len(requested_models) == 1:
+            raise ai_service.errors.ServerError(
+                503, {"error": {"message": "high demand"}})
+        return response
+
+    models = type("Models", (), {"generate_content": generate_content})()
+    client = type("Client", (), {"models": models})()
+
+    result = parse_parking_query("我要去信義區", client=client)
+
+    assert result.district == "信義區"
+    assert requested_models == [Config.GEMINI_MODEL, "gemini-3.1-flash-lite"]
+
+
+def test_gemini_all_models_busy_has_clear_retry_message():
+    """主模型與備援模型都忙碌時，才回傳可理解的稍後重試訊息。"""
+    requested_models = []
+
+    def raise_busy(_self, **kwargs):
+        requested_models.append(kwargs["model"])
         raise ai_service.errors.ServerError(
             503, {"error": {"message": "high demand"}})
 
-    models = type("Models", (), {"generate_content": lambda self, **kwargs:
-                  raise_busy(**kwargs)})()
+    models = type("Models", (), {"generate_content": raise_busy})()
     client = type("Client", (), {"models": models})()
 
     with pytest.raises(IntentServiceError, match="Gemini目前忙碌"):
         parse_parking_query("我要去信義區", client=client)
+
+    assert requested_models == [Config.GEMINI_MODEL, "gemini-3.1-flash-lite"]
 
 
 def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):

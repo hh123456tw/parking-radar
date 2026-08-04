@@ -17,6 +17,8 @@ class Config:
     MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "parking_hell")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    # 主模型高流量時使用同為 Lite 的免費備援，避免整個對話入口失效。
+    GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite"
     GEMINI_TIMEOUT_MS = 12_000
     NOMINATIM_USER_AGENT = os.getenv(
         "NOMINATIM_USER_AGENT", "parking-hell-radar-student-project/1.0"

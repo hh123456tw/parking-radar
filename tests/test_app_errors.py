@@ -146,3 +146,33 @@ def test_landmark_original_destination_becomes_geocoding_query():
     result = app_module.validate_parsed_query(parsed)
 
     assert result["address"] == "資策會"
+
+
+def test_chat_combines_district_with_partial_street_address():
+    """Gemini 拆開行政區與道路時，地址搜尋仍須收到完整的臺北地址。"""
+    parsed = {
+        "missing_fields": [],
+        "original_destination": "臺北市信義區西村里市府路1號",
+        "address": "市府路1號",
+        "district": "信義區",
+        "arrival_time": None,
+    }
+
+    result = app_module.validate_parsed_query(parsed)
+
+    assert result["address"] == "臺北市信義區市府路1號"
+
+
+def test_chat_combines_landmark_with_its_district_for_geocoding():
+    """已知行政區的地標要用逗號分隔，避免 Nominatim 配到同名地點。"""
+    parsed = {
+        "missing_fields": [],
+        "original_destination": "臺北市政府",
+        "address": "臺北市政府",
+        "district": "信義區",
+        "arrival_time": None,
+    }
+
+    result = app_module.validate_parsed_query(parsed)
+
+    assert result["address"] == "臺北市政府, 信義區, 臺北市"

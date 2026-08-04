@@ -46,6 +46,7 @@ def _prompt(message, context):
 original_destination 只是保留使用者原話的選填欄位，不得列入 missing_fields。
 若使用者提供臺北市地標但沒有完整地址，請保留 original_destination，
 address 可回傳該地標名稱，讓後端地址服務解析。
+若能辨識地標所在行政區，district 必須填入，協助地址服務排除同名地點。
 若使用者沒有提抵達時間，arrival_time 請回傳 null，且不要把 arrival_time
 列入 missing_fields；後端會自動使用 Asia/Taipei 的現在時間。
 上一輪狀態：{json.dumps(context or {}, ensure_ascii=False, default=str)}
@@ -64,17 +65,29 @@ def parse_parking_query(message, context=None, client=None):
                 retry_options=types.HttpRetryOptions(attempts=1),
             ),
         )
-        response = client.models.generate_content(
-            model=Config.GEMINI_MODEL,
-            contents=_prompt(message, context),
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_json_schema=ParkingIntent.model_json_schema(),
-            ),
-        )
-        return ParkingIntent.model_validate_json(response.text)
-    except errors.ServerError as exc:
+        models = [Config.GEMINI_MODEL]
+        if Config.GEMINI_FALLBACK_MODEL not in models:
+            models.append(Config.GEMINI_FALLBACK_MODEL)
+
+        last_busy_error = None
+        for model in models:
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=_prompt(message, context),
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_json_schema=ParkingIntent.model_json_schema(),
+                    ),
+                )
+                return ParkingIntent.model_validate_json(response.text)
+            except errors.ServerError as exc:
+                # 只有服務端高流量才切換模型；格式或使用者輸入錯誤不隱藏。
+                last_busy_error = exc
         raise IntentServiceError(
-            "Gemini目前忙碌，請稍後重試或改用手動查詢") from exc
+            "Gemini目前忙碌，請稍後重試或改用手動查詢"
+        ) from last_busy_error
+    except IntentServiceError:
+        raise
     except Exception as exc:
         raise IntentServiceError("目前無法理解問題，請改用手動查詢") from exc

@@ -38,6 +38,18 @@ def validate_parsed_query(parsed, now=None):
     if not parsed.get("address") and not parsed.get("district") and landmark:
         parsed["address"] = landmark
 
+    # Gemini 可能把「信義區市府路1號」拆成兩欄，地址服務需要重新組合。
+    address = (parsed.get("address") or "").strip()
+    district = (parsed.get("district") or "").strip()
+    if address and district:
+        without_city = address.removeprefix("臺北市").removeprefix("台北市")
+        if district in without_city:
+            parsed["address"] = "臺北市" + without_city
+        elif without_city.endswith("號"):
+            parsed["address"] = "臺北市" + district + without_city
+        else:
+            parsed["address"] = f"{address}, {district}, 臺北市"
+
     missing_fields = [
         name for name in parsed.get("missing_fields", [])
         if name not in {"arrival_time", "original_destination"}
