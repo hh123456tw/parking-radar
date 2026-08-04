@@ -146,6 +146,9 @@ function googleMapsUrl(lot) {
 function primaryCard(lot, index) {
   const address = formatFullAddress(lot);
   const mapsUrl = googleMapsUrl(lot);
+  const isBackup = lot.decision_status === "warning";
+  const cardTone = isBackup ? "warning" : "recommended";
+  const rankLabel = isBackup ? "備選" : "首選";
   const freePercent = Math.max(0, Math.min(100,
     lot.available_spaces / lot.total_spaces * 100));
   const primaryReason = lot.reasons?.[0] || "依目前空位與距離列入首選";
@@ -153,9 +156,9 @@ function primaryCard(lot, index) {
     ? `<a class="primary-action" href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer">開啟 Google 地圖</a>`
     : `<span class="primary-action disabled" aria-disabled="true">無地圖資料</span>`;
 
-  return `<article class="parking-card recommended">
+  return `<article class="parking-card ${cardTone}">
     <div class="card-top">
-      <span class="rank-badge">首選 ${index + 1}</span>
+      <span class="rank-badge">${rankLabel} ${index + 1}</span>
       <span class="distance-label">${escapeHtml(formatDistance(lot.distance_m))}</span>
     </div>
     <h3>${escapeHtml(lot.lot_name)}</h3>
@@ -222,9 +225,10 @@ function renderMap(data) {
 
   (data.recommendations || []).forEach((lot, index) => {
     if (lot.latitude == null || lot.longitude == null) return;
+    const color = lot.decision_status === "warning" ? "#f2c94c" : "#36c98f";
     const marker = L.circleMarker([lot.latitude, lot.longitude], {
       radius:14, color:"#ffffff", weight:3,
-      fillColor:"#36c98f", fillOpacity:1,
+      fillColor:color, fillOpacity:1,
     }).bindPopup(markerPopup(lot))
       .bindTooltip(String(index + 1), {
         permanent:true, direction:"center", className:"marker-rank",

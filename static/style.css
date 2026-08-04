@@ -60,6 +60,10 @@ summary { color:#c7d1db; cursor:pointer; }
 }
 .card-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .rank-badge { padding:5px 10px; border-radius:999px; color:#78e0b7; background:#13271f; font-weight:850; }
+.parking-card.warning { border-color:#5a4b20; border-top-color:var(--yellow); }
+.parking-card.warning .rank-badge { color:#ffe07a; background:#2b2618; }
+.parking-card.warning .capacity-bar i { background:var(--yellow); }
+.parking-card.warning .primary-action { color:#2b2510; background:var(--yellow); }
 .distance-label { color:#d4dbe2; font-weight:700; }
 .parking-address { min-height:46px; color:#bac7d2; text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
 .capacity { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px; margin-top:18px; }

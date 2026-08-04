@@ -42,3 +42,12 @@ def test_map_emphasizes_ranked_recommendations():
     assert "bindTooltip(String(index + 1)" in script
     assert 'data-map-lot="${escapeHtml(lot.lot_id)}"' in script
     assert "marker.openPopup()" in script
+    assert 'lot.decision_status === "warning" ? "#f2c94c" : "#36c98f"' in script
+
+
+def test_promoted_backup_card_keeps_warning_label():
+    """低風險不足時補入的黃色場站，不能在卡片上假裝成綠色首選。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'const rankLabel = isBackup ? "備選" : "首選"' in script
+    assert 'class="parking-card ${cardTone}"' in script

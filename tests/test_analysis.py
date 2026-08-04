@@ -46,7 +46,7 @@ def candidate(lot_id, available, latitude=25.0330, longitude=121.5654, history=N
 def decision_row(**overrides):
     """建立決策說明測試所需的完整候選停車場。"""
     row = {
-        "lot_id": "SAFE", "total_spaces": 5, "available_spaces": 5,
+        "lot_id": "SAFE", "total_spaces": 20, "available_spaces": 20,
         "hell_score": 0.0, "recommendation_score": 91.66,
         "distance_m": 312.5, "historical_hell_score": None,
         "history_sample_count": 1,
@@ -63,7 +63,7 @@ def test_explain_candidate_translates_scores_into_reasons():
     assert result["pressure_label"] == "低"
     assert result["recommendation_label"] == "高"
     assert result["reasons"] == [
-        "目前仍有 5 格（共 5 格），空位數充足",
+        "目前仍有 20 格（共 20 格），空位數充足",
         "距目的地近，約 312 公尺",
         "歷史樣本不足，未納入判斷",
     ]
@@ -95,8 +95,8 @@ def test_decision_groups_are_mutually_exclusive():
 
     groups = analysis.split_recommendation_groups(ranked)
 
-    assert [row["lot_id"] for row in groups["recommendations"]] == ["SAFE"]
-    assert [row["lot_id"] for row in groups["warning"]] == ["WARN"]
+    assert [row["lot_id"] for row in groups["recommendations"]] == ["SAFE", "WARN"]
+    assert groups["warning"] == []
     assert [row["lot_id"] for row in groups["avoid"]] == ["AVOID"]
     ids = [row["lot_id"] for name in ("recommendations", "warning", "avoid")
            for row in groups[name]]
@@ -106,10 +106,10 @@ def test_decision_groups_are_mutually_exclusive():
 @pytest.mark.parametrize(("available", "total", "status"), [
     (3, 100, "avoid"),
     (4, 100, "warning"),
-    (15, 31, "warning"),
-    (16, 200, "warning"),
+    (10, 31, "warning"),
+    (11, 100, "recommended"),
     (30, 301, "warning"),
-    (31, 1000, "recommended"),
+    (100, 1000, "recommended"),
     (148, 1360, "recommended"),
 ])
 def test_decision_uses_available_count_and_ratio(available, total, status):
@@ -209,10 +209,31 @@ def test_split_groups_keeps_nearest_warning_and_avoid_semantics():
          "available_spaces": 60, "recommendation_score": 75.0},
     ]
     groups = split_recommendation_groups(ranked)
-    assert [row["lot_id"] for row in groups["recommendations"]] == ["safe", "district"]
+    assert [row["lot_id"] for row in groups["recommendations"]] == [
+        "safe", "district", "warning"]
     assert [row["lot_id"] for row in groups["nearest"]] == ["warning", "avoid", "safe"]
-    assert [row["lot_id"] for row in groups["warning"]] == ["warning"]
+    assert groups["warning"] == []
     assert [row["lot_id"] for row in groups["avoid"]] == ["avoid"]
+
+
+def test_recommendations_choose_safe_by_distance_before_backup():
+    """首選先取低風險場站並按距離排序，不讓遠方高空位率壓過近場站。"""
+    ranked = [
+        decision_row(lot_id="far-safe", available_spaces=80, total_spaces=100,
+                     distance_m=900, hell_score=20, recommendation_score=90),
+        decision_row(lot_id="near-safe", available_spaces=20, total_spaces=100,
+                     distance_m=200, hell_score=80, recommendation_score=40),
+        decision_row(lot_id="middle-safe", available_spaces=30, total_spaces=100,
+                     distance_m=500, hell_score=70, recommendation_score=60),
+        decision_row(lot_id="nearest-backup", available_spaces=8, total_spaces=100,
+                     distance_m=100, hell_score=92, recommendation_score=80),
+    ]
+
+    groups = split_recommendation_groups(ranked)
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == [
+        "near-safe", "middle-safe", "far-safe"]
+    assert [row["lot_id"] for row in groups["warning"]] == ["nearest-backup"]
 
 
 def test_history_requires_three_same_day_type_and_hour_samples():

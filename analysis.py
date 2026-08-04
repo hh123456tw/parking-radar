@@ -133,8 +133,7 @@ def explain_candidate(row, min_history_samples=3):
 
     if available <= 3:
         status, label = "avoid", "不建議前往"
-    elif ((available <= 15 and free_ratio < 0.5)
-          or (available <= 30 and free_ratio < 0.1)):
+    elif available <= 10 or free_ratio < 0.1:
         status, label = "warning", "建議備選"
     else:
         status, label = "recommended", "可以前往"
@@ -182,14 +181,32 @@ def explain_candidate(row, min_history_samples=3):
 
 
 def split_recommendation_groups(ranked):
-    """加入決策說明並產生互斥的推薦、警示與避雷群組。"""
+    """先依風險分級，再依距離排序；首選不足三個時才補入備選。"""
     explained = [explain_candidate(row) for row in ranked]
     with_distance = [row for row in explained if row.get("distance_m") is not None]
     nearest = sorted(with_distance, key=lambda item: item["distance_m"])[:3]
-    recommendations = [
-        row for row in explained if row["decision_status"] == "recommended"][:3]
-    warning = [row for row in explained if row["decision_status"] == "warning"][:3]
-    avoid = [row for row in explained if row["decision_status"] == "avoid"][:3]
+
+    def distance_then_spaces(item):
+        """同風險優先選較近場站；距離相同時再選剩餘格數較多者。"""
+        distance = item.get("distance_m")
+        return (float("inf") if distance is None else distance,
+                -int(item["available_spaces"]))
+
+    safe = sorted(
+        (row for row in explained if row["decision_status"] == "recommended"),
+        key=distance_then_spaces,
+    )
+    backup = sorted(
+        (row for row in explained if row["decision_status"] == "warning"),
+        key=distance_then_spaces,
+    )
+    avoid = sorted(
+        (row for row in explained if row["decision_status"] == "avoid"),
+        key=distance_then_spaces,
+    )[:3]
+    recommendations = (safe + backup)[:3]
+    selected_ids = {row["lot_id"] for row in recommendations}
+    warning = [row for row in backup if row["lot_id"] not in selected_ids][:3]
     return {
         "recommendations": recommendations,
         "nearest": nearest,
