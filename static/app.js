@@ -46,16 +46,87 @@ function renderSummary(data) {
   const compare=data.history.comparison; const weekday=compare?.weekday?.hell_score; const weekend=compare?.weekend?.hell_score;
   document.querySelector("#history-compare").textContent = weekday == null || weekend == null ? `有效樣本 ${data.history.sample_count} 筆` : `平日 ${weekday}｜週末 ${weekend}`;
   document.querySelector("#valid-count").textContent = `${data.current.valid_lot_count} 座`;
-  document.querySelector("#updated-at").textContent = data.updated_at ? `資料時間 ${new Date(data.updated_at).toLocaleString("zh-TW")}` : "目前無有效即時資料";
+  const officialTime = data.official_updated_at
+    ? new Date(data.official_updated_at).toLocaleString("zh-TW") : "無資料";
+  const collectedTime = data.collected_at
+    ? new Date(data.collected_at).toLocaleString("zh-TW") : "無資料";
+  document.querySelector("#official-updated-at").textContent =
+    `官方資料時間：${officialTime}`;
+  document.querySelector("#collected-at").textContent =
+    `系統最後抓取：${collectedTime}`;
 }
-function parkingCard(lot, kind="") {
-  return `<article class="parking-card ${kind}"><p>${lot.hell_label}</p><h3>${lot.lot_name}</h3><strong>剩餘 ${lot.available_spaces} 格</strong><p>地獄指數 ${lot.hell_score}｜${formatDistance(lot.distance_m)}</p><p>推薦分數 ${lot.recommendation_score}</p></article>`;
+// 轉義官方文字，避免 innerHTML 把名稱、地址或原因當成標記執行。
+function escapeHtml(value) {
+  const entities = {"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"};
+  return String(value ?? "").replace(/[&<>"']/g, character => entities[character]);
+}
+
+// 組合臺北市、行政區與官方地址，避免重複顯示城市或行政區。
+function formatFullAddress(lot) {
+  const address = (lot.address || "").replaceAll("台北市", "臺北市").trim();
+  if (!address) return "地址資料未提供";
+  if (address.startsWith("臺北市")) return address;
+  if (lot.district && address.startsWith(lot.district)) return `臺北市${address}`;
+  return `臺北市${lot.district || ""}${address}`;
+}
+
+// 優先用精確座標開啟 Google 地圖，缺少座標時改以名稱與地址搜尋。
+function googleMapsUrl(lot) {
+  const base = "https://www.google.com/maps/search/?api=1&query=";
+  if (lot.latitude != null && lot.longitude != null) {
+    return `${base}${encodeURIComponent(`${lot.latitude},${lot.longitude}`)}`;
+  }
+  const address = formatFullAddress(lot);
+  if (address === "地址資料未提供" && !lot.lot_name) return null;
+  return `${base}${encodeURIComponent(`${lot.lot_name || ""} ${address}`.trim())}`;
+}
+
+function parkingCard(lot) {
+  const address = formatFullAddress(lot);
+  const mapsUrl = googleMapsUrl(lot);
+  const safeMapsUrl = mapsUrl ? escapeHtml(mapsUrl) : null;
+  const freePercent = Math.max(0, Math.min(
+    100, lot.available_spaces / lot.total_spaces * 100));
+  const distance = formatDistance(lot.distance_m);
+  const reasons = (lot.reasons || [])
+    .map(reason => `<li>${escapeHtml(reason)}</li>`).join("");
+  const mapsLink = safeMapsUrl
+    ? `<a class="maps-link" href="${safeMapsUrl}" target="_blank" rel="noopener noreferrer">Google 地圖 ↗</a>`
+    : `<span class="maps-link disabled" aria-disabled="true">無地圖資料</span>`;
+
+  return `<article class="parking-card ${escapeHtml(lot.decision_status)}">
+    <div class="card-top">
+      <span class="decision-badge">${escapeHtml(lot.decision_label)}</span>
+      <span class="distance-label">${escapeHtml(distance)}</span>
+    </div>
+    <h3>${escapeHtml(lot.lot_name)}</h3>
+    ${safeMapsUrl
+      ? `<a class="parking-address" href="${safeMapsUrl}" target="_blank" rel="noopener noreferrer">📍 ${escapeHtml(address)} ↗</a>`
+      : `<span class="parking-address">📍 ${escapeHtml(address)}</span>`}
+    <div class="capacity"><strong>${lot.available_spaces} / ${lot.total_spaces}</strong><span>格目前可停</span></div>
+    <div class="capacity-bar" aria-label="空位比例"><i style="width:${freePercent}%"></i></div>
+    <div class="reason-panel"><strong>判斷原因</strong><ul class="reason-list">${reasons}</ul></div>
+    <div class="card-actions">${mapsLink}<button type="button" data-lot="${escapeHtml(lot.lot_id)}">查看歷史</button></div>
+    <small class="score-details">停車壓力${escapeHtml(lot.pressure_label)}｜綜合推薦${escapeHtml(lot.recommendation_label)}</small>
+  </article>`;
 }
 function renderCards(data) {
-  const cards = [...data.recommendations.map(x=>parkingCard(x)), ...data.warning.map(x=>parkingCard(x,"warning")), ...data.avoid.map(x=>parkingCard(x,"avoid"))];
-  document.querySelector("#recommendations").innerHTML = cards.join("") || "<p>目前沒有符合條件的停車場。</p>";
-  document.querySelector("#nearest").innerHTML = data.nearest.map(x=>`<li><button type="button" data-lot="${x.lot_id}">${x.lot_name}<br>${formatDistance(x.distance_m)}</button></li>`).join("");
-  document.querySelectorAll("[data-lot]").forEach(button=>button.addEventListener("click",()=>loadHistory(button.dataset.lot).catch(err => showStatus(err.message, "error"))));
+  const cards = [
+    ...data.recommendations.map(parkingCard),
+    ...data.warning.map(parkingCard),
+    ...data.avoid.map(parkingCard),
+  ];
+  const noRecommendation = data.recommendations.length
+    ? "" : "<p class=\"group-empty\">目前沒有低風險停車場，請查看警示與避雷建議。</p>";
+  const noCandidates = cards.length ? "" : "<p>目前沒有可分析的停車場。</p>";
+  document.querySelector("#recommendations").innerHTML =
+    noRecommendation + (cards.join("") || noCandidates);
+  document.querySelector("#nearest").innerHTML = data.nearest.map(x =>
+    `<li><button type="button" data-lot="${x.lot_id}">${x.lot_name}<br>${formatDistance(x.distance_m)}</button></li>`
+  ).join("");
+  document.querySelectorAll("[data-lot]").forEach(button =>
+    button.addEventListener("click", () =>
+      loadHistory(button.dataset.lot).catch(error => showStatus(error.message, "error"))));
 }
 function renderMap(data) {
   markerLayer.clearLayers();

@@ -15,9 +15,28 @@ button { border:0; background:var(--orange); color:#1b1008; font-weight:800; cur
 .score-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; background:none; border:0; padding:0; }
 .card-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; background:none; border:0; padding:0; }
 .score-grid strong { display:block; margin-top:8px; font-size:1.7rem; }
-.parking-card { border-left:5px solid var(--green); }
-.parking-card.warning { border-left-color:var(--yellow); }
-.parking-card.avoid { border-left-color:var(--red); }
+/* 決策圖卡以狀態色、容量、原因與操作建立清楚的閱讀順序。 */
+.parking-card { display:flex; flex-direction:column; min-height:430px; border-top:4px solid var(--accent); }
+.parking-card.recommended { --accent:var(--green); }
+.parking-card.warning { --accent:var(--yellow); }
+.parking-card.avoid { --accent:var(--red); }
+.card-top { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+.decision-badge { padding:5px 10px; border-radius:999px; color:var(--accent); background:#0f151c; font-weight:800; }
+.parking-address { display:block; min-height:42px; color:#b8c3d0; text-decoration:underline; text-underline-offset:3px; }
+.capacity { display:flex; align-items:end; gap:8px; margin-top:18px; }
+.capacity strong { font-size:2rem; line-height:1; }
+.capacity-bar { height:8px; margin:11px 0 5px; overflow:hidden; border-radius:999px; background:#29323e; }
+.capacity-bar i { display:block; height:100%; background:var(--accent); }
+.reason-panel { margin:16px 0; padding:12px; border-radius:12px; background:#0f151c; }
+.reason-list { margin:7px 0 0; padding-left:18px; }
+.reason-list li::marker { color:var(--accent); }
+.card-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:auto; }
+.maps-link, .card-actions button { display:grid; place-items:center; min-height:42px; border-radius:9px; font-weight:800; }
+.maps-link { background:var(--orange); color:#211108; text-decoration:none; }
+.maps-link.disabled { opacity:.45; cursor:not-allowed; }
+.score-details { margin-top:10px; color:var(--muted); text-align:center; }
+/* 官方與本系統兩個時間戳記排在次要位置，窄螢幕自動換行。 */
+.data-times { display:flex; flex-wrap:wrap; gap:4px 16px; color:var(--muted); font-size:.9rem; }
 .map-layout { display:grid; grid-template-columns:2fr 1fr; gap:20px; }
 #map { height:430px; border-radius:14px; }
 #status.error { color:#ff9294; }

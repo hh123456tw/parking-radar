@@ -12,7 +12,10 @@
     <p class="eyebrow">TAIPEI PARKING DECISION TOOL</p>
     <h1>停車地獄雷達</h1>
     <p>現在有多難停？哪裡值得去？用即時資料與歷史參考做決定。</p>
-    <p id="updated-at" aria-live="polite">尚未查詢</p>
+    <p class="data-times" aria-live="polite">
+      <span id="official-updated-at">官方資料時間：尚未查詢</span>
+      <span id="collected-at">系統最後抓取：尚未查詢</span>
+    </p>
   </header>
   <main>
     <section class="query-panel">
@@ -37,7 +40,7 @@
       <article><span>首選場站抵達時段歷史</span><strong id="history-score">—</strong><small id="history-compare"></small></article>
       <article><span>有效停車場</span><strong id="valid-count">—</strong></article>
     </section>
-    <section><h2>推薦與避雷</h2><div id="recommendations" class="card-grid"></div></section>
+    <section><h2>推薦與避雷</h2><p class="section-note">依即時空位、距離與歷史資料，用固定規則說明判斷原因。</p><div id="recommendations" class="card-grid"></div></section>
     <section class="map-layout"><div><h2>附近停車場</h2><div id="map"></div></div><aside><h2>距離最近</h2><ol id="nearest"></ol></aside></section>
     <section><h2>最近七天空位變化</h2><p id="history-note">選擇推薦停車場後載入歷史參考。</p><canvas id="history-chart"></canvas></section>
   </main>

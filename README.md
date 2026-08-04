@@ -22,6 +22,23 @@ python -m pytest -q
 flask --app app run --debug
 ```
 
+若要在 Windows 每 15 分鐘自動收集一次，可於 PowerShell 以系統管理員註冊工作排程器：
+
+```powershell
+$projectRoot = (Resolve-Path .).Path
+$action = New-ScheduledTaskAction `
+  -Execute "$projectRoot\.venv\Scripts\python.exe" `
+  -Argument "collector.py --once" `
+  -WorkingDirectory $projectRoot
+$trigger = New-ScheduledTaskTrigger `
+  -Once -At (Get-Date).AddMinutes(1) `
+  -RepetitionInterval (New-TimeSpan -Minutes 15)
+Register-ScheduledTask `
+  -TaskName "ParkingRadarCollector" `
+  -Action $action -Trigger $trigger `
+  -Description "每 15 分鐘收集臺北市停車快照"
+```
+
 ## 環境變數
 
 | 名稱 | 用途 |
@@ -43,6 +60,9 @@ flask --app app run --debug
 - 歷史不足：即時容易度 60% + 距離容易度 40%。
 - `-9`、`-11`、`-12`、`-13` 是官方特殊狀態，不是負車位，不進入數值計算。
 - 歷史分析為過去樣本參考，不代表抵達時仍有相同空位。
+- 圖卡的推薦、警示、避雷與白話原因全部由 Python 固定規則產生；Gemini 只解析對話條件。
+- 停車場地址與 Google 地圖連結使用既有座標或地址，不使用付費 Google Maps API。
+- 頁面分開顯示官方動態資料時間與本系統抓取時間，避免誤判資料新鮮度。
 
 ## GCP 1 vCPU／1 GB 部署
 
@@ -55,7 +75,7 @@ flask --app app run --debug
 7. 以 `parking` 使用者執行 `crontab -e` 加入：
 
 ```cron
-*/30 * * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python collector.py --once >> /opt/parking-hell/collector.log 2>&1
+*/15 * * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python collector.py --once >> /opt/parking-hell/collector.log 2>&1
 ```
 
 ## 展示檢查
