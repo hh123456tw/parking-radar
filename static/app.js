@@ -1,6 +1,7 @@
 /* 單頁互動：查詢固定 API，呈現精簡決策卡、Leaflet 與按需歷史圖。 */
 const QUERY_TIMEOUT_MS = 20000;
 const MIN_HISTORY_POINTS = 8;
+const CLIENT_VERSION = "2";
 const districts = ["松山區","信義區","大安區","中山區","中正區","大同區","萬華區","文山區","南港區","內湖區","士林區","北投區"];
 
 const map = L.map("map").setView([25.0478, 121.5319], 12);
@@ -26,7 +27,7 @@ async function submitQuery(payload) {
   try {
     const response = await fetch("/api/query", {
       method:"POST",
-      headers:{"Content-Type":"application/json"},
+      headers:{"Content-Type":"application/json", "X-Client-Version":CLIENT_VERSION},
       body:JSON.stringify(payload),
       signal:controller.signal,
     });
@@ -38,7 +39,7 @@ async function submitQuery(payload) {
     if (data.needs_location_choice) {
       document.querySelector("#result-content").hidden = true;
       renderLocationChoices(data);
-      showStatus(`找到 ${data.location_choices.length} 個可能地點，請先選擇。`, "");
+      showStatus(`找到 ${data.location_choices.length} 個可能地點，請先確認。`, "");
       return;
     }
     document.querySelector("#result-content").hidden = false;

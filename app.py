@@ -1,5 +1,6 @@
 """Flask 入口；集中協調查詢流程，不在路由內重寫分析公式。"""
 
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -19,10 +20,19 @@ from database import (fetch_current_lots, fetch_history,
 from geocoder import geocode_address, geocode_candidates, resolve_known_landmark
 
 _refresh_lock = Lock()
+LOCATION_CHOICE_CLIENT_VERSION = "2"
 
 
 class ParkingDataUnavailable(RuntimeError):
     """表示資料庫沒有快照，而且官方資料也無法即時補入。"""
+
+
+def requires_location_confirmation(parsed):
+    """沒有門牌的聊天地標必須由使用者確認，不能自動採用單一候選。"""
+    original = (parsed.get("original_destination") or "").strip()
+    if not original or parsed.get("destination_label"):
+        return False
+    return re.search(r"\d+(?:-\d+)?號", original) is None
 
 
 def snapshot_age_minutes(captured_at, now=None):
@@ -220,7 +230,13 @@ def create_app(test_config=None):
             connection = get_connection()
             verified_choices = geocode_candidates(
                 parsed.get("location_candidates", []), connection)
-            if len(verified_choices) > 1:
+            needs_choice = len(verified_choices) > 1 or (
+                verified_choices and requires_location_confirmation(parsed))
+            if needs_choice:
+                if request.headers.get("X-Client-Version") != \
+                        LOCATION_CHOICE_CLIENT_VERSION:
+                    return jsonify(
+                        error="畫面已更新，請重新整理頁面後再查詢"), 409
                 return jsonify(
                     needs_location_choice=True,
                     location_choices=verified_choices,

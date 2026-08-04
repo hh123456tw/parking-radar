@@ -59,9 +59,11 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
 
     assert "needs_location_choice" in script
+    assert '"X-Client-Version":CLIENT_VERSION' in script
     assert 'data-location-choice="${index}"' in script
     assert 'mode:"manual"' in script
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
+    assert "location-v3" in template
     assert 'document.querySelector("#result-content").hidden = true' in script

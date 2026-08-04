@@ -241,6 +241,17 @@ def test_chat_landmark_alias_replaces_gemini_district_guess():
         "台北車站（臺北市中正區北平西路3號）"
 
 
+@pytest.mark.parametrize(("parsed", "expected"), [
+    ({"original_destination": "資策會"}, True),
+    ({"original_destination": "臺北市信義區市府路1號"}, False),
+    ({"original_destination": "台北車站", "destination_label": "台北車站（北平西路3號）"},
+     False),
+])
+def test_fuzzy_landmark_confirmation_rule(parsed, expected):
+    """模糊地標需確認；完整門牌與後端固定別名可直接查詢。"""
+    assert app_module.requires_location_confirmation(parsed) is expected
+
+
 def test_chat_ambiguous_landmark_returns_clickable_choices(monkeypatch):
     """多據點地標應先回傳已驗證候選，不執行停車分析。"""
     monkeypatch.setattr(app_module, "parse_parking_query", lambda *_args: ParkingIntent(
@@ -263,14 +274,48 @@ def test_chat_ambiguous_landmark_returns_clickable_choices(monkeypatch):
          "latitude": 25.06, "longitude": 121.55},
     ])
 
-    response = make_client().post(
+    client = make_client()
+    stale_response = client.post(
         "/api/query", json={"mode": "chat", "message": "我要去資策會"})
+    response = client.post(
+        "/api/query", json={"mode": "chat", "message": "我要去資策會"},
+        headers={"X-Client-Version": "2"})
 
     data = response.get_json()
+    assert stale_response.status_code == 409
+    assert "重新整理頁面" in stale_response.get_json()["error"]
     assert response.status_code == 200
     assert data["needs_location_choice"] is True
     assert len(data["location_choices"]) == 2
     assert data["location_choices"][0]["district"] == "大安區"
+
+
+def test_chat_single_fuzzy_candidate_still_requires_confirmation(monkeypatch):
+    """只驗證出一個模糊地標時也不能擅自當成使用者目的地。"""
+    monkeypatch.setattr(app_module, "parse_parking_query", lambda *_args: ParkingIntent(
+        intent="recommend", original_destination="資策會", address="資策會",
+        district="松山區", arrival_time=None, missing_fields=[],
+        location_candidates=[{
+            "name": "資策會數位轉型研究院",
+            "address": "臺北市松山區民生東路四段133號", "district": "松山區",
+        }],
+    ))
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_candidates", lambda *_args: [{
+        "name": "資策會數位轉型研究院",
+        "address": "臺北市松山區民生東路四段133號", "district": "松山區",
+        "display_address": "民生東路四段133號, 臺北市",
+        "latitude": 25.06, "longitude": 121.55,
+    }])
+
+    response = make_client().post(
+        "/api/query", json={"mode": "chat", "message": "我要去資策會"},
+        headers={"X-Client-Version": "2"})
+
+    data = response.get_json()
+    assert response.status_code == 200
+    assert data["needs_location_choice"] is True
+    assert len(data["location_choices"]) == 1
 
 
 def test_chat_service_failure_returns_manual_fallback(monkeypatch):
