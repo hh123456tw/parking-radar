@@ -42,6 +42,9 @@ def _prompt(message, context):
 目前臺北時間：{now}。只接受臺北市地址與十二行政區。
 不得提供停車場、空位、距離、分數、SQL 或一般聊天答案。
 必要資訊不足時列入 missing_fields，不得猜測。
+original_destination 只是保留使用者原話的選填欄位，不得列入 missing_fields。
+若使用者提供臺北市地標但沒有完整地址，請保留 original_destination，
+address 可回傳該地標名稱，讓後端地址服務解析。
 若使用者沒有提抵達時間，arrival_time 請回傳 null，且不要把 arrival_time
 列入 missing_fields；後端會自動使用 Asia/Taipei 的現在時間。
 上一輪狀態：{json.dumps(context or {}, ensure_ascii=False, default=str)}

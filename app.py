@@ -33,9 +33,16 @@ def parse_manual_payload(payload):
 
 def validate_parsed_query(parsed, now=None):
     """驗證 Gemini 結果；未指定抵達時間時，自動使用台北現在時間。"""
+    # 地標名稱也能交給 Nominatim 搜尋，例如「臺北市政府」或「資策會」。
+    landmark = (parsed.get("original_destination") or "").strip()
+    if not parsed.get("address") and not parsed.get("district") and landmark:
+        parsed["address"] = landmark
+
     missing_fields = [
         name for name in parsed.get("missing_fields", [])
-        if name != "arrival_time"
+        if name not in {"arrival_time", "original_destination"}
+        and not (name == "address" and parsed.get("district"))
+        and not (name == "district" and parsed.get("address"))
     ]
     parsed["missing_fields"] = missing_fields
     if missing_fields:

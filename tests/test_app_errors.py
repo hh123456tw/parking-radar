@@ -114,3 +114,35 @@ def test_chat_still_rejects_other_missing_fields_when_time_defaults():
 
     with pytest.raises(ValueError, match="還需要：address"):
         app_module.validate_parsed_query(parsed, now=now)
+
+
+def test_original_destination_is_optional_when_district_exists():
+    """已有行政區時，僅供顯示的 original_destination 不得阻擋查詢。"""
+    parsed = {
+        "missing_fields": ["original_destination"],
+        "original_destination": "信義區",
+        "address": None,
+        "district": "信義區",
+        "arrival_time": None,
+    }
+
+    result = app_module.validate_parsed_query(parsed)
+
+    assert result["district"] == "信義區"
+    assert result["address"] is None
+    assert result["missing_fields"] == []
+
+
+def test_landmark_original_destination_becomes_geocoding_query():
+    """只有地標名稱時，應交給地址搜尋，不要求使用者先查完整地址。"""
+    parsed = {
+        "missing_fields": [],
+        "original_destination": "資策會",
+        "address": None,
+        "district": None,
+        "arrival_time": None,
+    }
+
+    result = app_module.validate_parsed_query(parsed)
+
+    assert result["address"] == "資策會"
