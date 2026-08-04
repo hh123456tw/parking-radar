@@ -182,10 +182,10 @@ def test_chat_known_landmark_uses_fixed_house_address():
 
 
 def test_fresh_snapshot_skips_on_demand_collector(monkeypatch):
-    """45 分鐘內的快照直接使用，不得浪費官方 API 請求。"""
+    """5 分鐘內的快照直接使用，不得浪費官方 API 請求。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
-        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=10))
+        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=4))
     monkeypatch.setattr(
         app_module, "collect_once",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("不應更新")),
@@ -198,8 +198,8 @@ def test_stale_snapshot_refreshes_once_with_short_timeout(monkeypatch):
     """過期快照取得鎖後再檢查，並用查詢專用短逾時補抓一次。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
     times = iter([
-        now - timedelta(minutes=60),
-        now - timedelta(minutes=60),
+        now - timedelta(minutes=6),
+        now - timedelta(minutes=6),
         now,
     ])
     calls = []

@@ -126,9 +126,8 @@ def test_decision_uses_available_count_and_ratio(available, total, status):
 
 
 def test_config_has_locked_analysis_constants():
-    """搜尋半徑與新鮮度必須符合設計規格。"""
+    """搜尋半徑必須符合設計規格。"""
     assert Config.SEARCH_RADIUS_M == 1500
-    assert Config.FRESHNESS_MINUTES == 45
 
 
 def test_clean_available_rejects_special_and_impossible_values():
