@@ -20,7 +20,9 @@ class CloseTrackingConnection:
 
 def make_client():
     """建立具有 session 功能的 Flask 測試客戶端。"""
-    return app_module.create_app({"TESTING": True, "SECRET_KEY": "test"}).test_client()
+    return app_module.create_app({
+        "TESTING": True, "SECRET_KEY": "test", "AUTO_REFRESH_ENABLED": False,
+    }).test_client()
 
 
 def lot_row(captured_at=None):

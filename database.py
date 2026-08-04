@@ -57,8 +57,24 @@ def insert_snapshots(connection, snapshots):
         return cursor.rowcount
 
 
+def fetch_latest_snapshot_time(connection):
+    """回傳資料庫最後一次成功收集時間；完全沒有快照時回傳 None。"""
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT MAX(captured_at) AS captured_at FROM parking_snapshots")
+        rows = list(cursor.fetchall())
+        row = rows[0] if rows else None
+        return row.get("captured_at") if row else None
+
+
 def fetch_current_lots(connection, district=None, freshness_minutes=45):
-    """取得每個停車場 45 分鐘內最新有效快照，可選擇行政區。"""
+    """取得每場站最新有效快照；freshness_minutes=None 時允許舊資料。"""
+    freshness_sql = ""
+    params = []
+    if freshness_minutes is not None:
+        freshness_sql = (
+            "AND s.captured_at >= UTC_TIMESTAMP() - INTERVAL %s MINUTE"
+        )
+        params.append(freshness_minutes)
     sql = """
         SELECT * FROM (
             SELECT l.*, s.available_spaces,
@@ -69,12 +85,11 @@ def fetch_current_lots(connection, district=None, freshness_minutes=45):
                    ) AS row_num
             FROM parking_lots l
             JOIN parking_snapshots s ON s.lot_id = l.lot_id
-            WHERE s.captured_at >= UTC_TIMESTAMP() - INTERVAL %s MINUTE
-              AND l.supports_realtime = TRUE
+            WHERE l.supports_realtime = TRUE
+              {freshness_sql}
         ) latest
         WHERE row_num = 1
-    """
-    params = [freshness_minutes]
+    """.format(freshness_sql=freshness_sql)
     if district:
         sql += " AND district = %s"
         params.append(district)

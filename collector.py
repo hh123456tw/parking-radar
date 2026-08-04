@@ -77,10 +77,10 @@ def fetch_json(url, timeout=15):
     return response.json()
 
 
-def collect_once():
+def collect_once(timeout=15):
     """先完整下載與清洗兩份資料，再以單一交易寫入，避免半套快照。"""
-    static_payload = fetch_json(STATIC_URL)
-    dynamic_payload = fetch_json(DYNAMIC_URL)
+    static_payload = fetch_json(STATIC_URL, timeout=timeout)
+    dynamic_payload = fetch_json(DYNAMIC_URL, timeout=timeout)
     captured_at = datetime.now(timezone.utc)
     raw_snapshots = parse_dynamic(dynamic_payload, captured_at)
     # 即使官方回傳 -9 等狀態，該場站仍屬於支援即時資料，只是不參與本次計算。

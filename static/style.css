@@ -1,45 +1,140 @@
-/* 深色底搭配橘紅警示，讓分數層級在展示時一眼可辨識。 */
-:root { --bg:#0e1116; --panel:#171c24; --line:#2a3340; --text:#f7f8fa; --muted:#9aa6b2; --orange:#ff8a3d; --red:#ff4d4f; --yellow:#f6c344; --green:#4ecb8d; }
+/* 深色決策介面：綠色代表首選，黃紅只用於需要注意的場站。 */
+:root {
+  --bg:#0d1117; --panel:#171d25; --panel-2:#10161d; --line:#2a3441;
+  --text:#f5f7fa; --muted:#9aa8b6; --orange:#ff9150;
+  --red:#ff5d66; --yellow:#f2c94c; --green:#36c98f;
+}
 * { box-sizing:border-box; }
-body { margin:0; background:radial-gradient(circle at top right,#2a1715 0,#0e1116 35%); color:var(--text); font-family:"Noto Sans TC",system-ui,sans-serif; line-height:1.6; }
+[hidden] { display:none !important; }
+body {
+  margin:0; color:var(--text); background:radial-gradient(circle at top right,#251815 0,#0d1117 34%);
+  font-family:"Noto Sans TC",system-ui,sans-serif; line-height:1.55;
+}
 .hero, main, footer { width:min(1120px,calc(100% - 32px)); margin:auto; }
-.hero { padding:56px 0 28px; }
-.hero h1 { margin:4px 0; font-size:clamp(2.2rem,7vw,5rem); line-height:1; }
-.eyebrow { color:var(--orange); letter-spacing:.15em; font-weight:700; }
-main { display:grid; gap:24px; padding-bottom:48px; }
-section, .score-grid article { background:rgba(23,28,36,.94); border:1px solid var(--line); border-radius:18px; padding:20px; }
+.hero { padding:44px 0 24px; }
+.hero h1 { margin:4px 0 10px; font-size:clamp(2.4rem,6vw,4.3rem); line-height:1; }
+.hero > p:not(.eyebrow,.data-times) { max-width:640px; color:#c4ced8; }
+.eyebrow { margin:0; color:var(--orange); letter-spacing:.14em; font-weight:800; }
+.data-times { display:flex; flex-wrap:wrap; gap:4px 18px; color:var(--muted); font-size:.88rem; }
+main { display:grid; gap:20px; padding-bottom:48px; }
+section {
+  padding:22px; border:1px solid var(--line); border-radius:18px;
+  background:rgba(23,29,37,.96); box-shadow:0 14px 34px #00000018;
+}
+h2 { margin:0 0 4px; font-size:1.45rem; }
+h3 { margin:18px 0 8px; font-size:1.2rem; line-height:1.35; }
+.section-note { margin:0 0 18px; color:var(--muted); }
 .input-row, .manual-grid { display:grid; grid-template-columns:1fr auto; gap:12px; }
-input, select, button { min-height:46px; border-radius:10px; border:1px solid var(--line); padding:0 14px; font:inherit; }
-input, select { background:#0f141b; color:var(--text); }
-button { border:0; background:var(--orange); color:#1b1008; font-weight:800; cursor:pointer; }
-.score-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; background:none; border:0; padding:0; }
-.card-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; background:none; border:0; padding:0; }
-.score-grid strong { display:block; margin-top:8px; font-size:1.7rem; }
-/* 決策圖卡以狀態色、容量、原因與操作建立清楚的閱讀順序。 */
-.parking-card { display:flex; flex-direction:column; min-height:430px; border-top:4px solid var(--accent); }
-.parking-card.recommended { --accent:var(--green); }
-.parking-card.warning { --accent:var(--yellow); }
-.parking-card.avoid { --accent:var(--red); }
-.card-top { display:flex; justify-content:space-between; align-items:center; gap:10px; }
-.decision-badge { padding:5px 10px; border-radius:999px; color:var(--accent); background:#0f151c; font-weight:800; }
-.parking-address { display:block; min-height:42px; color:#b8c3d0; text-decoration:underline; text-underline-offset:3px; }
-.capacity { display:flex; align-items:end; gap:8px; margin-top:18px; }
-.capacity strong { font-size:2rem; line-height:1; }
-.capacity-bar { height:8px; margin:11px 0 5px; overflow:hidden; border-radius:999px; background:#29323e; }
-.capacity-bar i { display:block; height:100%; background:var(--accent); }
-.reason-panel { margin:16px 0; padding:12px; border-radius:12px; background:#0f151c; }
-.reason-list { margin:7px 0 0; padding-left:18px; }
-.reason-list li::marker { color:var(--accent); }
-.card-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:auto; }
-.maps-link, .card-actions button { display:grid; place-items:center; min-height:42px; border-radius:9px; font-weight:800; }
-.maps-link { background:var(--orange); color:#211108; text-decoration:none; }
-.maps-link.disabled { opacity:.45; cursor:not-allowed; }
-.score-details { margin-top:10px; color:var(--muted); text-align:center; }
-/* 官方與本系統兩個時間戳記排在次要位置，窄螢幕自動換行。 */
-.data-times { display:flex; flex-wrap:wrap; gap:4px 16px; color:var(--muted); font-size:.9rem; }
-.map-layout { display:grid; grid-template-columns:2fr 1fr; gap:20px; }
-#map { height:430px; border-radius:14px; }
-#status.error { color:#ff9294; }
-#status.success { color:#7de2ad; }
-footer { color:var(--muted); padding:8px 0 40px; font-size:.9rem; }
-@media (max-width:760px) { .score-grid,.card-grid,.map-layout,.manual-grid { grid-template-columns:1fr; } .input-row { grid-template-columns:1fr; } #map { height:340px; } }
+input, select, button { min-height:46px; padding:0 14px; border:1px solid var(--line); border-radius:10px; font:inherit; }
+input, select { color:var(--text); background:#0e141b; }
+button { border:0; color:#1e1108; background:var(--orange); font-weight:800; cursor:pointer; }
+button:hover, a:hover { filter:brightness(1.08); }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+  outline:3px solid #86bfff; outline-offset:3px;
+}
+details { margin-top:16px; }
+summary { color:#c7d1db; cursor:pointer; }
+.manual-grid { grid-template-columns:2fr 1fr 1.4fr auto; margin-top:14px; align-items:end; }
+.manual-grid label { display:grid; gap:5px; color:var(--muted); font-size:.9rem; }
+#status { min-height:24px; margin:14px 0 0; }
+#status.error { color:#ff9298; }
+#status.success { color:#7fe2b8; }
+
+/* 摘要只保留目的地、白話區域狀況與有效場站數。 */
+.summary-panel { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(330px,1fr); gap:20px; }
+.destination-summary { min-width:0; }
+.destination-summary span, .summary-metrics span { color:var(--muted); font-size:.9rem; }
+.destination-summary strong { display:block; margin-top:8px; font-size:1.25rem; overflow-wrap:anywhere; }
+.summary-metrics { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.summary-metrics article { padding:14px; border-radius:12px; background:var(--panel-2); }
+.summary-metrics strong { display:block; margin:5px 0; font-size:1.35rem; }
+.summary-metrics small { display:block; color:var(--muted); }
+.data-notice { grid-column:1/-1; margin:0; padding:10px 13px; border-left:4px solid var(--yellow); color:#ffe39a; background:#2b2618; border-radius:8px; }
+
+/* 首選卡只呈現做決定需要的資料，移除重複原因框與抽象分數。 */
+.card-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+.parking-card {
+  display:flex; flex-direction:column; min-width:0; min-height:350px; padding:18px;
+  border:1px solid #314139; border-top:4px solid var(--green); border-radius:14px;
+  background:var(--panel-2);
+}
+.card-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.rank-badge { padding:5px 10px; border-radius:999px; color:#78e0b7; background:#13271f; font-weight:850; }
+.distance-label { color:#d4dbe2; font-weight:700; }
+.parking-address { min-height:46px; color:#bac7d2; text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
+.capacity { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px; margin-top:18px; }
+.capacity strong { font-size:2.35rem; line-height:1; }
+.capacity span { font-weight:750; }
+.capacity small { margin-left:auto; color:var(--muted); }
+.capacity-bar { height:9px; margin:11px 0 12px; overflow:hidden; border-radius:999px; background:#293440; }
+.capacity-bar i { display:block; height:100%; background:var(--green); }
+.decision-summary { margin:0 0 16px; color:#d5dde5; }
+.card-actions { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-top:auto; }
+.primary-action, .secondary-action {
+  display:grid; place-items:center; min-height:44px; padding:8px 10px; border-radius:9px;
+  text-align:center; text-decoration:none; font-weight:800;
+}
+.primary-action { color:#14231d; background:var(--green); }
+.secondary-action { color:#e5ebf1; background:#26313d; border:1px solid #374555; }
+.primary-action.disabled { opacity:.5; }
+
+/* 警示與避雷改為列表，避免與三個首選競爭視覺焦點。 */
+.compact-list { display:grid; gap:8px; }
+.compact-lot {
+  display:grid; grid-template-columns:130px minmax(220px,1fr) 90px 110px;
+  gap:14px; align-items:center; padding:12px 14px; border:1px solid var(--line);
+  border-left:4px solid var(--accent); border-radius:11px; background:var(--panel-2);
+}
+.compact-lot.warning { --accent:var(--yellow); }
+.compact-lot.avoid { --accent:var(--red); }
+.compact-status { color:var(--accent); font-weight:850; }
+.compact-lot div { display:grid; }
+.compact-lot small, .muted { color:var(--muted); }
+.compact-lot a { color:#a9d5ff; text-align:right; }
+
+/* 地圖以大尺寸編號標示三個首選，其餘場站降低權重。 */
+.map-layout { display:grid; grid-template-columns:minmax(0,2.2fr) minmax(260px,1fr); gap:22px; }
+#map { height:440px; margin-top:14px; border:1px solid #34404d; border-radius:14px; }
+.map-priorities { display:grid; gap:10px; margin:14px 0 0; padding:0; list-style:none; }
+.map-priorities button {
+  width:100%; display:grid; grid-template-columns:34px 1fr; gap:2px 10px; align-items:center;
+  padding:11px; color:var(--text); background:var(--panel-2); border:1px solid var(--line); text-align:left;
+}
+.map-priorities button > span {
+  grid-row:1/3; display:grid; place-items:center; width:32px; height:32px;
+  border-radius:50%; color:#092219; background:var(--green); font-weight:900;
+}
+.map-priorities button strong, .map-priorities button small { min-width:0; }
+.map-priorities button small { color:var(--muted); }
+.map-empty { color:var(--muted); }
+.leaflet-tooltip.marker-rank {
+  padding:0; border:0; color:#10241c; background:transparent; box-shadow:none;
+  font-size:.82rem; font-weight:950;
+}
+.leaflet-tooltip.marker-rank::before { display:none; }
+.leaflet-tooltip.destination-label { color:#16314a; font-weight:800; }
+
+/* 歷史只有點擊後出現；資料不足時 canvas 維持隱藏。 */
+.history-section { scroll-margin-top:20px; }
+.history-section p { margin:4px 0 0; color:var(--muted); }
+.history-chart-shell { height:280px; margin-top:16px; }
+.history-chart-shell canvas { width:100% !important; height:100% !important; }
+footer { padding:8px 0 40px; color:var(--muted); font-size:.88rem; }
+
+@media (max-width:900px) {
+  .manual-grid { grid-template-columns:1fr 1fr; }
+  .summary-panel, .map-layout { grid-template-columns:1fr; }
+  .card-grid { grid-template-columns:1fr; }
+  .parking-card { min-height:0; }
+}
+@media (max-width:680px) {
+  .hero, main, footer { width:min(100% - 20px,1120px); }
+  .hero { padding-top:32px; }
+  section { padding:16px; }
+  .input-row, .manual-grid, .summary-metrics { grid-template-columns:1fr; }
+  .compact-lot { grid-template-columns:1fr auto; gap:5px 12px; }
+  .compact-lot div { grid-column:1/-1; }
+  .compact-lot a { text-align:left; }
+  #map { height:350px; }
+  .card-actions { grid-template-columns:1fr; }
+}

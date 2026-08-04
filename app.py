@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, render_template, request, session
@@ -11,9 +12,65 @@ from analysis import (build_history_series, district_hell_score,
                       split_recommendation_groups, summarize_hour_comparison,
                       summarize_matching_history)
 from config import Config
+from collector import collect_once
 from database import (fetch_current_lots, fetch_history,
-                      fetch_matching_history, get_connection)
+                      fetch_latest_snapshot_time, fetch_matching_history,
+                      get_connection)
 from geocoder import geocode_address
+
+_refresh_lock = Lock()
+
+
+class ParkingDataUnavailable(RuntimeError):
+    """表示資料庫沒有快照，而且官方資料也無法即時補入。"""
+
+
+def snapshot_age_minutes(captured_at, now=None):
+    """計算 UTC 快照距現在幾分鐘；未提供快照時回傳 None。"""
+    if captured_at is None:
+        return None
+    if captured_at.tzinfo is None:
+        captured_at = captured_at.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    return max(0, int((current - captured_at).total_seconds() // 60))
+
+
+def _latest_snapshot_time():
+    """使用短連線讀取全庫最新快照時間，避免刷新後沿用舊交易。"""
+    connection = get_connection()
+    try:
+        return fetch_latest_snapshot_time(connection)
+    finally:
+        connection.close()
+
+
+def ensure_fresh_parking_data(now=None):
+    """資料過期時只補抓一次；失敗但有舊快照時允許誠實降級。"""
+    latest = _latest_snapshot_time()
+    age = snapshot_age_minutes(latest, now)
+    if age is not None and age <= Config.FRESHNESS_MINUTES:
+        return "fresh", None
+
+    with _refresh_lock:
+        # 等鎖期間其他請求可能已完成更新，因此取得鎖後必須再次確認。
+        latest = _latest_snapshot_time()
+        age = snapshot_age_minutes(latest, now)
+        if age is not None and age <= Config.FRESHNESS_MINUTES:
+            return "fresh", None
+        try:
+            collect_once(timeout=Config.ON_DEMAND_FETCH_TIMEOUT_SECONDS)
+            refreshed = _latest_snapshot_time()
+            refreshed_age = snapshot_age_minutes(refreshed, now)
+            if refreshed_age is not None and refreshed_age <= Config.FRESHNESS_MINUTES:
+                return "fresh", None
+            latest, age = refreshed, refreshed_age
+            reason = "官方尚未提供更新"
+        except Exception:
+            reason = "官方更新失敗"
+
+    if latest is None:
+        raise ParkingDataUnavailable("暫時無法取得官方停車資料")
+    return "stale", f"{reason}，目前顯示 {age} 分鐘前資料"
 
 
 def parse_manual_payload(payload):
@@ -149,11 +206,16 @@ def create_app(test_config=None):
 
         connection = None
         try:
+            if app.config.get("AUTO_REFRESH_ENABLED", True):
+                data_status, data_notice = ensure_fresh_parking_data()
+            else:
+                data_status, data_notice = "fresh", None
             connection = get_connection()
             destination = geocode_address(parsed.get("address"), connection) if parsed.get("address") else None
             if parsed.get("address") and destination is None:
                 return jsonify(error="找不到地址，請修正或改選行政區", fallback="district"), 422
-            rows = fetch_current_lots(connection, parsed.get("district"), Config.FRESHNESS_MINUTES)
+            freshness = Config.FRESHNESS_MINUTES if data_status == "fresh" else None
+            rows = fetch_current_lots(connection, parsed.get("district"), freshness)
             if destination:
                 # 先用即時資料與距離縮到 1.5 公里，再查這批候選的歷史，避免讀取全市歷史。
                 nearby = rank_candidates(rows, destination["latitude"], destination["longitude"])
@@ -193,7 +255,11 @@ def create_app(test_config=None):
                 official_updated_at=official_updated_at,
                 collected_at=collected_at,
                 updated_at=collected_at,
+                data_status=data_status,
+                data_notice=data_notice,
                 **groups)
+        except ParkingDataUnavailable as exc:
+            return jsonify(error=str(exc)), 503
         except Exception:
             app.logger.exception("停車查詢失敗")
             return jsonify(error="服務暫時無法使用，請稍後再試"), 503

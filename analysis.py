@@ -129,22 +129,24 @@ def explain_candidate(row, min_history_samples=3):
     total = int(item["total_spaces"])
     pressure = float(item["hell_score"])
     recommendation = float(item["recommendation_score"])
+    free_ratio = available / total
 
-    if available <= 3 or pressure >= 95:
+    if available <= 3:
         status, label = "avoid", "不建議前往"
-    elif pressure >= 85:
-        status, label = "warning", "有滿場風險"
+    elif ((available <= 15 and free_ratio < 0.5)
+          or (available <= 30 and free_ratio < 0.1)):
+        status, label = "warning", "建議備選"
     else:
-        status, label = "recommended", "建議前往"
+        status, label = "recommended", "可以前往"
 
     if available == 0:
         availability_reason = "目前已滿場"
     elif available <= 3:
         availability_reason = f"目前只剩 {available} 格，抵達前可能滿場"
-    elif pressure >= 85:
-        availability_reason = f"目前 {available} / {total} 格可停，滿場風險偏高"
+    elif status == "warning":
+        availability_reason = f"目前 {available} / {total} 格可停，抵達前請再確認"
     else:
-        availability_reason = f"目前 {available} / {total} 格可停，空位充足"
+        availability_reason = f"目前仍有 {available} 格（共 {total} 格），空位數充足"
 
     distance = item.get("distance_m")
     if distance is None:

@@ -59,11 +59,11 @@ def test_explain_candidate_translates_scores_into_reasons():
     result = analysis.explain_candidate(decision_row())
 
     assert result["decision_status"] == "recommended"
-    assert result["decision_label"] == "建議前往"
+    assert result["decision_label"] == "可以前往"
     assert result["pressure_label"] == "低"
     assert result["recommendation_label"] == "高"
     assert result["reasons"] == [
-        "目前 5 / 5 格可停，空位充足",
+        "目前仍有 5 格（共 5 格），空位數充足",
         "距目的地近，約 312 公尺",
         "歷史樣本不足，未納入判斷",
     ]
@@ -73,7 +73,7 @@ def test_explain_candidate_translates_scores_into_reasons():
     (decision_row(available_spaces=1, hell_score=80.0),
      "avoid", "不建議前往", "建議改看推薦前往清單"),
     (decision_row(available_spaces=5, total_spaces=50, hell_score=90.0),
-     "warning", "有滿場風險", "建議保留下一個選擇"),
+     "warning", "建議備選", "建議保留下一個選擇"),
 ])
 def test_explain_candidate_adds_risk_action(row, status, label, action):
     result = analysis.explain_candidate(row)
@@ -101,6 +101,28 @@ def test_decision_groups_are_mutually_exclusive():
     ids = [row["lot_id"] for name in ("recommendations", "warning", "avoid")
            for row in groups[name]]
     assert len(ids) == len(set(ids))
+
+
+@pytest.mark.parametrize(("available", "total", "status"), [
+    (3, 100, "avoid"),
+    (4, 100, "warning"),
+    (15, 31, "warning"),
+    (16, 200, "warning"),
+    (30, 301, "warning"),
+    (31, 1000, "recommended"),
+    (148, 1360, "recommended"),
+])
+def test_decision_uses_available_count_and_ratio(available, total, status):
+    """大型場站不能只因使用率高就被誤判為即將滿場。"""
+    score = hell_score(total, available)
+    result = analysis.explain_candidate(decision_row(
+        total_spaces=total, available_spaces=available,
+        hell_score=score, recommendation_score=50.0))
+
+    assert result["decision_status"] == status
+    if available == 148:
+        assert result["decision_label"] == "可以前往"
+        assert "滿場風險偏高" not in " ".join(result["reasons"])
 
 
 def test_config_has_locked_analysis_constants():

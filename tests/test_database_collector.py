@@ -144,6 +144,22 @@ def test_fetch_current_lots_supports_all_city_and_district_queries():
     assert rows == [{"lot_id": "TPE0001"}]
 
 
+def test_latest_snapshot_and_stale_fallback_queries():
+    """新鮮度安全網可讀最後時間，降級查詢則不得保留時間門檻。"""
+    captured_at = datetime(2026, 8, 4, 6, 0)
+    time_connection = SpyConnection([{"captured_at": captured_at}])
+    assert database.fetch_latest_snapshot_time(time_connection) == captured_at
+    assert "MAX(captured_at)" in time_connection.spy_cursor.calls[0][0]
+
+    stale_connection = SpyConnection([{"lot_id": "TPE0001"}])
+    rows = database.fetch_current_lots(
+        stale_connection, "信義區", freshness_minutes=None)
+    sql, params = stale_connection.spy_cursor.calls[0]
+    assert "UTC_TIMESTAMP()" not in sql
+    assert params == ("信義區",)
+    assert rows == [{"lot_id": "TPE0001"}]
+
+
 def test_fetch_history_uses_lot_and_time_parameters():
     """歷史查詢不得把 URL 中的 lot_id 拼接進 SQL。"""
     connection = SpyConnection([{"lot_id": "TPE0001"}])

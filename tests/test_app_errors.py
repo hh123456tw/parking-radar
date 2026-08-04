@@ -1,5 +1,7 @@
 """Flask 邊界錯誤測試：確認不合法輸入與資料庫故障仍回傳 JSON。"""
 
+from datetime import datetime, timedelta, timezone
+
 import app as app_module
 import pytest
 
@@ -10,6 +12,7 @@ def make_client():
         "TESTING": False,
         "PROPAGATE_EXCEPTIONS": False,
         "SECRET_KEY": "test",
+        "AUTO_REFRESH_ENABLED": False,
     })
     return flask_app.test_client()
 
@@ -176,3 +179,62 @@ def test_chat_combines_landmark_with_its_district_for_geocoding():
     result = app_module.validate_parsed_query(parsed)
 
     assert result["address"] == "臺北市政府, 信義區, 臺北市"
+
+
+def test_fresh_snapshot_skips_on_demand_collector(monkeypatch):
+    """45 分鐘內的快照直接使用，不得浪費官方 API 請求。"""
+    now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=10))
+    monkeypatch.setattr(
+        app_module, "collect_once",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("不應更新")),
+    )
+
+    assert app_module.ensure_fresh_parking_data(now) == ("fresh", None)
+
+
+def test_stale_snapshot_refreshes_once_with_short_timeout(monkeypatch):
+    """過期快照取得鎖後再檢查，並用查詢專用短逾時補抓一次。"""
+    now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
+    times = iter([
+        now - timedelta(minutes=60),
+        now - timedelta(minutes=60),
+        now,
+    ])
+    calls = []
+    monkeypatch.setattr(app_module, "_latest_snapshot_time", lambda: next(times))
+    monkeypatch.setattr(
+        app_module, "collect_once", lambda **kwargs: calls.append(kwargs))
+
+    assert app_module.ensure_fresh_parking_data(now) == ("fresh", None)
+    assert calls == [{"timeout": 5}]
+
+
+def test_failed_refresh_uses_stale_snapshot_with_warning(monkeypatch):
+    """官方失敗但仍有舊資料時，必須誠實降級而非回傳 0 座。"""
+    now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=67))
+    monkeypatch.setattr(
+        app_module, "collect_once",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("official down")),
+    )
+
+    status, notice = app_module.ensure_fresh_parking_data(now)
+
+    assert status == "stale"
+    assert notice == "官方更新失敗，目前顯示 67 分鐘前資料"
+
+
+def test_failed_refresh_without_any_snapshot_is_unavailable(monkeypatch):
+    """完全沒有可降級資料時，回傳明確錯誤而不是空白成功結果。"""
+    monkeypatch.setattr(app_module, "_latest_snapshot_time", lambda: None)
+    monkeypatch.setattr(
+        app_module, "collect_once",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("official down")),
+    )
+
+    with pytest.raises(app_module.ParkingDataUnavailable,
+                       match="暫時無法取得官方停車資料"):
+        app_module.ensure_fresh_parking_data()
