@@ -85,6 +85,27 @@ def test_history_query_failure_returns_json_and_closes_connection(monkeypatch):
     assert connection.closed is True
 
 
+def test_public_candidate_keeps_decision_card_fields():
+    row = lot_row()
+    row.update({
+        "decision_status": "recommended",
+        "decision_label": "建議前往",
+        "pressure_label": "低",
+        "recommendation_label": "高",
+        "reasons": ["目前 20 / 100 格可停", "距目的地近，約 300 公尺"],
+    })
+
+    result = app_module.public_candidate(row)
+
+    assert result["address"] == row["address"]
+    assert result["total_spaces"] == row["total_spaces"]
+    assert result["decision_status"] == "recommended"
+    assert result["decision_label"] == "建議前往"
+    assert result["pressure_label"] == "低"
+    assert result["recommendation_label"] == "高"
+    assert result["reasons"] == row["reasons"]
+
+
 def test_district_only_query_uses_real_history_and_district_ranking(monkeypatch):
     """沒有地址時不得偽造距離，仍應完成行政區推薦。"""
     connection = CloseTrackingConnection()
@@ -103,6 +124,27 @@ def test_district_only_query_uses_real_history_and_district_ranking(monkeypatch)
     assert body["recommendations"][0]["distance_m"] is None
     assert body["recommendations"][0]["lot_id"] == "TPE1"
     assert connection.closed is True
+
+
+def test_query_returns_official_and_collection_times_in_taipei(monkeypatch):
+    """官方時間與抓取時間都要從 MySQL UTC 正確轉成台北時間。"""
+    connection = CloseTrackingConnection()
+    row = lot_row(datetime(2026, 8, 3, 10))
+    row["snapshot_updated_at"] = datetime(2026, 8, 3, 9, 55)
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [row])
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "district": "信義區",
+        "arrival_time": "2026-08-03T18:00:00+08:00",
+    })
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["official_updated_at"] == "2026-08-03T17:55:00+08:00"
+    assert body["collected_at"] == "2026-08-03T18:00:00+08:00"
+    assert body["updated_at"] == body["collected_at"]
 
 
 def test_query_updated_at_treats_naive_database_time_as_utc(monkeypatch):

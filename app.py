@@ -77,11 +77,23 @@ def attach_history(connection, rows, arrival_time):
     return rows
 
 
+def taipei_iso(value):
+    """把 MySQL 的 naive UTC datetime 轉成台北 ISO 字串。"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(ZoneInfo("Asia/Taipei")).isoformat()
+
+
 def public_candidate(row):
     """只輸出頁面需要的安全欄位，並把 Decimal 與 datetime 轉成 JSON 型別。"""
-    keys = ("lot_id", "lot_name", "district", "address", "operator_type",
-            "total_spaces", "available_spaces", "fee_info", "service_time",
-            "hell_label", "history_sample_count")
+    keys = (
+        "lot_id", "lot_name", "district", "address", "operator_type",
+        "total_spaces", "available_spaces", "fee_info", "service_time",
+        "hell_label", "history_sample_count", "decision_status",
+        "decision_label", "pressure_label", "recommendation_label", "reasons",
+    )
     result = {key: row.get(key) for key in keys}
     for key in ("latitude", "longitude", "distance_m", "hell_score",
                 "historical_hell_score", "recommendation_score"):
@@ -152,10 +164,13 @@ def create_app(test_config=None):
             session.update(destination=parsed.get("address"), district=parsed.get("district"),
                            arrival_time=parsed["arrival_time"].isoformat(),
                            lot_id=ranked[0]["lot_id"] if ranked else None)
-            updated_at = max((row["captured_at"] for row in rows), default=None)
-            if updated_at is not None and updated_at.tzinfo is None:
-                updated_at = updated_at.replace(tzinfo=timezone.utc)
-            updated_at = updated_at.astimezone(ZoneInfo("Asia/Taipei")).isoformat() if updated_at else None
+            collected_at = taipei_iso(max(
+                (row["captured_at"] for row in rows), default=None))
+            official_updated_at = taipei_iso(max(
+                (row.get("snapshot_updated_at") for row in rows
+                 if row.get("snapshot_updated_at") is not None),
+                default=None,
+            ))
             return jsonify(destination=destination_json, current={
                 "district_score": district_hell_score(score_rows),
                 "valid_lot_count": len(score_rows)},
@@ -163,7 +178,10 @@ def create_app(test_config=None):
                          "sample_count": first.get("history_sample_count", 0) if first else 0,
                          "comparison": first.get("history_comparison") if first else None},
                 intent=parsed["intent"],
-                updated_at=updated_at, **groups)
+                official_updated_at=official_updated_at,
+                collected_at=collected_at,
+                updated_at=collected_at,
+                **groups)
         except Exception:
             app.logger.exception("停車查詢失敗")
             return jsonify(error="服務暫時無法使用，請稍後再試"), 503
