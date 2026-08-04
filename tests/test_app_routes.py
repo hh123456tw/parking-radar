@@ -228,6 +228,34 @@ def test_chat_naive_arrival_time_is_rejected():
         })
 
 
+def test_chat_landmark_alias_replaces_gemini_district_guess():
+    """台北車站使用固定門牌，不沿用 Gemini 可能造成誤判的地標字串。"""
+    parsed = app_module.validate_parsed_query({
+        "intent": "recommend", "original_destination": "台北車站",
+        "address": "台北車站", "district": "中正區",
+        "arrival_time": "2026-08-04T18:00:00+08:00", "missing_fields": [],
+    })
+
+    assert parsed["address"] == "臺北市中正區北平西路3號"
+    assert parsed["destination_label"] == \
+        "台北車站（臺北市中正區北平西路3號）"
+
+
+def test_chat_ambiguous_landmark_returns_actionable_error(monkeypatch):
+    """資策會有多個據點時，API 應要求完整地址而不是回報查無地址。"""
+    monkeypatch.setattr(app_module, "parse_parking_query", lambda *_args: ParkingIntent(
+        intent="recommend", original_destination="資策會", address="資策會",
+        district="松山區", arrival_time=None, missing_fields=[],
+    ))
+
+    response = make_client().post(
+        "/api/query", json={"mode": "chat", "message": "我要去資策會"})
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == \
+        "資策會有多個臺北據點，請輸入完整地址或單位名稱"
+
+
 def test_chat_service_failure_returns_manual_fallback(monkeypatch):
     """Gemini 無法使用時，查詢 API 應明確要求改用手動表單。"""
     monkeypatch.setattr(

@@ -179,6 +179,22 @@ def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):
     assert result == cached
 
 
+def test_known_landmarks_use_fixed_addresses_and_ambiguous_one_asks_user():
+    """單一地標使用固定門牌，多據點的資策會不得猜測行政區。"""
+    assert geocoder.resolve_known_landmark("台北車站") == \
+        "臺北市中正區北平西路3號"
+    assert geocoder.resolve_known_landmark("臺北市政府") == \
+        "臺北市信義區市府路1號"
+    with pytest.raises(ValueError, match="資策會有多個臺北據點"):
+        geocoder.resolve_known_landmark("資策會")
+
+
+def test_landmark_query_with_city_suffix_does_not_duplicate_taipei():
+    """地標與行政區組合後已有臺北市，不得再在開頭重複補城市。"""
+    assert geocoder.normalize_address("台北車站, 中正區, 臺北市") == \
+        "台北車站,中正區,臺北市"
+
+
 def test_nominatim_queries_reorder_taipei_house_address():
     """完整臺北門牌應優先改成 Nominatim 較容易辨識的地址順序。"""
     assert geocoder.nominatim_queries("臺北市信義區西村里市府路1號") == [

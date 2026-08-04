@@ -136,11 +136,11 @@ def test_original_destination_is_optional_when_district_exists():
     assert result["missing_fields"] == []
 
 
-def test_landmark_original_destination_becomes_geocoding_query():
-    """只有地標名稱時，應交給地址搜尋，不要求使用者先查完整地址。"""
+def test_unlisted_landmark_original_destination_becomes_geocoding_query():
+    """不在固定別名表的單一地標，仍可交給地址服務搜尋。"""
     parsed = {
         "missing_fields": [],
-        "original_destination": "資策會",
+        "original_destination": "華山文創園區",
         "address": None,
         "district": None,
         "arrival_time": None,
@@ -148,7 +148,7 @@ def test_landmark_original_destination_becomes_geocoding_query():
 
     result = app_module.validate_parsed_query(parsed)
 
-    assert result["address"] == "資策會"
+    assert result["address"] == "華山文創園區"
 
 
 def test_chat_combines_district_with_partial_street_address():
@@ -166,8 +166,8 @@ def test_chat_combines_district_with_partial_street_address():
     assert result["address"] == "臺北市信義區市府路1號"
 
 
-def test_chat_combines_landmark_with_its_district_for_geocoding():
-    """已知行政區的地標要用逗號分隔，避免 Nominatim 配到同名地點。"""
+def test_chat_known_landmark_uses_fixed_house_address():
+    """固定別名比 Gemini 猜測的行政區可靠，應直接轉成已知門牌。"""
     parsed = {
         "missing_fields": [],
         "original_destination": "臺北市政府",
@@ -178,7 +178,7 @@ def test_chat_combines_landmark_with_its_district_for_geocoding():
 
     result = app_module.validate_parsed_query(parsed)
 
-    assert result["address"] == "臺北市政府, 信義區, 臺北市"
+    assert result["address"] == "臺北市信義區市府路1號"
 
 
 def test_fresh_snapshot_skips_on_demand_collector(monkeypatch):

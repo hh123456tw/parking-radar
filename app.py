@@ -16,7 +16,7 @@ from collector import collect_once
 from database import (fetch_current_lots, fetch_history,
                       fetch_latest_snapshot_time, fetch_matching_history,
                       get_connection)
-from geocoder import geocode_address
+from geocoder import geocode_address, resolve_known_landmark
 
 _refresh_lock = Lock()
 
@@ -94,6 +94,15 @@ def validate_parsed_query(parsed, now=None):
     landmark = (parsed.get("original_destination") or "").strip()
     if not parsed.get("address") and not parsed.get("district") and landmark:
         parsed["address"] = landmark
+
+    # Gemini 只負責抽取文字；已知地標由固定規則處理，不能讓模型猜座標。
+    address_before_alias = (parsed.get("address") or "").strip()
+    if landmark and address_before_alias == landmark:
+        resolved_address = resolve_known_landmark(landmark)
+        parsed["address"] = resolved_address
+        if resolved_address != landmark:
+            # 地圖服務可能把同一門牌顯示成建築名稱，畫面仍保留使用者熟悉的地標。
+            parsed["destination_label"] = f"{landmark}（{resolved_address}）"
 
     # Gemini 可能把「信義區市府路1號」拆成兩欄，地址服務需要重新組合。
     address = (parsed.get("address") or "").strip()
@@ -230,7 +239,8 @@ def create_app(test_config=None):
             groups = {name: [public_candidate(row) for row in group]
                       for name, group in raw_groups.items()}
             destination_json = None if destination is None else {
-                "display_address": destination["display_address"],
+                "display_address": parsed.get("destination_label")
+                or destination["display_address"],
                 "latitude": float(destination["latitude"]),
                 "longitude": float(destination["longitude"]),
             }

@@ -10,11 +10,33 @@ from database import get_cached_geocode, save_cached_geocode
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 _last_request_at = 0.0
 
+# 期中專題只維護少量常見地標，避免發展成龐大的地標資料庫。
+LANDMARK_ALIASES = {
+    "台北車站": "臺北市中正區北平西路3號",
+    "臺北車站": "臺北市中正區北平西路3號",
+    "台北市政府": "臺北市信義區市府路1號",
+    "臺北市政府": "臺北市信義區市府路1號",
+}
+
+# 多據點機構不能由系統猜測，以免把使用者帶到錯誤行政區。
+AMBIGUOUS_LANDMARKS = {
+    "資策會": "資策會有多個臺北據點，請輸入完整地址或單位名稱",
+}
+
+
+def resolve_known_landmark(name):
+    """把少量單一地標換成門牌；多據點地標要求使用者補充。"""
+    key = re.sub(r"\s+", "", name.strip()).replace("台北市", "臺北市")
+    if key in AMBIGUOUS_LANDMARKS:
+        raise ValueError(AMBIGUOUS_LANDMARKS[key])
+    return LANDMARK_ALIASES.get(key, name.strip())
+
 
 def normalize_address(address):
     """統一台／臺、移除空白，並在缺少城市時補上臺北市。"""
     normalized = re.sub(r"\s+", "", address.strip()).replace("台北市", "臺北市")
-    if not normalized.startswith("臺北市"):
+    # 地標查詢可能是「台北車站,中正區,臺北市」；已有城市就不能再加一次。
+    if "臺北市" not in normalized:
         normalized = "臺北市" + normalized
     return normalized
 
