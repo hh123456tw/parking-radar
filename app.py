@@ -12,11 +12,13 @@ from analysis import (build_history_series, district_hell_score,
                       rank_candidates, rank_district_candidates,
                       split_recommendation_groups, summarize_hour_comparison,
                       summarize_matching_history)
+from calendar_service import classify_arrival_day
 from config import Config
 from collector import collect_once
 from database import (fetch_current_lots, fetch_history,
                       fetch_latest_snapshot_time, fetch_matching_history,
                       get_connection)
+from fee_service import build_fee_summary
 from geocoder import geocode_address, geocode_candidates, resolve_known_landmark
 
 _refresh_lock = Lock()
@@ -176,6 +178,29 @@ def taipei_iso(value):
     return value.astimezone(ZoneInfo("Asia/Taipei")).isoformat()
 
 
+FACILITY_LABELS = {
+    "mechanical": "機械式", "surface": "平面式",
+    "underground": "地下停車場", "multi_storey": "立體停車場",
+    "mixed": "混合型", "unknown": "型態待確認",
+}
+
+
+def enrich_candidate_metadata(row, arrival_time, day_info):
+    """以本機資料補上費率、抵達日與場站型態，不修改推薦分數。"""
+    row.update(build_fee_summary(
+        row.get("fare_rules_json"), row.get("fee_info"),
+        arrival_time, day_info["kind"]))
+    facility_type = row.get("facility_type") or "unknown"
+    row.update(
+        arrival_day_label=day_info["label"],
+        calendar_source=day_info["source"],
+        facility_type=facility_type,
+        facility_type_label=FACILITY_LABELS.get(facility_type, "型態待確認"),
+        facility_source=row.get("facility_source") or "unknown",
+    )
+    return row
+
+
 def public_candidate(row):
     """只輸出頁面需要的安全欄位，並把 Decimal 與 datetime 轉成 JSON 型別。"""
     keys = (
@@ -183,6 +208,9 @@ def public_candidate(row):
         "total_spaces", "available_spaces", "fee_info", "service_time",
         "hell_label", "history_sample_count", "decision_status",
         "decision_label", "pressure_label", "recommendation_label", "reasons",
+        "arrival_day_label", "calendar_source",
+        "hourly_fee_label", "daily_cap_label", "fee_note", "fee_confidence",
+        "facility_type", "facility_type_label", "facility_source",
     )
     result = {key: row.get(key) for key in keys}
     for key in ("latitude", "longitude", "distance_m", "hell_score",
@@ -227,6 +255,8 @@ def create_app(test_config=None):
 
         connection = None
         try:
+            # 抵達日分類只讀本機行事曆，任何異常都與資料查詢相同以 JSON 回傳。
+            day_info = classify_arrival_day(parsed["arrival_time"])
             connection = get_connection()
             verified_choices = geocode_candidates(
                 parsed.get("location_candidates", []), connection)
@@ -281,6 +311,9 @@ def create_app(test_config=None):
                 # 行政區可能包含大量場站，避免每次查詢都讀取歷史快照。
                 ranked = rank_district_candidates(rows)
                 score_rows = rows
+            # 每個候選都補上本機的抵達日、費率與型態，不影響排序分數。
+            for row in ranked:
+                enrich_candidate_metadata(row, parsed["arrival_time"], day_info)
             if parsed["intent"] in {"history", "compare"}:
                 # 只有明確詢問歷史時才載入前三座的最近 7 天資料。
                 attach_history(connection, ranked[:3], parsed["arrival_time"])

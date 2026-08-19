@@ -3,9 +3,11 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import requests
 
 import app as app_module
 from ai_service import IntentServiceError, ParkingIntent
+from calendar_service import classify_arrival_day
 
 
 class CloseTrackingConnection:
@@ -32,6 +34,10 @@ def lot_row(captured_at=None):
         "address": "市府路", "operator_type": "民營停車場",
         "total_spaces": 100, "available_spaces": 20,
         "fee_info": "每小時30元", "service_time": "24小時",
+        "fare_rules_json": '{"FareRule":[{"ParkingType":"C","RateType":"1",'
+                           '"ChargeableSTime":"0800","ChargeableETime":"2200",'
+                           '"ParkingRates":"60"}]}',
+        "facility_type": "underground", "facility_source": "official",
         "latitude": 25.0376, "longitude": 121.5638,
         "captured_at": captured_at or datetime(2026, 8, 4, 10, tzinfo=timezone.utc),
     }
@@ -106,6 +112,116 @@ def test_public_candidate_keeps_decision_card_fields():
     assert result["pressure_label"] == "低"
     assert result["recommendation_label"] == "高"
     assert result["reasons"] == row["reasons"]
+
+
+def test_query_enriches_every_result_with_local_decision_metadata(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(app_module, "classify_arrival_day", lambda _arrival: {
+        "kind": "holiday", "label": "國定假日｜國慶日",
+        "is_holiday": True, "source": "taiwan_calendar",
+    })
+    monkeypatch.setattr(app_module, "build_fee_summary", lambda *_args: {
+        "hourly_fee_label": "60 元／時", "daily_cap_label": "230 元",
+        "fee_note": None, "fee_confidence": "exact",
+    })
+    # Reuse the route's existing database, geocoder, and ranking fakes.
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+    response = client.post("/api/query", json={
+        "mode": "manual", "district": "中正區",
+        "arrival_time": "2026-10-10T18:00:00+08:00",
+    })
+    lot = response.get_json()["recommendations"][0]
+    assert lot["arrival_day_label"] == "國定假日｜國慶日"
+    assert lot["hourly_fee_label"] == "60 元／時"
+    assert lot["daily_cap_label"] == "230 元"
+    assert lot["facility_type_label"] == "地下停車場"
+
+
+def test_query_missing_calendar_file_uses_weekday_fallback(monkeypatch, tmp_path):
+    """行事曆檔案缺失時仍以本機規則分類抵達日，並標記 fallback 來源。"""
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+    monkeypatch.setattr(
+        app_module, "classify_arrival_day",
+        lambda arrival: classify_arrival_day(arrival, calendar_dir=tmp_path),
+    )
+
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "district": "信義區",
+        "arrival_time": "2026-08-04T18:00:00+08:00",
+    })
+    lot = response.get_json()["recommendations"][0]
+
+    assert lot["arrival_day_label"] == "平日"
+    assert lot["calendar_source"] == "weekday_fallback"
+
+
+def test_query_malformed_fare_rules_shows_official_unknown(monkeypatch):
+    """費率規則格式異常時不得臆測金額，時費與上限都顯示官方未標示。"""
+    row = lot_row()
+    row["fare_rules_json"] = "{broken-json"
+    row["fee_info"] = None
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [row])
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+    monkeypatch.setattr(app_module, "classify_arrival_day", lambda _arrival: {
+        "kind": "weekday", "label": "平日", "is_holiday": False,
+        "source": "weekday_fallback"})
+
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "district": "信義區",
+        "arrival_time": "2026-08-04T18:00:00+08:00",
+    })
+    lot = response.get_json()["recommendations"][0]
+
+    assert lot["hourly_fee_label"] == "官方未標示"
+    assert lot["daily_cap_label"] == "官方未標示"
+    assert lot["fee_confidence"] == "unknown"
+
+
+def test_query_null_facility_metadata_degrades_to_unknown_type(monkeypatch):
+    """沒有型態資料時顯示型態待確認，而不是略過欄位。"""
+    row = lot_row()
+    row["facility_type"] = None
+    row["facility_source"] = None
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [row])
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+    monkeypatch.setattr(app_module, "classify_arrival_day", lambda _arrival: {
+        "kind": "weekday", "label": "平日", "is_holiday": False,
+        "source": "weekday_fallback"})
+
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "district": "信義區",
+        "arrival_time": "2026-08-04T18:00:00+08:00",
+    })
+    lot = response.get_json()["recommendations"][0]
+
+    assert lot["facility_type"] == "unknown"
+    assert lot["facility_type_label"] == "型態待確認"
+    assert lot["facility_source"] == "unknown"
+
+
+def test_query_path_makes_no_calendar_or_osm_network_calls(monkeypatch):
+    """查詢流程只讀本機行事曆與費率，任何 requests.get 都應失敗。"""
+    def raise_get(*_args, **_kwargs):
+        raise AssertionError("查詢路徑不得呼叫 calendar 或 OSM 網路")
+
+    monkeypatch.setattr(requests, "get", raise_get)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "district": "信義區",
+        "arrival_time": "2026-08-04T18:00:00+08:00",
+    })
+
+    assert response.status_code == 200
+    assert response.get_json()["recommendations"][0]["lot_id"] == "TPE1"
 
 
 def test_district_only_query_uses_real_history_and_district_ranking(monkeypatch):
