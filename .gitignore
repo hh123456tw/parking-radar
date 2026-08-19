@@ -12,3 +12,5 @@ htmlcov/
 .qa-browser/
 browser-review-state/
 .worktrees/
+data/calendar/*.json
+data/calendar/*.tmp
