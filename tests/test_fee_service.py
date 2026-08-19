@@ -186,6 +186,24 @@ def test_surcharge_after_cap_word_is_not_a_daily_cap():
     assert result["daily_cap_label"] == "官方未標示"
 
 
+def test_monthly_cap_word_before_phrase_is_not_a_daily_cap():
+    """「月租上限 3000」中上限詞前的月租字樣代表月費，不得當每日上限。"""
+    result = build_fee_summary(
+        None, "小型車每小時 30 元，月租上限 3000 元",
+        datetime.fromisoformat("2026-08-19T18:00:00+08:00"), "weekday")
+
+    assert result["daily_cap_label"] == "官方未標示"
+
+
+def test_per_entry_cap_word_before_phrase_is_not_a_daily_cap():
+    """「每次停車上限 100」中的金額是計次費用，不得當每日上限。"""
+    result = build_fee_summary(
+        None, "小型車每小時 30 元，每次停車上限 100 元",
+        datetime.fromisoformat("2026-08-19T18:00:00+08:00"), "weekday")
+
+    assert result["daily_cap_label"] == "官方未標示"
+
+
 def test_structured_exact_fee_wins_with_ambiguity_note():
     """結構化規則有效時時費以規則為準，文字歧異僅進入備註。"""
     result = build_fee_summary(

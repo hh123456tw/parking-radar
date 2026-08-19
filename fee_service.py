@@ -113,15 +113,6 @@ def _small_car_segment(fee_info):
     return text
 
 
-def _dollar(value):
-    """把文字金額轉成整數；無法解析時回傳 None。"""
-    match = NUMBER_RE.search(str(value or ""))
-    if not match:
-        return None
-    price = round(float(match.group(0)))
-    return price if price > 0 else None
-
-
 def _hourly_prices_from_text(fee_info):
     """從小型車文字段解析每小時金額（每半小時價乘以二後去重複）。"""
     segment = _small_car_segment(fee_info)
@@ -129,31 +120,38 @@ def _hourly_prices_from_text(fee_info):
         return []
     prices = []
     for match in HOUR_RE.finditer(segment):
-        price = _dollar(match.group(1))
+        price = _price_from_rate(match.group(1))
         if price is not None:
             prices.append(price)
     for match in PER_HOUR_RE.finditer(segment):
-        price = _dollar(match.group(1))
+        price = _price_from_rate(match.group(1))
         if price is not None:
             prices.append(price)
     for match in HALF_HOUR_RE.finditer(segment):
-        price = _dollar(match.group(1))
+        price = _price_from_rate(match.group(1))
         if price is not None:
             prices.append(price * 2)
     return list(dict.fromkeys(prices))
 
 
 def _daily_cap_from_text(fee_info):
-    """只在小型車段且含認可上限詞時取上限金額；月租、計次、溢時等不得使用。"""
+    """只在小型車段且含認可上限詞時取上限金額；月租、計次、溢時等不得使用。
+
+    上限詞前後各掃一小段檢查跳過字眼：若「月租上限 3000」「每次停車上限 100」
+    等月租／計次詞語出現在上限詞之前，該數字屬月租或計次費用而非每日上限。
+    """
     segment = _small_car_segment(fee_info)
     if not segment:
         return None
+    before_window = 6
+    after_window = 12
     for phrase in CAP_PHRASES:
         pos = segment.find(phrase)
         while pos != -1:
-            window = segment[pos + len(phrase): pos + len(phrase) + 12]
-            if not any(token in window for token in SKIP_CAP_TOKENS):
-                cap = _dollar(window)
+            before = segment[max(0, pos - before_window): pos]
+            after = segment[pos + len(phrase): pos + len(phrase) + after_window]
+            if not any(token in before or token in after for token in SKIP_CAP_TOKENS):
+                cap = _price_from_rate(after)
                 if cap is not None:
                     return cap
             pos = segment.find(phrase, pos + 1)
@@ -168,7 +166,8 @@ def _describe_hourly(prices):
     return f"{unique[0]}～{unique[-1]} 元／時", "range"
 
 
-def build_fee_summary(fare_rules_json, fee_info, arrival_time, day_kind):
+def build_fee_summary(fare_rules_json: str | None, fee_info: str | None,
+                      arrival_time: datetime, day_kind: str) -> dict:
     """組合小型車時費與每日上限的顯示字串；資料不足時絕不臆測金額。
 
     結構化 FareInfo 規則有效時以規則為準，官方文字僅用於每日上限與歧異備註；
