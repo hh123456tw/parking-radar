@@ -73,13 +73,56 @@ Register-ScheduledTask `
 2. 安裝 Python、MySQL、Nginx，建立 `parking` 系統使用者，專案放在 `/opt/parking-hell` 並由該使用者擁有。
 3. 在 MySQL 設定加入：`bind-address=127.0.0.1`、`innodb_buffer_pool_size=128M`、`max_connections=30`、`performance_schema=OFF`，重新啟動後確認 3306 未對外開放。
 4. 建立 `.venv` 與不進 Git 的 `.env`，執行 schema 與第一次 collector。
-5. 安裝 `deploy/parking-radar.service` 與 `deploy/nginx-parking-radar.conf`。
+5. 安裝 `deploy/parking-radar.service` 與 `deploy/nginx-parking-radar.conf`；其中 nginx 必須為 `location /static/` 加上 `Service-Worker-Allowed: /` 回應標頭，否則 PWA 服務工人無法以 `/` 範圍註冊（見下方「部署補充」）。
 6. 以 `systemctl enable --now parking-radar nginx` 啟動。
 7. 以 `parking` 使用者執行 `crontab -e` 加入：
 
 ```cron
 */15 * * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python collector.py --once >> /opt/parking-hell/collector.log 2>&1
 ```
+
+### 部署補充：行事曆、費率與設施中繼資料
+
+首次部署或升級既有部署時，依序完成以下步驟：
+
+1. 備份 `parking_lots`：
+   `mysqldump -u parking -p parking_hell parking_lots > parking_lots.backup.sql`
+2. 套用中繼資料遷移（重複執行安全）：
+   `mysql -u parking -p parking_hell < migrations/20260819_add_parking_metadata.sql`
+3. 收集一次資料：
+   `/opt/parking-hell/.venv/bin/python collector.py --once`
+4. 下載行事曆：
+   `/opt/parking-hell/.venv/bin/python calendar_service.py --sync`
+5. 同步費用與設施型態：
+   `/opt/parking-hell/.venv/bin/python parking_metadata.py --sync`
+6. 安裝並啟用每月維護計時器：
+   `sudo install -m 644 deploy/parking-metadata-refresh.service deploy/parking-metadata-refresh.timer /etc/systemd/system/`
+   `sudo systemctl daemon-reload && sudo systemctl enable --now parking-metadata-refresh.timer`
+7. 重啟 Gunicorn 並確認健康檢查：
+   `sudo systemctl restart parking-radar && curl -fsS http://127.0.0.1:8000/health`
+8. 查詢「台北車站」，確認主要與精簡卡片、地圖與七天歷史行為皆正常。
+9. 安裝 PWA：Android Chrome 使用「安裝應用程式」；iOS Safari 使用「加入主畫面」。
+
+計時器於每月執行一次（`OnCalendar=monthly`），補行錯過批次（`Persistent=true`），並附加一小時隨機延遲
+（`RandomizedDelaySec=1h`），避免與資料來源尖峰重疊。維護任務是獨立的 `Type=oneshot` 單位，其成敗不會重啟或停止 `parking-radar.service`。
+
+PWA 離線外殼需要 nginx 對 `sw.js` 回應 `Service-Worker-Allowed: /`。前端以 `scope: "/"` 註冊（見 `static/app.js`），若 nginx 未在 `location /static/` 傳回該標頭，瀏覽器會拒絕超出
+`/static/` 的範圍，服務工人便無法控制並離線快取整站。`deploy/nginx-parking-radar.conf` 對應區塊需為：
+
+```nginx
+location /static/ {
+    alias /opt/parking-hell/static/;
+    expires 1h;
+    add_header Service-Worker-Allowed /;
+}
+```
+
+### 資料來源與授權
+
+- 官方停車資料依臺北市開放資料授權，可商業再利用，但須標示資料來源為臺北市政府。
+- 地圖與地標資料使用 OpenStreetMap；OSM 標示在頁面保持可見。
+- 系統無法判斷時以明確「未知」標籤呈現，不代表實際收費或設施型態的保證。
+- 本系統不含會員帳號，也不儲存個人目的地歷史；所有查詢一律匿名。
 
 ## 展示檢查
 
