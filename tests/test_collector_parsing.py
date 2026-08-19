@@ -72,6 +72,25 @@ def test_static_parser_rejects_malformed_and_out_of_taipei_coordinates():
         (None, None), (None, None)]
 
 
+def test_static_parser_derives_facility_type_from_name_and_summary():
+    """官方名稱與說明中的明確關鍵字必須寫入 facility_type 與 facility_source。"""
+    payload = load_fixture("taipei_static.json")
+    payload["data"]["park"][0]["name"] = "市民大道地下停車場"
+    payload["data"]["park"][0]["summary"] = "地下四層結構"
+    lots = collector.parse_static(payload, {"TPE0001"})
+
+    assert lots[0]["facility_type"] == "underground"
+    assert lots[0]["facility_source"] == "official"
+
+
+def test_static_parser_defaults_facility_to_unknown_without_keywords():
+    """名稱與說明皆無關鍵字時，型態維持 unknown，方便後續 OSM 補足。"""
+    lots = collector.parse_static(load_fixture("taipei_static.json"), set())
+
+    assert all(lot["facility_type"] == "unknown" for lot in lots)
+    assert all(lot["facility_source"] == "unknown" for lot in lots)
+
+
 def test_dynamic_parser_keeps_nonnegative_values_for_join_validation():
     """動態 parser 先排除負數，超額值留給合併總格數後判斷。"""
     captured = datetime(2026, 8, 3, 10, 1, tzinfo=timezone.utc)

@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import requests
 from analysis import clean_available
 from database import get_connection, insert_snapshots, upsert_parking_lots
+from parking_metadata import infer_official_facility_type
 
 STATIC_URL = "https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_alldesc.json"
 DYNAMIC_URL = "https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_allavailable.json"
@@ -46,6 +47,8 @@ def parse_static(payload, realtime_ids):
     lots = []
     for raw in payload["data"]["park"]:
         latitude, longitude = _entrance_coordinates(raw)
+        facility_type, facility_source = infer_official_facility_type(
+            raw.get("name", ""), raw.get("summary", ""))
         lots.append({
             "lot_id": str(raw["id"]), "lot_name": raw.get("name", "未命名停車場"),
             "district": raw.get("area", "未知"), "address": raw.get("address", ""),
@@ -60,6 +63,9 @@ def parse_static(payload, realtime_ids):
                 json.dumps(raw["FareInfo"], ensure_ascii=False, separators=(",", ":"))
                 if raw.get("FareInfo") else None
             ),
+            # 官方名稱與說明的明確關鍵字先寫入，之後由每月同步任務依優先序整理。
+            "facility_type": facility_type,
+            "facility_source": facility_source,
         })
     return lots
 
