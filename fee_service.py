@@ -13,7 +13,7 @@ TAIPEI = ZoneInfo("Asia/Taipei")
 SMALL_CAR_TYPES = {"C", "CM"}
 CAP_PHRASES = ("當日最高", "每日最高", "24 小時最高", "24小時最高", "上限")
 # 費用數字若與這些字眼同一段，通常是月租／計次／溢時費率，不得視為每日上限。
-SKIP_CAP_TOKENS = ("月租", "月票", "每月", "每次", "計次", "每小時", "半小時", "加收", "逾時")
+SKIP_CAP_TOKENS = ("月租", "月票", "每月", "月繳", "月費", "雙月", "每次", "計次", "每小時", "半小時", "加收", "逾時")
 
 HALF_HOUR_RE = re.compile(r"每半小時\s*(\d+(?:\.\d+)?)\s*元?")
 HOUR_RE = re.compile(r"每小時\s*(\d+(?:\.\d+)?)\s*元?")
@@ -73,6 +73,14 @@ def _price_from_rate(value):
     return price if price > 0 else None
 
 
+def _is_hourly_rate_type(rate_type):
+    """只有 RateType 1（計時）可作為每小時費率；相容 1.0／01 等資料寫法。"""
+    try:
+        return float(str(rate_type or "")) == 1.0
+    except ValueError:
+        return False
+
+
 def _structured_hourly_prices(fare_rules_json, arrival_time):
     """回傳抵達時段內適用的小型車計時費率，去重複後依序排列。"""
     if arrival_time.tzinfo is not None:
@@ -86,7 +94,7 @@ def _structured_hourly_prices(fare_rules_json, arrival_time):
             continue
         if rule.get("ParkingType") not in SMALL_CAR_TYPES:
             continue  # 機車／月租規則一律不列入。
-        if str(rule.get("RateType")) != "1":
+        if not _is_hourly_rate_type(rule.get("RateType")):
             continue  # 只有 RateType 1（計時）可作為每小時費率。
         start = _parse_minutes(rule.get("ChargeableSTime"))
         end = _parse_minutes(rule.get("ChargeableETime"))

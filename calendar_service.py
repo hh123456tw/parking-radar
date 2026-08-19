@@ -24,7 +24,7 @@ def _day(kind, label, is_holiday, source):
 
 
 def _load_rows(calendar_file):
-    """讀取行事曆 JSON；檔案不存在或格式錯誤時回傳 None。"""
+    """讀取行事曆 JSON；檔案不存在或格式錯誤時回傳 None，空陣列原樣回傳。"""
     if not calendar_file.exists():
         return None
     try:
@@ -39,17 +39,23 @@ def classify_arrival_day(arrival_time, calendar_dir=CALENDAR_DIR):
         raise ValueError("抵達時間必須包含時區")
     local = arrival_time.astimezone(TAIPEI)
     rows = _load_rows(Path(calendar_dir) / f"{local.strftime('%Y')}.json")
-    if rows is None:
+    if not rows:
         return _fallback(local)
 
     by_date = {row["date"]: row for row in rows}
     row = by_date.get(local.strftime("%Y%m%d"))
 
-    if row and row["isHoliday"] and row.get("description"):
+    if row is None:
+        # 檔案存在但缺少抵達日資料列：六日比照 fallback 判為週末，平日維持平日。
+        if local.weekday() in (5, 6):
+            return _fallback(local)
+        return _day("weekday", "平日", False, "taiwan_calendar")
+
+    if row["isHoliday"] and row.get("description"):
         return _day("holiday", f"國定假日｜{row['description']}", True, "taiwan_calendar")
-    if row and row["isHoliday"]:
+    if row["isHoliday"]:
         return _day("weekend", "週末", True, "taiwan_calendar")
-    if row and local.weekday() == 5 and not row["isHoliday"]:
+    if local.weekday() == 5:
         return _day("makeup_workday", "補班日", False, "taiwan_calendar")
     return _day("weekday", "平日", False, "taiwan_calendar")
 

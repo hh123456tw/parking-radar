@@ -136,3 +136,33 @@ def test_sync_calendars_defaults_to_current_and_next_taipei_year(tmp_path, monke
     base = "https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data"
     assert requested == [f"{base}/2026.json", f"{base}/2027.json"]
     assert written == [tmp_path / "2026.json", tmp_path / "2027.json"]
+
+
+def test_empty_calendar_file_falls_back(tmp_path):
+    """行事曆檔案存在但內容為空陣列時，視同資料不可用並沿用 fallback。"""
+    (tmp_path / "2026.json").write_text("[]", encoding="utf-8")
+
+    saturday = classify_arrival_day(
+        datetime(2026, 8, 22, 18, 0, tzinfo=TAIPEI), tmp_path)
+    monday = classify_arrival_day(
+        datetime(2026, 8, 24, 18, 0, tzinfo=TAIPEI), tmp_path)
+
+    assert (saturday["kind"], saturday["label"], saturday["source"]) == \
+        ("weekend", "週末", "weekday_fallback")
+    assert (monday["kind"], monday["label"], monday["source"]) == \
+        ("weekday", "平日", "weekday_fallback")
+
+
+def test_missing_saturday_row_is_weekend_not_weekday(tmp_path):
+    """檔案存在但缺少抵達日資料列時，六日比照 fallback 判為週末、週一仍為平日。"""
+    write_calendar(tmp_path)
+
+    saturday = classify_arrival_day(
+        datetime(2026, 8, 22, 18, 0, tzinfo=TAIPEI), tmp_path)
+    monday = classify_arrival_day(
+        datetime(2026, 8, 24, 18, 0, tzinfo=TAIPEI), tmp_path)
+
+    assert (saturday["kind"], saturday["label"], saturday["source"]) == \
+        ("weekend", "週末", "weekday_fallback")
+    assert (monday["kind"], monday["label"], monday["source"]) == \
+        ("weekday", "平日", "taiwan_calendar")

@@ -215,3 +215,25 @@ def test_structured_exact_fee_wins_with_ambiguity_note():
     assert result["hourly_fee_label"] == "60 元／時"
     assert result["fee_confidence"] == "exact"
     assert result["fee_note"] == "依日期、活動或現場公告"
+
+
+def test_monthly_fee_payment_cap_words_are_not_daily_cap():
+    """「月繳／月費／雙月」上限是月租性質金額，不得視為每日上限。"""
+    for text in ("小型車每小時 40 元，月繳上限 3000 元",
+                 "小型車每小時 40 元，月費上限 3000 元",
+                 "小型車每小時 40 元，雙月上限 5000 元",
+                 "小型車每小時 40 元，雙月繳上限 5000 元"):
+        result = build_fee_summary(
+            None, text, datetime.fromisoformat("2026-08-19T18:00:00+08:00"), "weekday")
+        assert result["daily_cap_label"] == "官方未標示"
+
+
+def test_rate_type_1_accepts_float_or_leading_zero_writing():
+    """RateType 1 以 01／1.0 等寫法出現時仍應視為計時費率。"""
+    for rate_type in ("1", "01", "1.0", 1, 1.0):
+        result = build_fee_summary(rules(
+            {"ParkingType": "C", "RateType": rate_type, "ChargeableSTime": "0800",
+             "ChargeableETime": "2200", "ParkingRates": "60"},
+        ), "", day(), "weekday")
+        assert result["hourly_fee_label"] == "60 元／時"
+        assert result["fee_confidence"] == "exact"

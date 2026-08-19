@@ -101,7 +101,7 @@ Register-ScheduledTask `
 7. 重啟 Gunicorn 並確認健康檢查：
    `sudo systemctl restart parking-radar && curl -fsS http://127.0.0.1:8000/health`
 8. 查詢「台北車站」，確認主要與精簡卡片、地圖與七天歷史行為皆正常。
-9. 安裝 PWA：Android Chrome 使用「安裝應用程式」；iOS Safari 使用「加入主畫面」。
+9. 安裝 PWA：Android Chrome 使用「安裝應用程式」；iOS Safari 使用「加入主畫面」（需 HTTPS，見下方「PWA 需 HTTPS」說明）。
 
 計時器於每月執行一次（`OnCalendar=monthly`），補行錯過批次（`Persistent=true`），並附加一小時隨機延遲
 （`RandomizedDelaySec=1h`），避免與資料來源尖峰重疊。維護任務是獨立的 `Type=oneshot` 單位，其成敗不會重啟或停止 `parking-radar.service`。
@@ -116,6 +116,13 @@ location /static/ {
     add_header Service-Worker-Allowed /;
 }
 ```
+
+**PWA 需 HTTPS**：Service Worker 只在「安全來源」（secure context）可用。以純 HTTP 存取部署網址時，
+`navigator.serviceWorker` 不存在，`/static/sw.js` 無法註冊，離線外殼與「加入主畫面」安裝提示都不會出現；
+本範例設定只監聽 `listen 80`。若要讓手機安裝此 PWA，請為網域申請憑證並讓 nginx 以 HTTPS 提供（例如先把
+`server_name` 改為你的網域，再用 `certbot --nginx` 取得並自動套用 Let's Encrypt 憑證，或手動將
+`deploy/nginx-parking-radar.conf` 改為 `listen 443 ssl` 並設定 `ssl_certificate` 與
+`ssl_certificate_key`）。本機自用時，`http://localhost` 本身即為安全來源，可直接啟用安裝功能而不需 HTTPS。
 
 ### 資料來源與授權
 
