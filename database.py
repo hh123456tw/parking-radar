@@ -19,20 +19,26 @@ def upsert_parking_lots(connection, lots):
     sql = """
         INSERT INTO parking_lots
             (lot_id, lot_name, district, address, operator_type,
-             total_spaces, fee_info, service_time, latitude, longitude,
+             total_spaces, fee_info, fare_rules_json,
+             facility_type, facility_source, metadata_checked_at,
+             service_time, latitude, longitude,
              supports_realtime, source_updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             lot_name=VALUES(lot_name), district=VALUES(district),
             address=VALUES(address), operator_type=VALUES(operator_type),
             total_spaces=VALUES(total_spaces), fee_info=VALUES(fee_info),
+            -- 官方費率規則跟隨資料更新；設施欄位由後續任務維護，不得在此覆寫。
+            fare_rules_json=VALUES(fare_rules_json),
             service_time=VALUES(service_time), latitude=VALUES(latitude),
             longitude=VALUES(longitude),
             supports_realtime=VALUES(supports_realtime),
             source_updated_at=VALUES(source_updated_at)
     """
     keys = ("lot_id", "lot_name", "district", "address", "operator_type",
-            "total_spaces", "fee_info", "service_time", "latitude", "longitude",
+            "total_spaces", "fee_info", "fare_rules_json",
+            "facility_type", "facility_source", "metadata_checked_at",
+            "service_time", "latitude", "longitude",
             "supports_realtime", "source_updated_at")
     values = [tuple(row.get(key) for key in keys) for row in lots]
     with connection.cursor() as cursor:

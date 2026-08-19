@@ -79,6 +79,10 @@ def sample_lot():
         "total_spaces": 100, "fee_info": "每小時30元", "service_time": "24小時",
         "latitude": 25.0375, "longitude": 121.5637, "supports_realtime": True,
         "source_updated_at": "2026-08-04 10:00:00",
+        "fare_rules_json": '{"FareRule":[]}',
+        "facility_type": None,
+        "facility_source": None,
+        "metadata_checked_at": None,
     }
 
 
@@ -105,6 +109,10 @@ def test_upsert_parking_lots_binds_complete_row_as_parameters():
     assert "ON DUPLICATE KEY UPDATE" in sql
     assert "測試停車場" not in sql
     assert values[0][0:4] == ("TPE0001", "測試停車場", "信義區", "市府路1號")
+    assert '{"FareRule":[]}' in values[0]
+    for column in ("fare_rules_json", "facility_type", "facility_source",
+                   "metadata_checked_at"):
+        assert column in sql
     assert count == 1
 
 

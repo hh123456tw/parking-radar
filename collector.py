@@ -1,6 +1,7 @@
 """下載臺北市官方停車資料，清洗後以單一交易保存。"""
 
 import argparse
+import json
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import requests
@@ -54,6 +55,11 @@ def parse_static(payload, realtime_ids):
             "latitude": latitude, "longitude": longitude,
             "supports_realtime": str(raw["id"]) in realtime_ids,
             "source_updated_at": updated_at,
+            # 官方費率規則保留原始 JSON，讓後續任務解析費率時不必重新抓取。
+            "fare_rules_json": (
+                json.dumps(raw["FareInfo"], ensure_ascii=False, separators=(",", ":"))
+                if raw.get("FareInfo") else None
+            ),
         })
     return lots
 
