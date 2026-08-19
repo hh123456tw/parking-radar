@@ -5,8 +5,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>停車地獄雷達</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='self-use-v1') }}">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <meta name="theme-color" content="#0b1118">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
 </head>
 
 <body>
@@ -18,6 +21,10 @@
       <span id="official-updated-at">官方資料時間：尚未查詢</span>
       <span id="collected-at">系統最後抓取：尚未查詢</span>
     </p>
+    <div class="install-bar">
+      <button id="install-app" type="button" hidden>安裝到手機</button>
+      <span id="ios-install-hint" hidden>在 Safari 點分享，再選「加入主畫面」</span>
+    </div>
   </header>
   <main>
     <section class="query-panel">

@@ -421,3 +421,39 @@ async function loadHistory(lotId, lotName) {
     note.textContent = error.message;
   }
 }
+
+// PWA 安裝：註冊服務器攔截安裝事件，但只在使用者點擊按鈕後才呼叫 prompt。
+document.addEventListener("DOMContentLoaded", () => {
+  if (!("serviceWorker" in navigator)) return;
+  // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
+  navigator.serviceWorker.register("/static/sw.js", {scope:"/"})
+    .catch(() => navigator.serviceWorker.register("/static/sw.js"));
+
+  let deferredPrompt = null;
+  const installButton = document.querySelector("#install-app");
+  const iosHint = document.querySelector("#ios-install-hint");
+
+  window.addEventListener("beforeinstallprompt", event => {
+    event.preventDefault();
+    deferredPrompt = event;
+    if (installButton) installButton.hidden = false;
+  });
+
+  if (installButton) {
+    installButton.addEventListener("click", async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      installButton.hidden = true;
+    });
+  }
+
+  // iOS Safari 不會觸發 beforeinstallprompt，改用分享功能加入主畫面。
+  const iosSafari = /iphone|ipad|ipod/i.test(navigator.userAgent)
+    && /safari/i.test(navigator.userAgent)
+    && !/crios|fxios|opios|edgios/i.test(navigator.userAgent);
+  if (iosHint && iosSafari && !window.matchMedia("(display-mode: standalone)").matches) {
+    iosHint.hidden = false;
+  }
+});

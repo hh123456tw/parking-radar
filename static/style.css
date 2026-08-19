@@ -16,6 +16,10 @@ body {
 .hero > p:not(.eyebrow,.data-times) { max-width:640px; color:#c4ced8; }
 .eyebrow { margin:0; color:var(--orange); letter-spacing:.14em; font-weight:800; }
 .data-times { display:flex; flex-wrap:wrap; gap:4px 18px; color:var(--muted); font-size:.88rem; }
+/* PWA 安裝提示：小按鈕與 iOS 說明只在需要時顯示，不打擾查詢流程。 */
+.install-bar { display:flex; align-items:center; gap:12px; margin-top:12px; min-height:20px; }
+.install-bar button { min-height:36px; padding:0 14px; color:#bfe9d5; background:#1d3a2b; }
+.install-bar span { color:var(--muted); font-size:.85rem; }
 main { display:grid; gap:20px; padding-bottom:48px; }
 section {
   padding:22px; border:1px solid var(--line); border-radius:18px;
