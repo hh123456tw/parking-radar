@@ -10,11 +10,11 @@ class Config:
     """提供 Flask、MySQL、Gemini、地址搜尋與分析所需設定。"""
 
     SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "dev-only-change-me")
-    MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
+    MYSQL_HOST = os.getenv("MYSQL_HOST")
     MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-    MYSQL_USER = os.getenv("MYSQL_USER", "parking_app")
-    MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
-    MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "parking_hell")
+    MYSQL_USER = os.getenv("MYSQL_USER")
+    MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
+    MYSQL_DATABASE = os.getenv("MYSQL_DATABASE")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     # 主模型高流量時使用同為 Lite 的免費備援，避免整個對話入口失效。
@@ -28,4 +28,4 @@ class Config:
     ON_DEMAND_FETCH_TIMEOUT_SECONDS = 5
     AUTO_REFRESH_ENABLED = True
     MIN_HISTORY_SAMPLES = 3
-    HISTORY_LOOKBACK_DAYS = 30
+    HISTORY_LOOKBACK_DAYS = 7

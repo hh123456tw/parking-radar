@@ -194,6 +194,8 @@ function primaryCard(lot, index) {
   const freePercent = Math.max(0, Math.min(100,
     lot.available_spaces / lot.total_spaces * 100));
   const primaryReason = lot.reasons?.[0] || "依目前空位與距離列入首選";
+  const feeInfo = String(lot.fee_info || "").trim() || "官方未提供";
+  const serviceTime = String(lot.service_time || "").trim() || "官方未提供";
   const mapsLink = mapsUrl
     ? `<a class="primary-action" href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer">開啟 Google 地圖</a>`
     : `<span class="primary-action disabled" aria-disabled="true">無地圖資料</span>`;
@@ -210,6 +212,19 @@ function primaryCard(lot, index) {
     <div class="capacity"><strong>${lot.available_spaces}</strong><span>格可停</span><small>共 ${lot.total_spaces} 格</small></div>
     <div class="capacity-bar" aria-label="空位比例 ${Math.round(freePercent)}%"><i style="width:${freePercent}%"></i></div>
     <p class="decision-summary">${escapeHtml(primaryReason)}</p>
+    <details class="parking-details">
+      <summary>費率與營業時間</summary>
+      <div class="parking-details-content">
+        <div class="parking-detail-item">
+          <strong>官方費率</strong>
+          <p>${escapeHtml(feeInfo)}</p>
+        </div>
+        <div class="parking-detail-item">
+          <strong>營業時間</strong>
+          <p>${escapeHtml(serviceTime)}</p>
+        </div>
+      </div>
+    </details>
     <div class="card-actions">
       ${mapsLink}
       <button class="secondary-action" type="button" data-history-lot="${escapeHtml(lot.lot_id)}" data-lot-name="${escapeHtml(lot.lot_name)}">查看空位趨勢</button>

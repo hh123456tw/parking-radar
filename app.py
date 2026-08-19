@@ -150,7 +150,7 @@ def validate_parsed_query(parsed, now=None):
 
 
 def attach_history(connection, rows, arrival_time):
-    """一次查詢 30 天歷史，再把相同日別與小時摘要放回各候選場站。"""
+    """一次查詢最近數天歷史，再把相同日別與小時摘要放回候選場站。"""
     end_utc = datetime.now(timezone.utc)
     start_utc = end_utc - timedelta(days=Config.HISTORY_LOOKBACK_DAYS)
     history_rows = fetch_matching_history(
@@ -273,15 +273,17 @@ def create_app(test_config=None):
             freshness = Config.FRESHNESS_MINUTES if data_status == "fresh" else None
             rows = fetch_current_lots(connection, parsed.get("district"), freshness)
             if destination:
-                # 先用即時資料與距離縮到 1.5 公里，再查這批候選的歷史，避免讀取全市歷史。
-                nearby = rank_candidates(rows, destination["latitude"], destination["longitude"])
-                nearby = attach_history(connection, nearby, parsed["arrival_time"])
-                ranked = rank_candidates(nearby, destination["latitude"], destination["longitude"])
+                # 一般查詢只使用即時資料與距離；歷史由使用者點擊後的專用 API 載入。
+                ranked = rank_candidates(
+                    rows, destination["latitude"], destination["longitude"])
                 score_rows = ranked
             else:
-                rows = attach_history(connection, rows, parsed["arrival_time"])
+                # 行政區可能包含大量場站，避免每次查詢都讀取歷史快照。
                 ranked = rank_district_candidates(rows)
                 score_rows = rows
+            if parsed["intent"] in {"history", "compare"}:
+                # 只有明確詢問歷史時才載入前三座的最近 7 天資料。
+                attach_history(connection, ranked[:3], parsed["arrival_time"])
             raw_groups = split_recommendation_groups(ranked)
             groups = {name: [public_candidate(row) for row in group]
                       for name, group in raw_groups.items()}

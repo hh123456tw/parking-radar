@@ -1,6 +1,6 @@
 """Flask 路由整合測試：保留真實分析流程，只隔離 DB 與外部 API。"""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -126,6 +126,59 @@ def test_district_only_query_uses_real_history_and_district_ranking(monkeypatch)
     assert body["recommendations"][0]["distance_m"] is None
     assert body["recommendations"][0]["lot_id"] == "TPE1"
     assert connection.closed is True
+
+
+def test_regular_query_does_not_preload_history(monkeypatch):
+    """一般查詢只使用即時資料；歷史留給使用者點擊後的專用端點。"""
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
+    monkeypatch.setattr(
+        app_module,
+        "fetch_matching_history",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("一般查詢不應預先讀取歷史")
+        ),
+    )
+
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "district": "信義區",
+        "arrival_time": "2026-08-04T18:00:00+08:00",
+    })
+
+    assert response.status_code == 200
+    assert response.get_json()["recommendations"][0]["lot_id"] == "TPE1"
+
+
+def test_history_intent_loads_history_for_only_three_candidates(monkeypatch):
+    """明確詢問歷史時保留分析，但只讀前三座，避免整區大量運算。"""
+    requested_lot_ids = []
+    requested_range = []
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "parse_parking_query", lambda *_args: ParkingIntent(
+        intent="history", original_destination=None, address=None, district="信義區",
+        arrival_time="2026-08-04T18:00:00+08:00", missing_fields=[],
+    ))
+    rows = []
+    for index in range(4):
+        row = lot_row()
+        row["lot_id"] = f"TPE{index + 1}"
+        rows.append(row)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: rows)
+
+    def matching_history(_connection, lot_ids, start_utc, end_utc):
+        requested_lot_ids.extend(lot_ids)
+        requested_range.append(end_utc - start_utc)
+        return []
+
+    monkeypatch.setattr(app_module, "fetch_matching_history", matching_history)
+
+    response = make_client().post(
+        "/api/query", json={"mode": "chat", "message": "這區歷史上好停嗎？"})
+
+    assert response.status_code == 200
+    assert requested_lot_ids == ["TPE1", "TPE2", "TPE3"]
+    assert requested_range == [timedelta(days=7)]
 
 
 def test_query_reads_parking_data_from_connection_opened_after_refresh(monkeypatch):

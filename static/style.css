@@ -85,6 +85,22 @@ summary { color:#c7d1db; cursor:pointer; }
 .capacity-bar { height:9px; margin:11px 0 12px; overflow:hidden; border-radius:999px; background:#293440; }
 .capacity-bar i { display:block; height:100%; background:var(--green); }
 .decision-summary { margin:0 0 16px; color:#d5dde5; }
+.parking-details {
+  margin:0 0 16px; border:1px solid #35414e; border-radius:9px; background:#1b2530;
+}
+.parking-details summary {
+  padding:10px 12px; color:#d2dbe4; cursor:pointer; font-weight:800;
+}
+.parking-details[open] summary { border-bottom:1px solid #35414e; }
+.parking-details-content {
+  display:grid; gap:12px; max-height:160px; overflow-y:auto; padding:12px;
+  scrollbar-gutter:stable;
+}
+.parking-detail-item strong { color:#9eacb9; font-size:.82rem; }
+.parking-detail-item p {
+  margin:3px 0 0; color:#e0e6ec; font-size:.88rem; line-height:1.55;
+  white-space:pre-wrap; overflow-wrap:anywhere;
+}
 .card-actions { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-top:auto; }
 .primary-action, .secondary-action {
   display:grid; place-items:center; min-height:44px; padding:8px 10px; border-radius:9px;
