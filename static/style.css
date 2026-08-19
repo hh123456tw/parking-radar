@@ -85,6 +85,14 @@ summary { color:#c7d1db; cursor:pointer; }
 .capacity-bar { height:9px; margin:11px 0 12px; overflow:hidden; border-radius:999px; background:#293440; }
 .capacity-bar i { display:block; height:100%; background:var(--green); }
 .decision-summary { margin:0 0 16px; color:#d5dde5; }
+/* 首選卡費率/型態元資料：小藥丸沿用綠/黃卡色調；官方原文仍留在下方可捲動明細。 */
+.decision-meta { display:flex; flex-wrap:wrap; gap:8px; margin:2px 0 14px; }
+.decision-meta span {
+  padding:3px 10px; border-radius:999px; border:1px solid #2f6b52;
+  color:#bfe9d5; background:#13211b; font-size:14px; font-weight:750;
+}
+.parking-card.warning .decision-meta span { border-color:#6b5a20; color:#ffe9a8; background:#27210f; }
+.fee-note { margin:0 0 14px; color:var(--muted); font-size:14px; }
 .parking-details {
   margin:0 0 16px; border:1px solid #35414e; border-radius:9px; background:#1b2530;
 }
@@ -123,6 +131,15 @@ summary { color:#c7d1db; cursor:pointer; }
 .compact-lot div { display:grid; }
 .compact-lot small, .muted { color:var(--muted); }
 .compact-lot a { color:#a9d5ff; text-align:right; }
+/* 緊湊列元資料：跨整列第二行，依狀態色提示，不擠壓距離與地圖連結。 */
+.compact-lot .compact-meta { display:flex; flex-wrap:wrap; gap:6px 10px; grid-column:1/-1; }
+.compact-lot .compact-meta span {
+  padding:2px 9px; border-radius:999px; border:1px solid #35414e;
+  color:#c8d3dd; font-size:14px; font-weight:700;
+}
+.compact-lot.warning .compact-meta span { border-color:#6b5a20; color:#ffe9a8; }
+.compact-lot.avoid .compact-meta span { border-color:#6b2430; color:#ffb9bf; }
+.compact-lot .fee-note { display:block; grid-column:1/-1; margin:0; }
 
 /* 地圖以大尺寸編號標示三個首選，其餘場站降低權重。 */
 .map-layout { display:grid; grid-template-columns:minmax(0,2.2fr) minmax(260px,1fr); gap:22px; }
