@@ -19,20 +19,47 @@ def upsert_parking_lots(connection, lots):
     sql = """
         INSERT INTO parking_lots
             (lot_id, lot_name, district, address, operator_type,
-             total_spaces, fee_info, service_time, latitude, longitude,
+             total_spaces, fee_info, fare_rules_json,
+             facility_type, facility_source, metadata_checked_at,
+             service_time, latitude, longitude,
              supports_realtime, source_updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             lot_name=VALUES(lot_name), district=VALUES(district),
             address=VALUES(address), operator_type=VALUES(operator_type),
             total_spaces=VALUES(total_spaces), fee_info=VALUES(fee_info),
+            -- 官方費率規則跟隨資料更新。
+            fare_rules_json=VALUES(fare_rules_json),
             service_time=VALUES(service_time), latitude=VALUES(latitude),
             longitude=VALUES(longitude),
             supports_realtime=VALUES(supports_realtime),
-            source_updated_at=VALUES(source_updated_at)
+            source_updated_at=VALUES(source_updated_at),
+            -- 設施型態依優先序 manual > official > osm > unknown 保留。
+            facility_type = CASE
+                WHEN parking_lots.facility_source = 'manual'
+                     THEN parking_lots.facility_type
+                WHEN VALUES(facility_source) = 'official'
+                     AND COALESCE(parking_lots.facility_source, 'unknown') IN ('osm', 'unknown')
+                     THEN VALUES(facility_type)
+                WHEN VALUES(facility_source) = 'manual'
+                     THEN VALUES(facility_type)
+                ELSE parking_lots.facility_type
+            END,
+            facility_source = CASE
+                WHEN parking_lots.facility_source = 'manual'
+                     THEN parking_lots.facility_source
+                WHEN VALUES(facility_source) = 'official'
+                     AND COALESCE(parking_lots.facility_source, 'unknown') IN ('osm', 'unknown')
+                     THEN VALUES(facility_source)
+                WHEN VALUES(facility_source) = 'manual'
+                     THEN VALUES(facility_source)
+                ELSE parking_lots.facility_source
+            END
     """
     keys = ("lot_id", "lot_name", "district", "address", "operator_type",
-            "total_spaces", "fee_info", "service_time", "latitude", "longitude",
+            "total_spaces", "fee_info", "fare_rules_json",
+            "facility_type", "facility_source", "metadata_checked_at",
+            "service_time", "latitude", "longitude",
             "supports_realtime", "source_updated_at")
     values = [tuple(row.get(key) for key in keys) for row in lots]
     with connection.cursor() as cursor:
@@ -157,3 +184,31 @@ def save_cached_geocode(connection, result):
             result["normalized_address"], result["display_address"],
             result["latitude"], result["longitude"], result["cached_at"],
         ))
+
+
+def fetch_parking_metadata_candidates(connection):
+    """取出型態同步所需的場站候選：含座標與現有型態來源。"""
+    sql = """
+        SELECT lot_id, lot_name, latitude, longitude,
+               facility_type, facility_source
+        FROM parking_lots
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(sql)
+        return list(cursor.fetchall())
+
+
+def update_parking_metadata(connection, updates):
+    """以單一參數化批次寫入型態與檢查時間，lot_id 只經由參數傳入。"""
+    sql = """
+        UPDATE parking_lots
+        SET facility_type = %s, facility_source = %s, metadata_checked_at = %s
+        WHERE lot_id = %s
+    """
+    values = [(
+        row["facility_type"], row["facility_source"],
+        row["metadata_checked_at"], row["lot_id"],
+    ) for row in updates]
+    with connection.cursor() as cursor:
+        cursor.executemany(sql, values)
+        return cursor.rowcount

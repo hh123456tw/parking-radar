@@ -7,6 +7,11 @@ CREATE TABLE IF NOT EXISTS parking_lots (
     operator_type VARCHAR(40) NOT NULL,
     total_spaces INT NOT NULL,
     fee_info TEXT,
+    -- 官方費率規則原樣保存，供後續任務解析收費明細。
+    fare_rules_json LONGTEXT NULL,
+    facility_type VARCHAR(20) NULL,
+    facility_source VARCHAR(20) NULL,
+    metadata_checked_at DATETIME NULL,
     -- 官方文字目前可能超過 80 字元，保留餘裕避免匯入失敗。
     service_time VARCHAR(255),
     latitude DECIMAL(10, 7),

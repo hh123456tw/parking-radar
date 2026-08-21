@@ -8,3 +8,9 @@ __pycache__/
 htmlcov/
 .superpowers/
 .gstack/
+.gstack-review/
+.qa-browser/
+browser-review-state/
+.worktrees/
+data/calendar/*.json
+data/calendar/*.tmp

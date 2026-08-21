@@ -53,6 +53,56 @@ def test_promoted_backup_card_keeps_warning_label():
     assert 'class="parking-card ${cardTone}"' in script
 
 
+def test_primary_cards_offer_scrollable_official_fee_details():
+    """首選卡保留完整官方文字，缺值有提示，長內容不無限撐高卡片。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    style = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+    primary_card = script.split("function primaryCard", 1)[1].split(
+        "function compactLot", 1)[0]
+    compact_lot = script.split("function compactLot", 1)[1].split(
+        "function renderCards", 1)[0]
+
+    assert 'class="parking-details"' in primary_card
+    assert "費率與營業時間" in primary_card
+    assert "lot.fee_info" in primary_card
+    assert "lot.service_time" in primary_card
+    assert "escapeHtml(feeInfo)" in primary_card
+    assert "escapeHtml(serviceTime)" in primary_card
+    assert "官方未提供" in primary_card
+    assert "parking-details" not in compact_lot
+    assert "max-height:160px" in style
+    assert "overflow-y:auto" in style
+    assert "white-space:pre-wrap" in style
+    assert "overflow-wrap:anywhere" in style
+
+
+def test_decision_metadata_renders_on_primary_and_compact_cards():
+    """抵達日、時費、每日上限與場站型態要渲染於首選卡與緊湊列，值都經轉義。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    primary_card = script.split("function primaryCard", 1)[1].split(
+        "function compactLot", 1)[0]
+    compact_lot = script.split("function compactLot", 1)[1].split(
+        "function renderCards", 1)[0]
+
+    for field in (
+        "lot.arrival_day_label", "lot.hourly_fee_label",
+        "lot.daily_cap_label", "lot.facility_type_label",
+    ):
+        assert f"displayValue({field}" in primary_card
+        assert f"displayValue({field}" in compact_lot
+
+    assert "decision-meta" in primary_card
+    assert "compact-meta" in compact_lot
+    assert "上限官方未標示" in primary_card
+    assert "上限官方未標示" in compact_lot
+    assert "型態待確認" in primary_card
+    assert "型態待確認" in compact_lot
+    assert "fee-note" in primary_card
+    assert "fee-note" in compact_lot
+    assert "parking-details" in primary_card
+    assert "parking-details" not in compact_lot
+
+
 def test_location_choices_are_clickable_and_reuse_manual_query():
     """模糊地標候選必須顯示成按鈕，點擊後沿用既有手動查詢 API。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
@@ -65,5 +115,5 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "location-v3" in template
+    assert "self-use-v1" in template
     assert 'document.querySelector("#result-content").hidden = true' in script

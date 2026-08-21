@@ -167,6 +167,12 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, character => entities[character]);
 }
 
+// 顯示 API 已算好的值：修整後轉義，空白時用預設文字代替，前端絕不重算費率。
+function displayValue(value, fallback = "官方未標示") {
+  const text = String(value ?? "").trim();
+  return text ? escapeHtml(text) : fallback;
+}
+
 function formatFullAddress(lot) {
   const address = (lot.address || "").replaceAll("台北市", "臺北市").trim();
   if (!address) return "地址資料未提供";
@@ -194,6 +200,9 @@ function primaryCard(lot, index) {
   const freePercent = Math.max(0, Math.min(100,
     lot.available_spaces / lot.total_spaces * 100));
   const primaryReason = lot.reasons?.[0] || "依目前空位與距離列入首選";
+  const feeInfo = String(lot.fee_info || "").trim() || "官方未提供";
+  const serviceTime = String(lot.service_time || "").trim() || "官方未提供";
+  const metaLine = feeMetaLine(lot);
   const mapsLink = mapsUrl
     ? `<a class="primary-action" href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer">開啟 Google 地圖</a>`
     : `<span class="primary-action disabled" aria-disabled="true">無地圖資料</span>`;
@@ -209,12 +218,43 @@ function primaryCard(lot, index) {
       : `<span class="parking-address">${escapeHtml(address)}</span>`}
     <div class="capacity"><strong>${lot.available_spaces}</strong><span>格可停</span><small>共 ${lot.total_spaces} 格</small></div>
     <div class="capacity-bar" aria-label="空位比例 ${Math.round(freePercent)}%"><i style="width:${freePercent}%"></i></div>
+    ${metaLine}
     <p class="decision-summary">${escapeHtml(primaryReason)}</p>
+    <details class="parking-details">
+      <summary>費率與營業時間</summary>
+      <div class="parking-details-content">
+        <div class="parking-detail-item">
+          <strong>官方費率</strong>
+          <p>${escapeHtml(feeInfo)}</p>
+        </div>
+        <div class="parking-detail-item">
+          <strong>營業時間</strong>
+          <p>${escapeHtml(serviceTime)}</p>
+        </div>
+      </div>
+    </details>
     <div class="card-actions">
       ${mapsLink}
       <button class="secondary-action" type="button" data-history-lot="${escapeHtml(lot.lot_id)}" data-lot-name="${escapeHtml(lot.lot_name)}">查看空位趨勢</button>
     </div>
   </article>`;
+}
+
+// 首選卡用的決策元資料列：抵達日、時費、每日上限與場站型態，一律只顯示轉義後的值。
+function feeMetaLine(lot) {
+  const arrival = displayValue(lot.arrival_day_label);
+  const hourly = displayValue(lot.hourly_fee_label);
+  const cap = displayValue(lot.daily_cap_label);
+  const facility = displayValue(lot.facility_type_label, "型態待確認");
+  const capText = cap === "官方未標示" ? "上限官方未標示" : `上限 ${cap}`;
+  const feeNote = lot.fee_note
+    ? `<div class="fee-note">${displayValue(lot.fee_note)}</div>` : "";
+  return `<div class="decision-meta">
+    <span>抵達：${arrival}</span>
+    <span>${hourly}</span>
+    <span>${capText}</span>
+    <span>${facility}</span>
+  </div>${feeNote}`;
 }
 
 function compactLot(lot) {
@@ -225,9 +265,27 @@ function compactLot(lot) {
   return `<article class="compact-lot ${escapeHtml(lot.decision_status)}">
     <span class="compact-status">${escapeHtml(lot.decision_label)}</span>
     <div><strong>${escapeHtml(lot.lot_name)}</strong><small>${lot.available_spaces} / ${lot.total_spaces} 格可停</small></div>
+    ${compactMetaLine(lot)}
     <span>${escapeHtml(formatDistance(lot.distance_m))}</span>
     ${mapAction}
   </article>`;
+}
+
+// 緊湊列用的元資料行：名稱下方呈現抵達日、時費、每日上限與場站型態，值皆轉義。
+function compactMetaLine(lot) {
+  const arrival = displayValue(lot.arrival_day_label);
+  const hourly = displayValue(lot.hourly_fee_label);
+  const cap = displayValue(lot.daily_cap_label);
+  const facility = displayValue(lot.facility_type_label, "型態待確認");
+  const capText = cap === "官方未標示" ? "上限官方未標示" : `上限 ${cap}`;
+  const feeNote = lot.fee_note
+    ? `<div class="fee-note">${displayValue(lot.fee_note)}</div>` : "";
+  return `<div class="compact-meta">
+    <span>抵達：${arrival}</span>
+    <span>${hourly}</span>
+    <span>${capText}</span>
+    <span>${facility}</span>
+  </div>${feeNote}`;
 }
 
 function renderCards(data) {
@@ -363,3 +421,39 @@ async function loadHistory(lotId, lotName) {
     note.textContent = error.message;
   }
 }
+
+// PWA 安裝：註冊服務器攔截安裝事件，但只在使用者點擊按鈕後才呼叫 prompt。
+document.addEventListener("DOMContentLoaded", () => {
+  if (!("serviceWorker" in navigator)) return;
+  // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
+  navigator.serviceWorker.register("/static/sw.js", {scope:"/"})
+    .catch(() => navigator.serviceWorker.register("/static/sw.js"));
+
+  let deferredPrompt = null;
+  const installButton = document.querySelector("#install-app");
+  const iosHint = document.querySelector("#ios-install-hint");
+
+  window.addEventListener("beforeinstallprompt", event => {
+    event.preventDefault();
+    deferredPrompt = event;
+    if (installButton) installButton.hidden = false;
+  });
+
+  if (installButton) {
+    installButton.addEventListener("click", async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      installButton.hidden = true;
+    });
+  }
+
+  // iOS Safari 不會觸發 beforeinstallprompt，改用分享功能加入主畫面。
+  const iosSafari = /iphone|ipad|ipod/i.test(navigator.userAgent)
+    && /safari/i.test(navigator.userAgent)
+    && !/crios|fxios|opios|edgios/i.test(navigator.userAgent);
+  if (iosHint && iosSafari && !window.matchMedia("(display-mode: standalone)").matches) {
+    iosHint.hidden = false;
+  }
+});

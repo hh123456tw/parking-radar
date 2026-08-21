@@ -1,0 +1,11 @@
+[Unit]
+Description=Parking Hell Radar monthly calendar and parking metadata sync
+After=network.target
+
+[Service]
+Type=oneshot
+User=parking
+WorkingDirectory=/opt/parking-hell
+EnvironmentFile=/opt/parking-hell/.env
+ExecStart=/opt/parking-hell/.venv/bin/python calendar_service.py --sync
+ExecStart=/opt/parking-hell/.venv/bin/python parking_metadata.py --sync

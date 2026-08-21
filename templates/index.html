@@ -5,19 +5,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>停車地獄雷達</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='location-v3') }}">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='self-use-v1') }}">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <meta name="theme-color" content="#0b1118">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
 </head>
 
 <body>
   <header class="hero">
     <p class="eyebrow">TAIPEI PARKING DECISION TOOL</p>
     <h1>台北停車地獄雷達</h1>
-    <p>現在有多難停？哪裡值得去？用即時資料與歷史參考做決定。</p>
+    <p>現在有多難停？哪裡值得去？用即時資料、歷史參考，加上清楚的費率與場站型態做決定。</p>
     <p class="data-times" aria-live="polite">
       <span id="official-updated-at">官方資料時間：尚未查詢</span>
       <span id="collected-at">系統最後抓取：尚未查詢</span>
     </p>
+    <div class="install-bar">
+      <button id="install-app" type="button" hidden>安裝到手機</button>
+      <span id="ios-install-hint" hidden>在 Safari 點分享，再選「加入主畫面」</span>
+    </div>
   </header>
   <main>
     <section class="query-panel">
@@ -88,7 +95,7 @@
   <footer>資料來源：臺北市資料大平臺｜地圖 © OpenStreetMap contributors｜歷史資料僅供參考，非空位預測。</footer>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='app.js', v='location-v3') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='self-use-v1') }}"></script>
 </body>
 
 </html>

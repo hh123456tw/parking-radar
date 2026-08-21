@@ -79,6 +79,10 @@ def sample_lot():
         "total_spaces": 100, "fee_info": "每小時30元", "service_time": "24小時",
         "latitude": 25.0375, "longitude": 121.5637, "supports_realtime": True,
         "source_updated_at": "2026-08-04 10:00:00",
+        "fare_rules_json": '{"FareRule":[]}',
+        "facility_type": None,
+        "facility_source": None,
+        "metadata_checked_at": None,
     }
 
 
@@ -105,6 +109,58 @@ def test_upsert_parking_lots_binds_complete_row_as_parameters():
     assert "ON DUPLICATE KEY UPDATE" in sql
     assert "測試停車場" not in sql
     assert values[0][0:4] == ("TPE0001", "測試停車場", "信義區", "市府路1號")
+    assert '{"FareRule":[]}' in values[0]
+    for column in ("fare_rules_json", "facility_type", "facility_source",
+                   "metadata_checked_at"):
+        assert column in sql
+    assert count == 1
+
+
+def test_upsert_duplicate_key_preserves_manual_facility_with_case():
+    """重複鍵更新必須以固定 CASE 依優先序保留 manual，不得直接覆寫欄位。"""
+    connection = SpyConnection()
+    database.upsert_parking_lots(connection, [sample_lot()])
+
+    sql, _values = connection.spy_cursor.calls[0]
+    assert "facility_type = CASE" in sql
+    assert "facility_source = CASE" in sql
+    assert "VALUES(facility_source)" in sql
+    for keyword in ("'manual'", "'official'", "'osm'", "'unknown'"):
+        assert keyword in sql
+    for forbidden in ("mechanical", "multi_storey", "underground",
+                      "surface", "mixed"):
+        assert forbidden not in sql
+
+
+def test_fetch_parking_metadata_candidates_selects_sync_columns():
+    """型態同步需要的欄位必須一次取出。"""
+    candidate = {"lot_id": "TPE0001", "lot_name": "測試停車場",
+                 "latitude": 25.05, "longitude": 121.53,
+                 "facility_type": "unknown", "facility_source": "unknown"}
+    connection = SpyConnection([candidate])
+
+    assert database.fetch_parking_metadata_candidates(connection) == [candidate]
+
+    sql, _params = connection.spy_cursor.calls[0]
+    for column in ("lot_id", "lot_name", "latitude", "longitude",
+                   "facility_type", "facility_source"):
+        assert column in sql
+
+
+def test_update_parking_metadata_uses_one_parameterized_executemany():
+    """型態更新必須是單一批次 executemany，lot_id 只出現在參數中。"""
+    connection = SpyConnection()
+    checked_at = datetime(2026, 8, 20, 4, 0, tzinfo=timezone.utc)
+    updates = [{"lot_id": "TPE0001", "facility_type": "surface",
+                "facility_source": "osm", "metadata_checked_at": checked_at}]
+
+    count = database.update_parking_metadata(connection, updates)
+
+    assert len(connection.spy_cursor.calls) == 1
+    sql, values = connection.spy_cursor.calls[0]
+    assert "UPDATE parking_lots" in sql
+    assert "TPE0001" not in sql
+    assert values == [("surface", "osm", checked_at, "TPE0001")]
     assert count == 1
 
 
