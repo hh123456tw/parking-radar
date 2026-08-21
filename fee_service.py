@@ -22,6 +22,8 @@ NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
 UNKNOWN_LABEL = "官方未標示"
 AMBIGUITY_NOTE = "依日期、活動或現場公告"
+# FareInfo 沒有星期欄位；週末／假日查詢遇到這些詞時，結構化單價可能是平日價。
+HOLIDAY_FEE_TOKENS = ("週六", "週日", "假日", "放假", "例假")
 
 
 def _normalize_rules(fare_rules_json):
@@ -189,9 +191,16 @@ def build_fee_summary(fare_rules_json: str | None, fee_info: str | None,
     confidence = "unknown"
     note = None
     if structured:
-        hourly_label, confidence = _describe_hourly(structured)
-        if len(set(text_prices)) > 1:
+        day_dependent = day_kind in {"weekend", "holiday"} and any(
+            token in str(fee_info or "") for token in HOLIDAY_FEE_TOKENS)
+        if day_dependent and len(set(text_prices)) > 1:
+            # 官方結構化規則不含星期，改顯示官方文字中的價格範圍，避免報出錯誤單價。
+            hourly_label, confidence = _describe_hourly(text_prices)
             note = AMBIGUITY_NOTE
+        else:
+            hourly_label, confidence = _describe_hourly(structured)
+            if len(set(text_prices)) > 1:
+                note = AMBIGUITY_NOTE
     elif text_prices:
         hourly_label, confidence = _describe_hourly(text_prices)
         if confidence == "range":
