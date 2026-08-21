@@ -226,6 +226,13 @@ def create_app(test_config=None):
     if test_config:
         app.config.update(test_config)
 
+    @app.after_request
+    def allow_service_worker_root_scope(response):
+        """讓 Flask 本機環境的服務器腳本也能控制網站根目錄。"""
+        if request.path == "/static/sw.js":
+            response.headers["Service-Worker-Allowed"] = "/"
+        return response
+
     @app.get("/health")
     def health():
         """回傳不依賴外部服務的程序健康狀態。"""
