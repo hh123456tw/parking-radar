@@ -39,7 +39,7 @@ def upsert_parking_lots(connection, lots):
                 WHEN parking_lots.facility_source = 'manual'
                      THEN parking_lots.facility_type
                 WHEN VALUES(facility_source) = 'official'
-                     AND parking_lots.facility_source IN ('osm', 'unknown')
+                     AND COALESCE(parking_lots.facility_source, 'unknown') IN ('osm', 'unknown')
                      THEN VALUES(facility_type)
                 WHEN VALUES(facility_source) = 'manual'
                      THEN VALUES(facility_type)
@@ -49,7 +49,7 @@ def upsert_parking_lots(connection, lots):
                 WHEN parking_lots.facility_source = 'manual'
                      THEN parking_lots.facility_source
                 WHEN VALUES(facility_source) = 'official'
-                     AND parking_lots.facility_source IN ('osm', 'unknown')
+                     AND COALESCE(parking_lots.facility_source, 'unknown') IN ('osm', 'unknown')
                      THEN VALUES(facility_source)
                 WHEN VALUES(facility_source) = 'manual'
                      THEN VALUES(facility_source)
