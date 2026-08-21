@@ -24,13 +24,21 @@ def _day(kind, label, is_holiday, source):
 
 
 def _load_rows(calendar_file):
-    """讀取行事曆 JSON；檔案不存在或格式錯誤時回傳 None，空陣列原樣回傳。"""
+    """讀取行事曆 JSON；只保留具備日期與假日旗標的有效資料列。"""
     if not calendar_file.exists():
         return None
     try:
-        return json.loads(calendar_file.read_text(encoding="utf-8"))
+        rows = json.loads(calendar_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    if not isinstance(rows, list):
+        return None
+    return [
+        row for row in rows
+        if isinstance(row, dict)
+        and isinstance(row.get("date"), str)
+        and isinstance(row.get("isHoliday"), bool)
+    ]
 
 
 def classify_arrival_day(arrival_time, calendar_dir=CALENDAR_DIR):
