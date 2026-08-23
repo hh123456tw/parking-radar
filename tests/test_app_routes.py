@@ -7,6 +7,13 @@ import pytest
 import requests
 
 import app as app_module
+
+
+def test_production_app_emits_info_performance_logs():
+    """正式環境必須允許 INFO，否則 query_complete 分段耗時不會出現在日誌。"""
+    flask_app = app_module.create_app({"TESTING": False})
+
+    assert flask_app.logger.isEnabledFor(logging.INFO)
 from ai_service import IntentServiceError, ParkingIntent
 from calendar_service import classify_arrival_day
 
@@ -238,7 +245,7 @@ def test_successful_query_logs_stage_durations_without_destination(monkeypatch, 
 
     with caplog.at_level(logging.INFO):
         response = make_client().post("/api/query", json={
-            "mode": "manual", "district": "信義區",
+            "mode": "manual\nforged", "district": "信義區",
             "arrival_time": "2026-08-04T18:00:00+08:00",
         })
 
@@ -246,6 +253,7 @@ def test_successful_query_logs_stage_durations_without_destination(monkeypatch, 
     messages = [record.getMessage() for record in caplog.records]
     timing = next(message for message in messages if message.startswith("query_complete "))
     assert "mode=manual" in timing
+    assert "forged" not in timing
     assert "parse_ms=" in timing
     assert "geocode_ms=" in timing
     assert "freshness_ms=" in timing

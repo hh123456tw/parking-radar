@@ -1,5 +1,6 @@
 """Flask 入口；集中協調查詢流程，不在路由內重寫分析公式。"""
 
+import logging
 import re
 import time
 from collections import defaultdict
@@ -232,6 +233,7 @@ def public_candidate(row):
 def create_app(test_config=None):
     """建立 Flask 應用，允許測試覆寫設定並回傳 app。"""
     app = Flask(__name__)
+    app.logger.setLevel(logging.INFO)
     app.config.from_object(Config)
     if test_config:
         app.config.update(test_config)
@@ -394,7 +396,8 @@ def create_app(test_config=None):
             app.logger.info(
                 "query_complete mode=%s parse_ms=%s geocode_ms=%s "
                 "freshness_ms=%s database_ms=%s walking_ms=%s total_ms=%s",
-                payload.get("mode", "manual"), timings["parse_ms"],
+                "chat" if payload.get("mode") == "chat" else "manual",
+                timings["parse_ms"],
                 timings["geocode_ms"], timings["freshness_ms"],
                 timings["database_ms"], timings["walking_ms"], total_ms,
             )
