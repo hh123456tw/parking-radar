@@ -17,6 +17,7 @@ from analysis import (
     rank_candidates,
     rank_district_candidates,
     recommendation_score,
+    select_walking_candidates,
     split_recommendation_groups,
     summarize_hour_comparison,
     summarize_matching_history,
@@ -234,6 +235,53 @@ def test_recommendations_choose_safe_by_distance_before_backup():
     assert [row["lot_id"] for row in groups["recommendations"]] == [
         "near-safe", "middle-safe", "far-safe"]
     assert [row["lot_id"] for row in groups["warning"]] == ["nearest-backup"]
+
+
+def test_recommendations_use_walking_time_after_risk_filter():
+    """同為安全場站時改按實際步行時間，不再只看直線距離。"""
+    ranked = [
+        decision_row(lot_id="straight-near", distance_m=200,
+                     walking_distance_m=850, walking_duration_minutes=11),
+        decision_row(lot_id="walk-near", distance_m=400,
+                     walking_distance_m=500, walking_duration_minutes=6),
+    ]
+
+    groups = split_recommendation_groups(ranked)
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == [
+        "walk-near", "straight-near"]
+    assert groups["recommendations"][0]["reasons"][1] == \
+        "步行約 6 分鐘（500 公尺）"
+
+
+def test_routed_candidate_is_not_mixed_with_unknown_straight_estimate():
+    """部分路線缺失時，未知真實路程者不能靠直線估算超越已驗證路線。"""
+    ranked = [
+        decision_row(lot_id="routed", distance_m=200,
+                     walking_distance_m=1500, walking_duration_minutes=19),
+        decision_row(lot_id="unknown", distance_m=100),
+    ]
+
+    groups = split_recommendation_groups(ranked)
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == [
+        "routed", "unknown"]
+
+
+def test_walking_route_candidates_prioritize_safe_lots_and_limit_count():
+    """有限的 Matrix 名額先給低風險場站，並只取直線最近的 15 座。"""
+    safe = [
+        decision_row(lot_id=f"safe-{index}", distance_m=100 + index * 10)
+        for index in range(16)
+    ]
+    warning = decision_row(
+        lot_id="warning", available_spaces=5, total_spaces=100,
+        hell_score=95, distance_m=10)
+
+    selected = select_walking_candidates([warning, *reversed(safe)], limit=15)
+
+    assert [row["lot_id"] for row in selected] == [
+        f"safe-{index}" for index in range(15)]
 
 
 def test_history_requires_three_same_day_type_and_hour_samples():

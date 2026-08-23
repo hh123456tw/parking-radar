@@ -5,6 +5,7 @@
 ## 功能範圍
 
 - 臺北市路外停車場、地址 1.5 公里搜尋、三名推薦、避雷、平日／週末歷史參考。
+- 地址模式可使用 OpenRouteService 顯示停好車後的實際步行時間；服務失敗時退回直線距離。
 - 模糊地標可產生並驗證最多三個候選，使用者能在前端直接選擇。
 - 單頁 Leaflet 地圖與一張最近七天折線圖。
 - 不含導航、AI 空位預測、路邊格位、會員及個別民營業者爬蟲。
@@ -52,6 +53,7 @@ Register-ScheduledTask `
 | `GEMINI_API_KEY` | 留空時停用對話並使用手動表單 |
 | `GEMINI_MODEL` | 預設 `gemini-3.5-flash-lite` |
 | `NOMINATIM_USER_AGENT` | 必須包含可辨識的專題名稱與聯絡資訊 |
+| `OPENROUTESERVICE_API_KEY` | 免費步行路線 Matrix API 金鑰；留空時沿用直線距離 |
 
 對話只說目的地而未指定抵達時間時，系統會自動使用 `Asia/Taipei` 的目前時間。
 
@@ -65,6 +67,7 @@ Register-ScheduledTask `
 - 歷史分析為過去樣本參考，不代表抵達時仍有相同空位。
 - 圖卡的推薦、警示、避雷與白話原因全部由 Python 固定規則產生；Gemini 只解析對話條件。
 - 停車場地址與 Google 地圖連結使用既有座標或地址，不使用付費 Google Maps API。
+- 推薦先依空位規則分級，再於同風險場站中比較步行時間。為控制速度，每次最多查詢 15 座，路線名額優先給低風險且直線較近的場站；OpenRouteService 失敗或沒有金鑰時，會退回直線距離排序並明確標示。
 - 頁面分開顯示官方動態資料時間與本系統抓取時間，避免誤判資料新鮮度。
 
 ## GCP 1 vCPU／1 GB 部署
@@ -73,6 +76,7 @@ Register-ScheduledTask `
 2. 安裝 Python、MySQL、Nginx，建立 `parking` 系統使用者，專案放在 `/opt/parking-hell` 並由該使用者擁有。
 3. 在 MySQL 設定加入：`bind-address=127.0.0.1`、`innodb_buffer_pool_size=128M`、`max_connections=30`、`performance_schema=OFF`，重新啟動後確認 3306 未對外開放。
 4. 建立 `.venv` 與不進 Git 的 `.env`，執行 schema 與第一次 collector。
+   若要顯示實際步行時間，在 `.env` 加入 `OPENROUTESERVICE_API_KEY=你的金鑰`。
 5. 安裝 `deploy/parking-radar.service` 與 `deploy/nginx-parking-radar.conf`；其中 nginx 必須為 `location /static/` 加上 `Service-Worker-Allowed: /` 回應標頭，否則 PWA 服務工人無法以 `/` 範圍註冊（見下方「部署補充」）。
 6. 以 `systemctl enable --now parking-radar nginx` 啟動。
 7. 以 `parking` 使用者執行 `crontab -e` 加入：

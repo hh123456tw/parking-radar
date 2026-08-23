@@ -147,8 +147,15 @@ def explain_candidate(row, min_history_samples=3):
     else:
         availability_reason = f"目前仍有 {available} 格（共 {total} 格），空位數充足"
 
+    walking_distance = item.get("walking_distance_m")
+    walking_minutes = item.get("walking_duration_minutes")
     distance = item.get("distance_m")
-    if distance is None:
+    if walking_distance is not None and walking_minutes is not None:
+        distance_reason = (
+            f"步行約 {max(1, round(walking_minutes))} 分鐘"
+            f"（{round(walking_distance)} 公尺）"
+        )
+    elif distance is None:
         distance_reason = "目前以行政區整體狀況比較"
     elif distance <= 500:
         distance_reason = f"距目的地近，約 {round(distance)} 公尺"
@@ -181,16 +188,23 @@ def explain_candidate(row, min_history_samples=3):
 
 
 def split_recommendation_groups(ranked):
-    """先依風險分級，再依距離排序；首選不足三個時才補入備選。"""
+    """先依風險分級，再依步行時間排序；首選不足三個時才補備選。"""
     explained = [explain_candidate(row) for row in ranked]
     with_distance = [row for row in explained if row.get("distance_m") is not None]
-    nearest = sorted(with_distance, key=lambda item: item["distance_m"])[:3]
+
+    def proximity_key(item):
+        """實際步行資料優先；未知路線者才在後段依直線距離補位。"""
+        walking = item.get("walking_duration_minutes")
+        if walking is not None:
+            return (0, float(walking))
+        distance = item.get("distance_m")
+        return (1, float("inf") if distance is None else float(distance))
+
+    nearest = sorted(with_distance, key=proximity_key)[:3]
 
     def distance_then_spaces(item):
-        """同風險優先選較近場站；距離相同時再選剩餘格數較多者。"""
-        distance = item.get("distance_m")
-        return (float("inf") if distance is None else distance,
-                -int(item["available_spaces"]))
+        """同風險優先選步行較近場站；相同時再選剩餘格數較多者。"""
+        return (*proximity_key(item), -int(item["available_spaces"]))
 
     safe = sorted(
         (row for row in explained if row["decision_status"] == "recommended"),
@@ -213,6 +227,20 @@ def split_recommendation_groups(ranked):
         "warning": warning,
         "avoid": avoid,
     }
+
+
+def select_walking_candidates(ranked, limit=15):
+    """有限路線名額先給低風險場站，各風險內取直線最近者。"""
+    status_order = {"recommended": 0, "warning": 1, "avoid": 2}
+    explained = [explain_candidate(row) for row in ranked]
+    return sorted(
+        explained,
+        key=lambda row: (
+            status_order[row["decision_status"]],
+            float("inf") if row.get("distance_m") is None
+            else float(row["distance_m"]),
+        ),
+    )[:limit]
 
 
 def rank_district_candidates(rows):

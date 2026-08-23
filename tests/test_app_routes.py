@@ -20,11 +20,14 @@ class CloseTrackingConnection:
         self.closed = True
 
 
-def make_client():
+def make_client(**config):
     """建立具有 session 功能的 Flask 測試客戶端。"""
-    return app_module.create_app({
+    settings = {
         "TESTING": True, "SECRET_KEY": "test", "AUTO_REFRESH_ENABLED": False,
-    }).test_client()
+        "OPENROUTESERVICE_API_KEY": "",
+    }
+    settings.update(config)
+    return app_module.create_app(settings).test_client()
 
 
 def lot_row(captured_at=None):
@@ -100,6 +103,8 @@ def test_public_candidate_keeps_decision_card_fields():
         "decision_label": "建議前往",
         "pressure_label": "低",
         "recommendation_label": "高",
+        "walking_distance_m": 430.2,
+        "walking_duration_minutes": 5.2,
         "reasons": ["目前 20 / 100 格可停", "距目的地近，約 300 公尺"],
     })
 
@@ -111,7 +116,93 @@ def test_public_candidate_keeps_decision_card_fields():
     assert result["decision_label"] == "建議前往"
     assert result["pressure_label"] == "低"
     assert result["recommendation_label"] == "高"
+    assert result["walking_distance_m"] == 430.2
+    assert result["walking_duration_minutes"] == 5.2
     assert result["reasons"] == row["reasons"]
+
+
+def test_address_query_uses_walking_routes_to_order_safe_lots(monkeypatch):
+    """有地址與金鑰時，安全場站要依步行時間排序並輸出步行欄位。"""
+    straight_near = lot_row()
+    straight_near.update(lot_id="STRAIGHT", lot_name="直線較近",
+                         latitude=25.0376, longitude=121.5638)
+    walk_near = lot_row()
+    walk_near.update(lot_id="WALK", lot_name="步行較近",
+                     latitude=25.0390, longitude=121.5660)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
+        "display_address": "臺北市政府", "latitude": 25.0375,
+        "longitude": 121.5637,
+    })
+    monkeypatch.setattr(
+        app_module, "fetch_current_lots", lambda *_args: [straight_near, walk_near])
+    monkeypatch.setattr(app_module, "fetch_walking_routes", lambda *_args, **_kwargs: {
+        "STRAIGHT": {"walking_distance_m": 850.0,
+                     "walking_duration_minutes": 11.0},
+        "WALK": {"walking_distance_m": 500.0,
+                 "walking_duration_minutes": 6.0},
+    })
+
+    response = make_client(OPENROUTESERVICE_API_KEY="test-key").post(
+        "/api/query", json={
+            "mode": "manual", "address": "臺北市信義區市府路1號",
+            "arrival_time": "2026-08-04T18:00:00+08:00",
+        })
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert [row["lot_id"] for row in body["recommendations"]] == ["WALK", "STRAIGHT"]
+    assert body["recommendations"][0]["walking_duration_minutes"] == 6.0
+
+
+def test_walking_route_failure_keeps_address_query_usable(monkeypatch):
+    """步行 API 失敗時不得讓停車查詢失敗，應保留直線距離結果。"""
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
+        "display_address": "臺北市政府", "latitude": 25.0375,
+        "longitude": 121.5637,
+    })
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
+    monkeypatch.setattr(
+        app_module, "fetch_walking_routes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            app_module.WalkingRouteError("步行路線服務暫時無法使用")),
+    )
+
+    response = make_client(OPENROUTESERVICE_API_KEY="test-key").post(
+        "/api/query", json={
+            "mode": "manual", "address": "臺北市信義區市府路1號",
+            "arrival_time": "2026-08-04T18:00:00+08:00",
+        })
+
+    lot = response.get_json()["recommendations"][0]
+    assert response.status_code == 200
+    assert lot["walking_distance_m"] is None
+    assert lot["distance_m"] is not None
+
+
+def test_address_query_without_route_key_never_calls_walking_api(monkeypatch):
+    """未設定金鑰時直接沿用直線距離，不應送出無效外部請求。"""
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
+        "display_address": "臺北市政府", "latitude": 25.0375,
+        "longitude": 121.5637,
+    })
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
+    monkeypatch.setattr(
+        app_module, "fetch_walking_routes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("沒有金鑰時不應呼叫步行 API")),
+    )
+
+    response = make_client(OPENROUTESERVICE_API_KEY="").post(
+        "/api/query", json={
+            "mode": "manual", "address": "臺北市信義區市府路1號",
+            "arrival_time": "2026-08-04T18:00:00+08:00",
+        })
+
+    assert response.status_code == 200
+    assert response.get_json()["recommendations"][0]["walking_distance_m"] is None
 
 
 def test_query_enriches_every_result_with_local_decision_metadata(monkeypatch):
