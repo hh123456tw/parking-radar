@@ -89,6 +89,8 @@ Register-ScheduledTask `
 | `GEMINI_MODEL` | 預設 `gemini-3.5-flash-lite` |
 | `NOMINATIM_USER_AGENT` | 必須包含可辨識的專題名稱與聯絡資訊 |
 | `OPENROUTESERVICE_API_KEY` | 免費步行路線 Matrix API 金鑰；留空時沿用直線距離 |
+| `ANALYTICS_HMAC_SECRET` | 匿名分析 HMAC 簽章秘密；部署時以 `openssl rand -hex 32` 產生，只放在 VM |
+| `DEPLOY_VERSION` | 管理儀表板顯示的部署版本識別（例如 Git commit 短碼） |
 
 對話只說目的地而未指定抵達時間時，系統會自動使用 `Asia/Taipei` 的目前時間。
 
@@ -146,6 +148,37 @@ Register-ScheduledTask `
 
 計時器於每月執行一次（`OnCalendar=monthly`），補行錯過批次（`Persistent=true`），並附加一小時隨機延遲
 （`RandomizedDelaySec=1h`），避免與資料來源尖峰重疊。維護任務是獨立的 `Type=oneshot` 單位，其成敗不會重啟或停止 `parking-radar.service`。
+
+### 部署補充：分析儀表板管理端保護與清理
+
+管理儀表板（`/admin/` 下所有 HTML 與 API）由 Nginx Basic Auth 保護；公開使用者不需登入，
+Flask 不新增任何帳號機制。密碼雜湊與 `ANALYTICS_HMAC_SECRET` 只存在 VM 上，一律不進入 Git。
+
+1. 產生 HMAC 秘密並寫入 `.env`（只在 VM 上執行）：
+   `openssl rand -hex 32`
+   把輸出貼到 `/opt/parking-hell/.env` 的 `ANALYTICS_HMAC_SECRET=` 之後。
+2. 安裝 `apache2-utils` 並建立管理帳密檔：
+   `sudo apt install -y apache2-utils`
+   `sudo htpasswd -c /etc/nginx/.htpasswd-parking-radar admin`
+3. 更新 `deploy/nginx-parking-radar.conf`（沿用既有安裝方式覆蓋站台設定），並安裝日誌格式／限流設定：
+   `sudo install -m 644 deploy/nginx-parking-radar-log-format.conf /etc/nginx/conf.d/`
+4. 測試並重載 Nginx：
+   `sudo nginx -t && sudo systemctl reload nginx`
+5. 套用分析事件遷移（重複執行安全）：
+   `mysql -u parking -p parking_hell < migrations/20260823_add_analytics_events.sql`
+6. 以 `parking` 使用者加入每日清理 cron：
+   `17 3 * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python analytics_cleanup.py >> /opt/parking-hell/analytics-cleanup.log 2>&1`
+7. 驗證：
+   - `curl -i http://127.0.0.1/admin/analytics` 未帶密碼時回傳 401；帶密碼時回傳 200 且回應含 `Cache-Control: no-store`。
+   - `sudo tail -f /var/log/nginx/parking-radar.access.log` 每行只含時間、方法＋路徑、協定、狀態、回應位元組與處理時間，不含 IP。
+   - 儀表板顯示 `.env` 的 `DEPLOY_VERSION`，且分析功能為啟用狀態。
+
+#### 回滾
+
+- Nginx：還原先前的 `nginx-parking-radar.conf`，移除 `/etc/nginx/conf.d/nginx-parking-radar-log-format.conf`，再執行 `sudo nginx -t && sudo systemctl reload nginx`。
+- Cron：只移除 analytics cleanup 那一行，其餘（collector 等）全部保留。
+- 應用程式：切回前一個部署 commit 後以 `sudo systemctl restart parking-radar` 重啟。
+- 資料：保留 `analytics_events` 表與既有事件；除非擁有者明確決定刪除，否則不執行 DROP。
 
 PWA 離線外殼需要 nginx 對 `sw.js` 回應 `Service-Worker-Allowed: /`。前端以 `scope: "/"` 註冊（見 `static/app.js`），若 nginx 未在 `location /static/` 傳回該標頭，瀏覽器會拒絕超出
 `/static/` 的範圍，服務工人便無法控制並離線快取整站。`deploy/nginx-parking-radar.conf` 對應區塊需為：
