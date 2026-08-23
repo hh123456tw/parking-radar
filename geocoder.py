@@ -76,7 +76,8 @@ def geocode_address(address, connection, http_get=requests.get):
             NOMINATIM_URL,
             params={"q": query, "format": "jsonv2", "limit": 1,
                     "countrycodes": "tw"},
-            headers={"User-Agent": Config.NOMINATIM_USER_AGENT}, timeout=8,
+            headers={"User-Agent": Config.NOMINATIM_USER_AGENT},
+            timeout=Config.GEOCODER_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         items = response.json()

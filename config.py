@@ -23,6 +23,7 @@ class Config:
     NOMINATIM_USER_AGENT = os.getenv(
         "NOMINATIM_USER_AGENT", "parking-hell-radar-student-project/1.0"
     )
+    GEOCODER_TIMEOUT_SECONDS = 4
     OPENROUTESERVICE_API_KEY = os.getenv("OPENROUTESERVICE_API_KEY", "")
     WALKING_ROUTE_TIMEOUT_SECONDS = 3
     WALKING_ROUTE_CANDIDATE_LIMIT = 15

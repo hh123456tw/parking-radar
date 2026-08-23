@@ -181,6 +181,20 @@ def test_chat_known_landmark_uses_fixed_house_address():
     assert result["address"] == "臺北市信義區市府路1號"
 
 
+def test_manual_known_landmark_shares_fixed_address_cache():
+    """手動輸入已知地標時，也要轉成固定門牌以共用地址快取。"""
+    parsed = app_module.parse_manual_payload({
+        "address": "台北車站",
+        "arrival_time": "2026-08-23T12:00:00+08:00",
+    })
+
+    result = app_module.validate_parsed_query(parsed)
+
+    assert result["address"] == "臺北市中正區北平西路3號"
+    assert result["destination_label"] == \
+        "台北車站（臺北市中正區北平西路3號）"
+
+
 def test_fresh_snapshot_skips_on_demand_collector(monkeypatch):
     """45 分鐘內的快照直接使用，不得浪費官方 API 請求。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
@@ -194,25 +208,22 @@ def test_fresh_snapshot_skips_on_demand_collector(monkeypatch):
     assert app_module.ensure_fresh_parking_data(now) == ("fresh", None)
 
 
-def test_stale_snapshot_refreshes_once_with_short_timeout(monkeypatch):
-    """過期快照取得鎖後再檢查，並用查詢專用短逾時補抓一次。"""
+def test_stale_snapshot_returns_immediately_without_collector(monkeypatch):
+    """已有舊資料時不得讓使用者等待完整 collector，應立即誠實降級。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
-    times = iter([
-        now - timedelta(minutes=60),
-        now - timedelta(minutes=60),
-        now,
-    ])
-    calls = []
-    monkeypatch.setattr(app_module, "_latest_snapshot_time", lambda: next(times))
     monkeypatch.setattr(
-        app_module, "collect_once", lambda **kwargs: calls.append(kwargs))
+        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=60))
+    monkeypatch.setattr(
+        app_module, "collect_once",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("不應同步更新")),
+    )
 
-    assert app_module.ensure_fresh_parking_data(now) == ("fresh", None)
-    assert calls == [{"timeout": 5}]
+    assert app_module.ensure_fresh_parking_data(now) == (
+        "stale", "資料更新排程尚未完成，目前顯示 60 分鐘前資料")
 
 
-def test_failed_refresh_uses_stale_snapshot_with_warning(monkeypatch):
-    """官方失敗但仍有舊資料時，必須誠實降級而非回傳 0 座。"""
+def test_stale_snapshot_does_not_depend_on_official_api(monkeypatch):
+    """已有舊資料時即使官方失敗，也不應在查詢路徑呼叫外部 API。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
         app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=67))
@@ -224,7 +235,7 @@ def test_failed_refresh_uses_stale_snapshot_with_warning(monkeypatch):
     status, notice = app_module.ensure_fresh_parking_data(now)
 
     assert status == "stale"
-    assert notice == "官方更新失敗，目前顯示 67 分鐘前資料"
+    assert notice == "資料更新排程尚未完成，目前顯示 67 分鐘前資料"
 
 
 def test_failed_refresh_without_any_snapshot_is_unavailable(monkeypatch):

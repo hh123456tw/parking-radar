@@ -1,5 +1,6 @@
 """Flask 路由整合測試：保留真實分析流程，只隔離 DB 與外部 API。"""
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -228,6 +229,30 @@ def test_query_enriches_every_result_with_local_decision_metadata(monkeypatch):
     assert lot["hourly_fee_label"] == "60 元／時"
     assert lot["daily_cap_label"] == "230 元"
     assert lot["facility_type_label"] == "地下停車場"
+
+
+def test_successful_query_logs_stage_durations_without_destination(monkeypatch, caplog):
+    """正常查詢必須留下各階段耗時，但不得把使用者目的地寫進日誌。"""
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
+
+    with caplog.at_level(logging.INFO):
+        response = make_client().post("/api/query", json={
+            "mode": "manual", "district": "信義區",
+            "arrival_time": "2026-08-04T18:00:00+08:00",
+        })
+
+    assert response.status_code == 200
+    messages = [record.getMessage() for record in caplog.records]
+    timing = next(message for message in messages if message.startswith("query_complete "))
+    assert "mode=manual" in timing
+    assert "parse_ms=" in timing
+    assert "geocode_ms=" in timing
+    assert "freshness_ms=" in timing
+    assert "database_ms=" in timing
+    assert "walking_ms=" in timing
+    assert "total_ms=" in timing
+    assert "信義區" not in timing
 
 
 def test_query_missing_calendar_file_uses_weekday_fallback(monkeypatch, tmp_path):

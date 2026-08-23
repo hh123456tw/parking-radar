@@ -276,7 +276,7 @@ def test_nominatim_request_uses_policy_headers_and_saves_cache(monkeypatch):
     assert captured["params"] == {
         "q": "臺北市市府路1號", "format": "jsonv2", "limit": 1, "countrycodes": "tw"}
     assert captured["headers"] == {"User-Agent": Config.NOMINATIM_USER_AGENT}
-    assert captured["timeout"] == 8
+    assert captured["timeout"] == 4
     assert result["latitude"] == 25.0375
     assert saved[0]["normalized_address"] == "臺北市市府路1號"
     assert connection.commits == 1

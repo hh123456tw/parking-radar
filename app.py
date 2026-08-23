@@ -1,6 +1,7 @@
 """Flask 入口；集中協調查詢流程，不在路由內重寫分析公式。"""
 
 import re
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -59,18 +60,22 @@ def _latest_snapshot_time():
 
 
 def ensure_fresh_parking_data(now=None):
-    """資料過期時只補抓一次；失敗但有舊快照時允許誠實降級。"""
+    """查詢只讀既有快照；僅全新資料庫才同步補抓一次。"""
     latest = _latest_snapshot_time()
     age = snapshot_age_minutes(latest, now)
     if age is not None and age <= Config.FRESHNESS_MINUTES:
         return "fresh", None
+    if latest is not None:
+        return "stale", f"資料更新排程尚未完成，目前顯示 {age} 分鐘前資料"
 
     with _refresh_lock:
-        # 等鎖期間其他請求可能已完成更新，因此取得鎖後必須再次確認。
+        # 全新資料庫才允許補抓；等鎖期間排程或其他請求可能已經寫入。
         latest = _latest_snapshot_time()
         age = snapshot_age_minutes(latest, now)
         if age is not None and age <= Config.FRESHNESS_MINUTES:
             return "fresh", None
+        if latest is not None:
+            return "stale", f"資料更新排程尚未完成，目前顯示 {age} 分鐘前資料"
         try:
             collect_once(timeout=Config.ON_DEMAND_FETCH_TIMEOUT_SECONDS)
             refreshed = _latest_snapshot_time()
@@ -101,7 +106,9 @@ def parse_manual_payload(payload):
         raise ValueError("抵達時間必須包含時區")
     return {"intent": "recommend", "address": address or None,
             "district": district or None, "arrival_time": arrival,
-            "destination_label": destination_label or None}
+            "destination_label": destination_label or None,
+            # 與聊天模式共用地標別名與地址快取，避免同一地點重複查外部服務。
+            "original_destination": address or None}
 
 
 def validate_parsed_query(parsed, now=None):
@@ -249,6 +256,8 @@ def create_app(test_config=None):
     @app.post("/api/query")
     def query_parking():
         """解析手動或聊天輸入，交由固定函式產生可驗證的停車結果。"""
+        query_started = time.perf_counter()
+        timings = {"walking_ms": 0}
         payload = request.get_json(silent=True) or {}
         if not isinstance(payload, dict):
             return jsonify(error="JSON 內容必須是物件"), 400
@@ -258,6 +267,7 @@ def create_app(test_config=None):
             else:
                 parsed = parse_manual_payload(payload)
             parsed = validate_parsed_query(parsed)
+            timings["parse_ms"] = round((time.perf_counter() - query_started) * 1000)
         except IntentServiceError as exc:
             return jsonify(error=str(exc), fallback="manual"), 503
         except (KeyError, TypeError, ValueError) as exc:
@@ -265,6 +275,7 @@ def create_app(test_config=None):
 
         connection = None
         try:
+            geocode_started = time.perf_counter()
             # 抵達日分類只讀本機行事曆，任何異常都與資料查詢相同以 JSON 回傳。
             day_info = classify_arrival_day(parsed["arrival_time"])
             connection = get_connection()
@@ -301,14 +312,20 @@ def create_app(test_config=None):
             if parsed.get("address") and destination is None:
                 return jsonify(error="找不到地址，請修正或改選行政區",
                                fallback="district"), 422
+            timings["geocode_ms"] = round(
+                (time.perf_counter() - geocode_started) * 1000)
 
             # 地理快取查詢可能已建立 MySQL 交易快照；先關閉，避免補抓後仍讀到舊資料。
             connection.close()
             connection = None
+            freshness_started = time.perf_counter()
             if app.config.get("AUTO_REFRESH_ENABLED", True):
                 data_status, data_notice = ensure_fresh_parking_data()
             else:
                 data_status, data_notice = "fresh", None
+            timings["freshness_ms"] = round(
+                (time.perf_counter() - freshness_started) * 1000)
+            database_started = time.perf_counter()
             connection = get_connection()
             freshness = Config.FRESHNESS_MINUTES if data_status == "fresh" else None
             rows = fetch_current_lots(connection, parsed.get("district"), freshness)
@@ -323,6 +340,7 @@ def create_app(test_config=None):
                         limit=app.config["WALKING_ROUTE_CANDIDATE_LIMIT"],
                     )
                     try:
+                        walking_started = time.perf_counter()
                         walking_routes = fetch_walking_routes(
                             route_rows,
                             destination["latitude"], destination["longitude"],
@@ -333,6 +351,9 @@ def create_app(test_config=None):
                             row.update(walking_routes.get(row["lot_id"], {}))
                     except WalkingRouteError as exc:
                         app.logger.warning("%s，改用直線距離", exc)
+                    finally:
+                        timings["walking_ms"] = round(
+                            (time.perf_counter() - walking_started) * 1000)
                 score_rows = ranked
             else:
                 # 行政區可能包含大量場站，避免每次查詢都讀取歷史快照。
@@ -364,6 +385,19 @@ def create_app(test_config=None):
                  if row.get("snapshot_updated_at") is not None),
                 default=None,
             ))
+            total_ms = round((time.perf_counter() - query_started) * 1000)
+            timings["database_ms"] = max(
+                0,
+                round((time.perf_counter() - database_started) * 1000)
+                - timings["walking_ms"],
+            )
+            app.logger.info(
+                "query_complete mode=%s parse_ms=%s geocode_ms=%s "
+                "freshness_ms=%s database_ms=%s walking_ms=%s total_ms=%s",
+                payload.get("mode", "manual"), timings["parse_ms"],
+                timings["geocode_ms"], timings["freshness_ms"],
+                timings["database_ms"], timings["walking_ms"], total_ms,
+            )
             return jsonify(destination=destination_json, current={
                 "district_score": district_hell_score(score_rows),
                 "valid_lot_count": len(score_rows)},
