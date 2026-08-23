@@ -10,7 +10,9 @@ def test_decision_cards_keep_required_data_and_actions():
 
     assert "function formatFullAddress(lot)" in script
     assert "function googleMapsUrl(lot)" in script
-    assert "https://www.google.com/maps/search/?api=1&query=" in script
+    assert "https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=" in script
+    assert "https://www.google.com/maps/search/?api=1&query=" not in script
+    assert "開始導航" in script
     assert "lot.total_spaces" in script
     assert "lot.reasons" in script
     assert "data.official_updated_at" in script
@@ -130,5 +132,5 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "walking-v1" in template
+    assert "navigation-v1" in template
     assert 'document.querySelector("#result-content").hidden = true' in script

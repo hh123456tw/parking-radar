@@ -192,7 +192,7 @@ function formatFullAddress(lot) {
 }
 
 function googleMapsUrl(lot) {
-  const base = "https://www.google.com/maps/search/?api=1&query=";
+  const base = "https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=";
   if (lot.latitude != null && lot.longitude != null) {
     return `${base}${encodeURIComponent(`${lot.latitude},${lot.longitude}`)}`;
   }
@@ -214,7 +214,7 @@ function primaryCard(lot, index) {
   const serviceTime = String(lot.service_time || "").trim() || "官方未提供";
   const metaLine = feeMetaLine(lot);
   const mapsLink = mapsUrl
-    ? `<a class="primary-action" href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer">開啟 Google 地圖</a>`
+    ? `<a class="primary-action" href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer">開始導航</a>`
     : `<span class="primary-action disabled" aria-disabled="true">無地圖資料</span>`;
 
   return `<article class="parking-card ${cardTone}">
@@ -270,7 +270,7 @@ function feeMetaLine(lot) {
 function compactLot(lot) {
   const mapsUrl = googleMapsUrl(lot);
   const mapAction = mapsUrl
-    ? `<a href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer">Google 地圖</a>`
+    ? `<a href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer">導航</a>`
     : `<span class="muted">無地圖</span>`;
   return `<article class="compact-lot ${escapeHtml(lot.decision_status)}">
     <span class="compact-status">${escapeHtml(lot.decision_label)}</span>
