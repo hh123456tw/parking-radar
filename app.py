@@ -11,9 +11,11 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, render_template, request, session
 from ai_service import IntentServiceError, TAIPEI_DISTRICTS, parse_parking_query
-from analytics_database import insert_event, insert_navigation_event
-from analytics_service import (SOURCES, analytics_identity,
-                               build_browser_event, build_query_event)
+from analytics_database import (fetch_dashboard_events, fetch_events,
+                                insert_event, insert_navigation_event)
+from analytics_service import (DASHBOARD_RANGES, SOURCES, analytics_identity,
+                               build_browser_event, build_query_event,
+                               parse_dashboard_range, summarize_events)
 from analysis import (build_history_series, district_hell_score,
                       rank_candidates, rank_district_candidates,
                       select_walking_candidates, split_recommendation_groups,
@@ -27,6 +29,7 @@ from database import (fetch_current_lots, fetch_history,
                       get_connection)
 from fee_service import build_fee_summary
 from geocoder import geocode_address, geocode_candidates, resolve_known_landmark
+from status_service import build_status
 from walking_service import WalkingRouteError, fetch_walking_routes
 
 _refresh_lock = Lock()
@@ -310,10 +313,13 @@ def create_app(test_config=None):
         return jsonify(payload), status_code
 
     @app.after_request
-    def allow_service_worker_root_scope(response):
-        """讓 Flask 本機環境的服務器腳本也能控制網站根目錄。"""
+    def apply_scope_and_admin_headers(response):
+        """服務器腳本授權根目錄；所有 /admin/ 回應保持唯讀且不可快取。"""
         if request.path == "/static/sw.js":
             response.headers["Service-Worker-Allowed"] = "/"
+        if request.path.startswith("/admin/"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Robots-Tag"] = "noindex"
         return response
 
     @app.get("/health")
@@ -626,6 +632,61 @@ def create_app(test_config=None):
         finally:
             if connection is not None:
                 connection.close()
+
+    @app.get("/admin/analytics")
+    def admin_analytics_page():
+        """顯示唯讀管理儀表板；Nginx Basic Auth 負責保護所有 /admin/ 路徑。"""
+        return render_template("admin_analytics.html")
+
+    @app.get("/admin/api/analytics")
+    def admin_analytics_api():
+        """依 today/7d/30d 回傳彙整指標；未設定秘密時回傳誠實的空資料。"""
+        range_value = request.args.get("range", "today")
+        if range_value not in DASHBOARD_RANGES:
+            return jsonify(error="range 只接受 today、7d、30d"), 400
+        now_utc = datetime.now(timezone.utc)
+        enabled = bool(app.config.get("ANALYTICS_ENABLED")
+                       and app.config.get("ANALYTICS_HMAC_SECRET"))
+        rows, rolling_rows = [], []
+        if enabled:
+            connection = get_connection()
+            try:
+                start, end = parse_dashboard_range(range_value, now_utc)
+                rows = fetch_dashboard_events(connection, start, end)
+                rolling_start = parse_dashboard_range("30d", now_utc)[0]
+                rolling_rows = fetch_events(connection, rolling_start, now_utc)
+            except Exception:
+                app.logger.exception("管理儀表板分析讀取失敗")
+            finally:
+                connection.close()
+        summary = summarize_events(
+            rows, now_utc,
+            min_devices=app.config.get("ANALYTICS_SEGMENT_MIN_DEVICES", 5),
+            rolling_30d_rows=rolling_rows,
+        )
+        return jsonify(range=range_value, analytics_enabled=enabled,
+                       summary=summary)
+
+    @app.get("/admin/api/status")
+    def admin_status_api():
+        """回傳唯讀系統狀態；各元件獨立降級且不做任何外部請求。"""
+        connection = None
+        try:
+            connection = get_connection()
+        except Exception:
+            app.logger.warning("管理儀表板無法連線 MySQL")
+        try:
+            body = build_status(
+                connection,
+                deploy_version=app.config.get("DEPLOY_VERSION", "unknown"),
+                analytics_enabled=bool(
+                    app.config.get("ANALYTICS_ENABLED")
+                    and app.config.get("ANALYTICS_HMAC_SECRET")),
+            )
+        finally:
+            if connection is not None:
+                connection.close()
+        return jsonify(body)
 
     return app
 
