@@ -218,6 +218,7 @@ def test_gemini_failure_records_failed_internal_only_with_consent(monkeypatch):
 
 
 def test_no_ranked_candidates_records_failed_no_candidates(monkeypatch):
+    """沒有候選時維持舊的 200 空群組契約，但仍記錄失敗事件。"""
     app = make_analytics_app(monkeypatch)
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
     written = []
@@ -228,9 +229,31 @@ def test_no_ranked_candidates_records_failed_no_candidates(monkeypatch):
         "/api/query", json=manual_payload(), headers=analytics_headers())
 
     body = response.get_json()
-    assert response.status_code == 422
+    assert response.status_code == 200
     UUID(body["request_id"])
+    assert body["current"] == {"district_score": None, "valid_lot_count": 0}
+    for group in ("recommendations", "nearest", "warning", "avoid"):
+        assert body[group] == []
     assert written[0]["outcome_code"] == "failed_no_candidates"
+
+
+def test_no_candidates_query_keeps_200_empty_groups_contract(monkeypatch):
+    """空結果必須維持原始 200 成功形狀，只加上 request_id。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [])
+
+    response = app.test_client().post("/api/query", json=manual_payload())
+
+    body = response.get_json()
+    assert response.status_code == 200
+    UUID(body["request_id"])
+    assert body["current"] == {"district_score": None, "valid_lot_count": 0}
+    for group in ("recommendations", "nearest", "warning", "avoid"):
+        assert body[group] == []
+    assert body["history"] == {
+        "hell_score": None, "sample_count": 0, "comparison": None}
+    assert body["data_status"] == "fresh"
 
 
 def test_location_choice_response_creates_no_event(monkeypatch):
@@ -266,7 +289,82 @@ def test_location_choice_response_creates_no_event(monkeypatch):
     assert response.status_code == 200
     assert body["needs_location_choice"] is True
     UUID(body["request_id"])
+    assert set(body) == {
+        "needs_location_choice", "location_choices", "arrival_time",
+        "intent", "request_id",
+    }
     assert written == []
+
+
+def test_location_choice_response_does_not_echo_request_payload(monkeypatch):
+    """選址回應只能回傳固定欄位，不得外洩 mode/message 或未知鍵。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    written = []
+    app.extensions["analytics_writer"] = written.append
+    monkeypatch.setattr(app_module, "parse_parking_query", lambda *_args: ParkingIntent(
+        intent="recommend", original_destination="資策會", address="資策會",
+        district="松山區",
+        arrival_time=datetime(2026, 8, 23, 10, tzinfo=timezone.utc),
+        missing_fields=[],
+        location_candidates=[
+            LocationCandidate(name="A", address="臺北市大安區信義路三段153號"),
+            LocationCandidate(name="B", address="臺北市松山區民生東路四段133號"),
+        ],
+    ))
+    monkeypatch.setattr(app_module, "geocode_candidates", lambda *_args: [
+        {"name": "A", "address": "臺北市大安區信義路三段153號",
+         "district": "大安區", "display_address": "信義路三段153號",
+         "latitude": 25.03, "longitude": 121.54},
+        {"name": "B", "address": "臺北市松山區民生東路四段133號",
+         "district": "松山區", "display_address": "民生東路四段133號",
+         "latitude": 25.06, "longitude": 121.55},
+    ])
+
+    response = app.test_client().post(
+        "/api/query",
+        json={"mode": "chat", "message": "我要去資策會", "client_hint": "secret"},
+        headers={**analytics_headers(), "X-Client-Version": "2"})
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert set(body) == {
+        "needs_location_choice", "location_choices", "arrival_time",
+        "intent", "request_id",
+    }
+    assert "client_hint" not in body
+    assert "message" not in body
+
+
+def test_stale_client_version_records_failed_validation_when_consented(monkeypatch):
+    """舊版客戶端收到 409 時，同意下仍要記錄 failed_validation 事件。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    written = []
+    app.extensions["analytics_writer"] = written.append
+    monkeypatch.setattr(app_module, "parse_parking_query", lambda *_args: ParkingIntent(
+        intent="recommend", original_destination="資策會", address="資策會",
+        district="松山區",
+        arrival_time=datetime(2026, 8, 23, 10, tzinfo=timezone.utc),
+        missing_fields=[],
+        location_candidates=[
+            LocationCandidate(name="A", address="臺北市大安區信義路三段153號"),
+        ],
+    ))
+    monkeypatch.setattr(app_module, "geocode_candidates", lambda *_args: [{
+        "name": "A", "address": "臺北市大安區信義路三段153號",
+        "district": "大安區", "display_address": "信義路三段153號",
+        "latitude": 25.03, "longitude": 121.54,
+    }])
+
+    response = app.test_client().post(
+        "/api/query", json={"mode": "chat", "message": "我要去資策會"},
+        headers=analytics_headers())
+
+    body = response.get_json()
+    assert response.status_code == 409
+    UUID(body["request_id"])
+    assert written[0]["outcome_code"] == "failed_validation"
 
 
 def test_navigation_event_requires_consent_and_allowlisted_fields(monkeypatch):
@@ -285,9 +383,8 @@ def test_navigation_event_requires_consent_and_allowlisted_fields(monkeypatch):
             headers=analytics_headers(),
         )
         assert response.status_code == 400
-    no_consent = client.post(
-        "/api/analytics/events", json=valid_navigation_payload())
-    assert no_consent.status_code == 400
+    assert client.post(
+        "/api/analytics/events", json=valid_navigation_payload()).status_code == 204
 
 
 def test_navigation_event_writes_hashed_id_and_returns_204(monkeypatch):

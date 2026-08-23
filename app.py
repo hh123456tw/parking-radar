@@ -375,12 +375,13 @@ def create_app(test_config=None):
                         {"error": "畫面已更新，請重新整理頁面後再查詢"},
                         409, "failed_validation", query_mode, request_id,
                         anonymous_hash, query_source, 0)
-                payload["needs_location_choice"] = True
-                payload["location_choices"] = verified_choices
-                payload["arrival_time"] = parsed["arrival_time"].isoformat()
-                payload["intent"] = parsed["intent"]
-                payload["request_id"] = request_id
-                return jsonify(payload)
+                return jsonify(
+                    needs_location_choice=True,
+                    location_choices=verified_choices,
+                    arrival_time=parsed["arrival_time"].isoformat(),
+                    intent=parsed["intent"],
+                    request_id=request_id,
+                )
 
             if verified_choices:
                 choice = verified_choices[0]
@@ -458,11 +459,6 @@ def create_app(test_config=None):
             raw_groups = split_recommendation_groups(ranked)
             groups = {name: [public_candidate(row) for row in group]
                       for name, group in raw_groups.items()}
-            if not ranked:
-                return terminal(
-                    {"error": "此區目前沒有可推薦的停車場"},
-                    422, "failed_no_candidates", query_mode, request_id,
-                    anonymous_hash, query_source, 0)
             destination_json = None if destination is None else {
                 "display_address": parsed.get("destination_label")
                 or destination["display_address"],
@@ -513,7 +509,11 @@ def create_app(test_config=None):
                 "data_notice": data_notice,
             }
             payload.update(groups)
-            outcome = "degraded_stale_data" if data_status == "stale" else "success"
+            if not ranked:
+                outcome = "failed_no_candidates"
+            else:
+                outcome = ("degraded_stale_data" if data_status == "stale"
+                           else "success")
             destination_coords = destination or {}
             return terminal(
                 payload, 200, outcome,
@@ -546,7 +546,7 @@ def create_app(test_config=None):
         if not app.config.get("ANALYTICS_HMAC_SECRET", ""):
             return "", 204
         if request.headers.get("X-Analytics-Consent") != "1":
-            return jsonify(error="需要明確同意"), 400
+            return "", 204
         payload = request.get_json(silent=True) or {}
         if not isinstance(payload, dict):
             return jsonify(error="JSON 內容必須是物件"), 400
