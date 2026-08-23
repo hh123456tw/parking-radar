@@ -215,6 +215,19 @@ def test_analytics_api_honestly_empty_without_secret(monkeypatch):
         "analytics"]["tone"] == "gray"
 
 
+def test_analytics_api_returns_503_when_database_read_fails(monkeypatch):
+    """資料庫讀取失敗時必須回傳固定 503，不能把故障偽裝成零流量。"""
+    client = make_admin_client(monkeypatch, database_error=True)
+
+    response = client.get("/admin/api/analytics?range=7d")
+
+    assert response.status_code == 503
+    assert response.get_json() == {"error": "暫時無法取得分析資料"}
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["X-Robots-Tag"] == "noindex"
+    assert client.connections[-1].closed is True
+
+
 def test_analytics_api_returns_real_summary_and_closes_connection(monkeypatch):
     selected = [
         query_row("query_completed", "req-a", "a" * 64, "success", 100, 3,

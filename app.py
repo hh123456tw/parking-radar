@@ -657,6 +657,7 @@ def create_app(test_config=None):
                 rolling_rows = fetch_events(connection, rolling_start, now_utc)
             except Exception:
                 app.logger.exception("管理儀表板分析讀取失敗")
+                return jsonify(error="暫時無法取得分析資料"), 503
             finally:
                 connection.close()
         summary = summarize_events(
