@@ -33,7 +33,8 @@ class Config:
     AUTO_REFRESH_ENABLED = True
     MIN_HISTORY_SAMPLES = 3
     HISTORY_LOOKBACK_DAYS = 7
-    # 匿名分析：HMAC 秘密、保留天數與樣本下限。
+    # 匿名分析：開關、HMAC 秘密、保留天數與樣本下限。
+    ANALYTICS_ENABLED = os.getenv("ANALYTICS_ENABLED", "1") == "1"
     ANALYTICS_HMAC_SECRET = os.getenv("ANALYTICS_HMAC_SECRET", "")
     ANALYTICS_RETENTION_DAYS = 90
     ANALYTICS_SEGMENT_MIN_DEVICES = 5

@@ -9,6 +9,8 @@ from uuid import UUID
 EVENT_TYPES = frozenset({
     "query_completed", "query_failed", "navigation_clicked", "pwa_opened",
 })
+QUERY_EVENT_TYPES = frozenset({"query_completed", "query_failed"})
+BROWSER_EVENT_TYPES = frozenset({"navigation_clicked", "pwa_opened"})
 QUERY_MODES = frozenset({"manual", "chat"})
 SOURCES = frozenset({"direct", "shared", "installed_pwa", "unknown"})
 OUTCOME_CODES = frozenset({
@@ -64,11 +66,62 @@ def build_query_event(
     longitude=None,
 ):
     """以白名單欄位建構查詢事件；拒絕自由文字並回傳 UTC 時間戳。"""
-    if event_type not in EVENT_TYPES:
+    if event_type not in QUERY_EVENT_TYPES:
         raise ValueError(f"invalid event_type: {event_type}")
-    if query_mode not in QUERY_MODES:
+    return _build_event(
+        event_type, request_id, anonymous_id_hash, query_mode, outcome_code,
+        duration_ms, result_count, source, district, place_type,
+        latitude, longitude,
+    )
+
+
+def build_browser_event(
+    event_type,
+    anonymous_id_hash,
+    source,
+    request_id=None,
+    clicked_rank=None,
+    parking_lot_id=None,
+    walking_minutes=None,
+    availability_bucket=None,
+):
+    """建構 pwa_opened/navigation_clicked 事件，只接受固定純量欄位。"""
+    if event_type not in BROWSER_EVENT_TYPES:
+        raise ValueError(f"invalid event_type: {event_type}")
+    if source not in SOURCES:
+        raise ValueError(f"invalid source: {source}")
+    return _build_event(
+        event_type, request_id, anonymous_id_hash, None, None, None, None,
+        source, None, None, None, None,
+        clicked_rank=clicked_rank,
+        parking_lot_id=parking_lot_id,
+        walking_minutes=walking_minutes,
+        availability_bucket=availability_bucket,
+    )
+
+
+def _build_event(
+    event_type,
+    request_id,
+    anonymous_id_hash,
+    query_mode,
+    outcome_code,
+    duration_ms,
+    result_count,
+    source,
+    district=None,
+    place_type=None,
+    latitude=None,
+    longitude=None,
+    clicked_rank=None,
+    parking_lot_id=None,
+    walking_minutes=None,
+    availability_bucket=None,
+):
+    """共用事件建構：固定 16 鍵、UTC 時間戳，座標立即降為粗略網格。"""
+    if query_mode is not None and query_mode not in QUERY_MODES:
         raise ValueError(f"invalid query_mode: {query_mode}")
-    if outcome_code not in OUTCOME_CODES:
+    if outcome_code is not None and outcome_code not in OUTCOME_CODES:
         raise ValueError(f"invalid outcome_code: {outcome_code}")
     if source not in SOURCES:
         source = "unknown"
@@ -84,9 +137,9 @@ def build_query_event(
         "outcome_code": outcome_code,
         "duration_ms": duration_ms,
         "result_count": result_count,
-        "clicked_rank": None,
-        "parking_lot_id": None,
-        "walking_minutes": None,
-        "availability_bucket": None,
+        "clicked_rank": clicked_rank,
+        "parking_lot_id": parking_lot_id,
+        "walking_minutes": walking_minutes,
+        "availability_bucket": availability_bucket,
         "source": source,
     }

@@ -91,3 +91,17 @@ def test_query_event_rejects_invalid_enums_and_payload_kwargs():
             build_query_event(**kwargs)
     with pytest.raises(TypeError):
         build_query_event(**base, message="自由文字不可進入")
+
+
+def test_query_event_rejects_browser_event_types():
+    """query 事件建構器只接受 query_completed/query_failed。"""
+    base = dict(
+        event_type="navigation_clicked", request_id="req-3",
+        anonymous_id_hash="c" * 64, query_mode="manual",
+        outcome_code="success", duration_ms=10, result_count=1,
+        source="direct",
+    )
+    with pytest.raises(ValueError):
+        build_query_event(**base)
+    with pytest.raises(ValueError):
+        build_query_event(**dict(base, event_type="pwa_opened"))
