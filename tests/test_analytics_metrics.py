@@ -142,6 +142,36 @@ def test_repeat_use_requires_two_distinct_taipei_dates():
     assert summary["repeat_use_rate"] == 1 / 2 * 100
 
 
+def test_rolling_30d_rows_drive_repeat_use_and_durations_only():
+    selected = [
+        query_row("query_completed", "req-t1", "x" * 64, "success", 100, 1,
+                  datetime(2026, 8, 23, 0, 30, tzinfo=timezone.utc)),
+        query_row("query_completed", "req-t2", "y" * 64, "success", 200, 1,
+                  datetime(2026, 8, 23, 1, 30, tzinfo=timezone.utc)),
+        nav_row("req-t1", "x" * 64, 1,
+                datetime(2026, 8, 23, 0, 40, tzinfo=timezone.utc)),
+    ]
+    rolling = selected + [
+        query_row("query_completed", "req-r5", "x" * 64, "success", 1000, 1,
+                  datetime(2026, 7, 31, 17, 0, tzinfo=timezone.utc)),
+        query_row("query_completed", "req-r6", "z" * 64, "success", 2000, 1,
+                  datetime(2026, 8, 1, 17, 0, tzinfo=timezone.utc)),
+    ]
+    summary = summarize_events(selected, NOW_UTC, rolling_30d_rows=rolling)
+    assert summary["repeat_use_rate"] == 1 / 3 * 100
+    assert summary["response_median_ms"] == 600.0
+    assert summary["response_p95_ms"] == 2000
+    assert summary["completed_queries"] == 2
+    assert summary["query_success_rate"] == 100.0
+    assert summary["navigation_click_rate"] == 50.0
+    assert summary["click_rank_counts"] == {"1": 1, "2": 0, "3": 0}
+    assert summary["anonymous_query_devices"] == 2
+    fallback = summarize_events(selected, NOW_UTC)
+    assert fallback["repeat_use_rate"] == 0.0
+    assert fallback["response_median_ms"] == 150.0
+    assert fallback["response_p95_ms"] == 200
+
+
 def test_summary_accepts_naive_utc_rows_from_database():
     rows = recent_query_rows()
     for row in rows:

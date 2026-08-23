@@ -163,14 +163,25 @@ def parse_dashboard_range(value, now_utc):
     return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
 
 
-def summarize_events(rows, now_utc, min_devices=5):
-    """彙整儀表板指標：查詢、點擊、裝置、耗時與樣本門檻。"""
+def summarize_events(rows, now_utc, min_devices=5, *, rolling_30d_rows=None):
+    """彙整儀表板指標；rolling_30d_rows 提供時，重複使用率與耗時改用它。"""
     rows = [dict(row, occurred_at=_as_utc(row["occurred_at"])) for row in rows]
     query_events = [
         row for row in rows if row["event_type"] in QUERY_EVENT_TYPES
     ]
     nav_events = [
         row for row in rows if row["event_type"] == "navigation_clicked"
+    ]
+    # 30 天指標的資料來源：明確傳入最近 30 臺北日查詢列時優先，
+    # 未傳入時退回時窗列（直接以 30d 時窗彙整仍正確）。
+    rolling_rows = (
+        rows if rolling_30d_rows is None else [
+            dict(row, occurred_at=_as_utc(row["occurred_at"]))
+            for row in rolling_30d_rows
+        ]
+    )
+    rolling_query_events = [
+        row for row in rolling_rows if row["event_type"] in QUERY_EVENT_TYPES
     ]
 
     completed_ids = {
@@ -239,7 +250,7 @@ def summarize_events(rows, now_utc, min_devices=5):
         local_today - timedelta(days=29)
     ).astimezone(timezone.utc)
     dates_by_device = {}
-    for row in query_events:
+    for row in rolling_query_events:
         if row["occurred_at"] < repeat_start_utc:
             continue
         dates_by_device.setdefault(
@@ -254,7 +265,7 @@ def summarize_events(rows, now_utc, min_devices=5):
     )
 
     durations = sorted(
-        row["duration_ms"] for row in query_events
+        row["duration_ms"] for row in rolling_query_events
         if row.get("duration_ms") is not None
     )
     median_ms = statistics.median(durations) if durations else None
