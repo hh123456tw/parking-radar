@@ -20,7 +20,7 @@ def test_decision_cards_keep_required_data_and_actions():
     assert 'target="_blank"' in script
     assert 'rel="noopener noreferrer"' in script
     assert 'data-history-lot="${escapeHtml(lot.lot_id)}"' in script
-    assert "function compactLot(lot)" in script
+    assert "function compactLot(lot, index)" in script
     assert "data.data_notice" in script
     assert "score-details" not in script
 
@@ -132,5 +132,80 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "navigation-v1" in template
+    assert "analytics-v1" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
+
+
+def test_opt_in_controls_and_privacy_link_exist():
+    """同意橫幅、隱私說明與本機 UUID 是分析的最小入口。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="analytics-consent"' in template
+    assert 'id="analytics-accept"' in template
+    assert 'id="analytics-decline"' in template
+    assert "parking_analytics_consent" in script
+    assert "crypto.randomUUID()" in script
+
+
+def test_consent_banner_copy_is_exact():
+    """同意橫幅文案必須逐字保留，不能淡化隱私承諾。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    copy = "是否允許匿名使用分析？只記錄查詢是否成功、速度與導航點擊；不保存地址、對話、IP 或手機位置，90 天後刪除。"
+    assert copy in template
+    assert "允許匿名分析" in template
+    assert "不要分析" in template
+    assert "查看隱私說明" in template
+
+
+def test_footer_offers_privacy_note_and_change_choice():
+    """頁尾要有隱私說明錨點與可重新開啟選擇的控制項。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    assert 'id="privacy-note"' in template
+    assert 'id="analytics-choice"' in template
+
+
+def test_navigation_uses_beacon_with_keepalive_fallback():
+    """導航點擊先送 sendBeacon，不可用或失敗時退回 keepalive fetch。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "navigator.sendBeacon" in script
+    assert "keepalive:true" in script.replace(" ", "")
+    assert "data-navigation-rank" in script
+
+
+def test_navigation_capture_uses_single_delegated_handler():
+    """導航分析只靠一個委派的 document 點擊處理器，連結不得內嵌 JS。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'document.addEventListener("click"' in script
+    assert 'closest("a[data-navigation-rank]")' in script
+    assert "onclick=" not in template
+
+
+def test_navigation_payload_is_allowlisted_scalars_from_attributes():
+    """導航事件只能由 data-* 屬性組成白名單純量，帶最新 request_id。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'event_type:"navigation_clicked"' in script
+    assert "analytics_id:" in script
+    assert "request_id:activeRequestId" in script
+    assert "parking_lot_id:" in script
+    assert "availability_bucket:" in script
+
+
+def test_active_request_id_updates_only_from_terminal_result():
+    """只有終端查詢結果成功時才更新 activeRequestId，供導航事件使用。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "let activeRequestId" in script
+    assert "activeRequestId = data.request_id" in script
+
+
+def test_pwa_open_and_navigation_event_types_exist():
+    """同意後每頁載入記錄一次 pwa_opened，導航點擊記錄 navigation_clicked。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert '"pwa_opened"' in script
+    assert '"navigation_clicked"' in script

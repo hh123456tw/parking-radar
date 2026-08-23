@@ -1,5 +1,7 @@
 """分析路由測試：查詢儀表、事件端點白名單與最佳努力寫入。"""
 
+import hashlib
+import hmac
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -367,7 +369,8 @@ def test_stale_client_version_records_failed_validation_when_consented(monkeypat
     assert written[0]["outcome_code"] == "failed_validation"
 
 
-def test_navigation_event_requires_consent_and_allowlisted_fields(monkeypatch):
+def test_navigation_event_requires_body_uuid_and_allowlisted_fields(monkeypatch):
+    """事件端點只接受 body 的合法 UUID 與白名單欄位，不依賴自訂標頭。"""
     app = make_analytics_app(monkeypatch)
     client = app.test_client()
     forbidden = [
@@ -380,11 +383,12 @@ def test_navigation_event_requires_consent_and_allowlisted_fields(monkeypatch):
         response = client.post(
             "/api/analytics/events",
             json=valid_navigation_payload(**overrides),
-            headers=analytics_headers(),
         )
         assert response.status_code == 400
     assert client.post(
-        "/api/analytics/events", json=valid_navigation_payload()).status_code == 204
+        "/api/analytics/events",
+        json=valid_navigation_payload(),
+    ).status_code == 204
 
 
 def test_navigation_event_writes_hashed_id_and_returns_204(monkeypatch):
@@ -394,7 +398,6 @@ def test_navigation_event_writes_hashed_id_and_returns_204(monkeypatch):
     response = app.test_client().post(
         "/api/analytics/events",
         json=valid_navigation_payload(),
-        headers=analytics_headers(),
     )
     assert response.status_code == 204
     event = written[0]
@@ -408,6 +411,22 @@ def test_navigation_event_writes_hashed_id_and_returns_204(monkeypatch):
     assert event["availability_bucket"] == "11_plus"
 
 
+def test_event_hmac_derives_from_body_uuid_not_headers(monkeypatch):
+    """HMAC 必須由 body 的 analytics_id 計算，即使標頭帶其他 UUID 也不受影響。"""
+    app = make_analytics_app(monkeypatch)
+    written = []
+    app.extensions["analytics_writer"] = written.append
+    response = app.test_client().post(
+        "/api/analytics/events",
+        json=valid_navigation_payload(),
+        headers={"X-Analytics-Id": "11111111-1111-1111-1111-111111111111"},
+    )
+    assert response.status_code == 204
+    expected_hash = hmac.new(
+        "test-secret".encode(), VALID_UUID.encode(), hashlib.sha256).hexdigest()
+    assert written[0]["anonymous_id_hash"] == expected_hash
+
+
 def test_pwa_opened_event_writes_without_request_id(monkeypatch):
     app = make_analytics_app(monkeypatch)
     written = []
@@ -419,7 +438,6 @@ def test_pwa_opened_event_writes_without_request_id(monkeypatch):
             "analytics_id": VALID_UUID,
             "source": "installed_pwa",
         },
-        headers=analytics_headers(),
     )
     assert response.status_code == 204
     assert written[0]["event_type"] == "pwa_opened"
@@ -434,7 +452,6 @@ def test_disabled_analytics_returns_204_without_writing(monkeypatch):
     response = app.test_client().post(
         "/api/analytics/events",
         json=valid_navigation_payload(),
-        headers=analytics_headers(),
     )
     assert response.status_code == 204
     assert written == []
@@ -448,7 +465,6 @@ def test_event_endpoint_survives_writer_exception(monkeypatch, caplog):
         response = app.test_client().post(
             "/api/analytics/events",
             json=valid_navigation_payload(),
-            headers=analytics_headers(),
         )
     assert response.status_code == 204
     assert "analytics_write_failed" in caplog.text

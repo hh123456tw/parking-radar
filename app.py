@@ -545,8 +545,6 @@ def create_app(test_config=None):
             return "", 204
         if not app.config.get("ANALYTICS_HMAC_SECRET", ""):
             return "", 204
-        if request.headers.get("X-Analytics-Consent") != "1":
-            return "", 204
         payload = request.get_json(silent=True) or {}
         if not isinstance(payload, dict):
             return jsonify(error="JSON 內容必須是物件"), 400
@@ -568,8 +566,10 @@ def create_app(test_config=None):
             UUID(raw_id)
         except (TypeError, ValueError, AttributeError):
             return jsonify(error="analytics_id 必須是 UUID"), 400
+        # sendBeacon 無法帶自訂標頭；前端只在明確同意後才送出 body UUID，故以此計算 HMAC。
         anonymous_hash = analytics_identity(
-            request.headers, app.config.get("ANALYTICS_HMAC_SECRET", ""))
+            {"X-Analytics-Consent": "1", "X-Analytics-Id": raw_id},
+            app.config.get("ANALYTICS_HMAC_SECRET", ""))
         if anonymous_hash is None:
             return jsonify(error="需要明確同意與合法 UUID"), 400
         event_kwargs = {
