@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, Flask 3, PyMySQL, MySQL 8, vanilla JavaScript, HTML/CSS, Nginx, Linux cron, pytest, Node syntax check.
 
-**Spec:** `C:/Users/cygnu/.gstack/projects/hh123456tw-parking-radar/zebra-master-design-20260823-230638.md`
+**Spec:** 外部設計規格 `zebra-master-design-20260823-230638.md`（個人絕對路徑不納入版本控制）
 
 ## Global Constraints
 
@@ -835,5 +835,4 @@ Expected final state: all checks green, branch committed, no merge/push/deploy p
 - Scope check: no member system, external analytics, monitoring platform, alerting, location permission, recommendation change, or deployment is included.
 - Type consistency: `request_id` is a UUID string; `anonymous_id_hash` is a 64-character HMAC hex string; UTC datetimes flow from range parsing to parameterized DB reads; front-end enum values match server allowlists.
 - Placeholder scan: no `TBD`, deferred implementation, or unspecified test step remains.
-
 
