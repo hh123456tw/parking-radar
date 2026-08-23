@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run Python tests
+        run: python -m pytest -q
+      - name: Compile Python
+        run: python -m compileall -q app.py ai_service.py analysis.py calendar_service.py collector.py config.py database.py fee_service.py geocoder.py parking_metadata.py walking_service.py tests
+      - name: Check JavaScript syntax
+        run: |
+          node --check static/app.js
+          node --check static/sw.js
