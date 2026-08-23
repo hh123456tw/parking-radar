@@ -87,6 +87,8 @@ document.addEventListener("click", event => {
 });
 
 async function submitQuery(payload) {
+  // 每次新查詢先清空 request_id，避免失敗或等待期間的點擊連到上一筆成功查詢。
+  activeRequestId = null;
   hideLocationChoices();
   showStatus("正在分析並確認官方停車資料…", "");
   const controller = new AbortController();

@@ -203,6 +203,16 @@ def test_active_request_id_updates_only_from_terminal_result():
     assert "activeRequestId = data.request_id" in script
 
 
+def test_active_request_id_resets_before_each_query():
+    """新查詢開始要先清空 activeRequestId，失敗或進行中點擊不能連到上一筆。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    submit = script.split("async function submitQuery(payload)", 1)[1].split(
+        'document.querySelector("#chat-form")', 1)[0]
+
+    assert "activeRequestId = null" in submit
+    assert submit.index("activeRequestId = null") < submit.index('fetch("/api/query"')
+
+
 def test_pwa_open_and_navigation_event_types_exist():
     """同意後每頁載入記錄一次 pwa_opened，導航點擊記錄 navigation_clicked。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
