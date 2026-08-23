@@ -9,6 +9,7 @@ import analytics_cleanup
 SITE = Path("deploy/nginx-parking-radar.conf")
 LOGGING = Path("deploy/nginx-parking-radar-log-format.conf")
 ENV_EXAMPLE = Path(".env.example")
+README = Path("README.md")
 FIXED_NOW = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
 # 90 天前：2026-05-25T12:00Z（手算字面值，不經由被測程式推導）。
 EXPECTED_CUTOFF = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
@@ -57,6 +58,16 @@ def test_example_env_has_names_but_no_real_secrets():
     assert "ANALYTICS_HMAC_SECRET=" in text
     assert "DEPLOY_VERSION=" in text
     assert "dev-only-change-me" not in text
+
+
+def test_readme_applies_analytics_migration_before_restart_and_reload():
+    text = README.read_text(encoding="utf-8")
+    flow = text.split("### 部署補充：分析儀表板管理端保護與清理", 1)[1]
+    flow = flow.split("#### 回滾", 1)[0]
+    assert flow.index("migrations/20260823_add_analytics_events.sql") < \
+        flow.index("systemctl restart parking-radar")
+    assert flow.index("migrations/20260823_add_analytics_events.sql") < \
+        flow.index("sudo nginx -t && sudo systemctl reload nginx")
 
 
 class FakeConnection:

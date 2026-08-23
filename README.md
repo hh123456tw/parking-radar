@@ -154,6 +154,10 @@ Register-ScheduledTask `
 管理儀表板（`/admin/` 下所有 HTML 與 API）由 Nginx Basic Auth 保護；公開使用者不需登入，
 Flask 不新增任何帳號機制。密碼雜湊與 `ANALYTICS_HMAC_SECRET` 只存在 VM 上，一律不進入 Git。
 
+順序重點：先套用遷移建立 `analytics_events`，再重啟 Gunicorn 載入分析程式碼，
+最後才重載 Nginx 對外暴露 `/admin/`。htpasswd 與 Nginx 設定檔可先準備，
+但不要在資料表存在前啟動分析程式碼或重載 Nginx。
+
 1. 產生 HMAC 秘密並寫入 `.env`（只在 VM 上執行）：
    `openssl rand -hex 32`
    把輸出貼到 `/opt/parking-hell/.env` 的 `ANALYTICS_HMAC_SECRET=` 之後。
@@ -162,13 +166,15 @@ Flask 不新增任何帳號機制。密碼雜湊與 `ANALYTICS_HMAC_SECRET` 只�
    `sudo htpasswd -c /etc/nginx/.htpasswd-parking-radar admin`
 3. 更新 `deploy/nginx-parking-radar.conf`（沿用既有安裝方式覆蓋站台設定），並安裝日誌格式／限流設定：
    `sudo install -m 644 deploy/nginx-parking-radar-log-format.conf /etc/nginx/conf.d/`
-4. 測試並重載 Nginx：
-   `sudo nginx -t && sudo systemctl reload nginx`
-5. 套用分析事件遷移（重複執行安全）：
+4. 套用分析事件遷移（重複執行安全）：
    `mysql -u parking -p parking_hell < migrations/20260823_add_analytics_events.sql`
-6. 以 `parking` 使用者加入每日清理 cron：
+5. 重啟 Gunicorn 讓分析程式碼在資料表存在後載入，並確認健康檢查：
+   `sudo systemctl restart parking-radar && curl -fsS http://127.0.0.1:8000/health`
+6. 測試並重載 Nginx：
+   `sudo nginx -t && sudo systemctl reload nginx`
+7. 以 `parking` 使用者加入每日清理 cron：
    `17 3 * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python analytics_cleanup.py >> /opt/parking-hell/analytics-cleanup.log 2>&1`
-7. 驗證：
+8. 驗證：
    - `curl -i http://127.0.0.1/admin/analytics` 未帶密碼時回傳 401；帶密碼時回傳 200 且回應含 `Cache-Control: no-store`。
    - `sudo tail -f /var/log/nginx/parking-radar.access.log` 每行只含時間、方法＋路徑、協定、狀態、回應位元組與處理時間，不含 IP。
    - 儀表板顯示 `.env` 的 `DEPLOY_VERSION`，且分析功能為啟用狀態。
