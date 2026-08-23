@@ -10,7 +10,8 @@ from flask import Flask, jsonify, render_template, request, session
 from ai_service import IntentServiceError, TAIPEI_DISTRICTS, parse_parking_query
 from analysis import (build_history_series, district_hell_score,
                       rank_candidates, rank_district_candidates,
-                      split_recommendation_groups, summarize_hour_comparison,
+                      select_walking_candidates, split_recommendation_groups,
+                      summarize_hour_comparison,
                       summarize_matching_history)
 from calendar_service import classify_arrival_day
 from config import Config
@@ -20,6 +21,7 @@ from database import (fetch_current_lots, fetch_history,
                       get_connection)
 from fee_service import build_fee_summary
 from geocoder import geocode_address, geocode_candidates, resolve_known_landmark
+from walking_service import WalkingRouteError, fetch_walking_routes
 
 _refresh_lock = Lock()
 LOCATION_CHOICE_CLIENT_VERSION = "2"
@@ -213,7 +215,8 @@ def public_candidate(row):
         "facility_type", "facility_type_label", "facility_source",
     )
     result = {key: row.get(key) for key in keys}
-    for key in ("latitude", "longitude", "distance_m", "hell_score",
+    for key in ("latitude", "longitude", "distance_m", "walking_distance_m",
+                "walking_duration_minutes", "hell_score",
                 "historical_hell_score", "recommendation_score"):
         result[key] = float(row[key]) if row.get(key) is not None else None
     return result
@@ -313,6 +316,23 @@ def create_app(test_config=None):
                 # 一般查詢只使用即時資料與距離；歷史由使用者點擊後的專用 API 載入。
                 ranked = rank_candidates(
                     rows, destination["latitude"], destination["longitude"])
+                api_key = app.config.get("OPENROUTESERVICE_API_KEY", "")
+                if api_key:
+                    route_rows = select_walking_candidates(
+                        ranked,
+                        limit=app.config["WALKING_ROUTE_CANDIDATE_LIMIT"],
+                    )
+                    try:
+                        walking_routes = fetch_walking_routes(
+                            route_rows,
+                            destination["latitude"], destination["longitude"],
+                            api_key,
+                            timeout=app.config["WALKING_ROUTE_TIMEOUT_SECONDS"],
+                        )
+                        for row in ranked:
+                            row.update(walking_routes.get(row["lot_id"], {}))
+                    except WalkingRouteError as exc:
+                        app.logger.warning("%s，改用直線距離", exc)
                 score_rows = ranked
             else:
                 # 行政區可能包含大量場站，避免每次查詢都讀取歷史快照。

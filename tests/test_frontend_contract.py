@@ -23,6 +23,21 @@ def test_decision_cards_keep_required_data_and_actions():
     assert "score-details" not in script
 
 
+def test_cards_and_map_distinguish_walking_route_from_straight_fallback():
+    """有路線時顯示步行分鐘；降級時必須明說是直線距離。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+
+    assert "function formatProximity(lot)" in script
+    assert "lot.walking_duration_minutes" in script
+    assert "lot.walking_distance_m" in script
+    assert "步行約" in script
+    assert "直線約" in script
+    assert script.count("formatProximity(lot)") >= 5
+    assert "同風險場站按步行時間排序" in template
+    assert "© openrouteservice.org by HeiGIT" in template
+
+
 def test_query_has_timeout_and_history_does_not_block_cards():
     """Gemini 或歷史 API 變慢時，頁面不得永久停在分析中。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
@@ -115,5 +130,5 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "self-use-v1" in template
+    assert "walking-v1" in template
     assert 'document.querySelector("#result-content").hidden = true' in script

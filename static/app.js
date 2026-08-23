@@ -129,6 +129,16 @@ function formatDistance(value) {
   return value < 1000 ? `${Math.round(value)} m` : `${(value / 1000).toFixed(1)} km`;
 }
 
+// 優先顯示停好車後的實際步行時間；外部路線失敗時誠實標示直線距離。
+function formatProximity(lot) {
+  if (lot.walking_duration_minutes != null && lot.walking_distance_m != null) {
+    const minutes = Math.max(1, Math.round(lot.walking_duration_minutes));
+    return `步行約 ${minutes} 分鐘・${formatDistance(lot.walking_distance_m)}`;
+  }
+  if (lot.distance_m == null) return "行政區模式";
+  return `直線約 ${formatDistance(lot.distance_m)}`;
+}
+
 function districtStatus(score) {
   if (score == null) return "資料不足";
   if (score >= 95) return "停車地獄";
@@ -210,7 +220,7 @@ function primaryCard(lot, index) {
   return `<article class="parking-card ${cardTone}">
     <div class="card-top">
       <span class="rank-badge">${rankLabel} ${index + 1}</span>
-      <span class="distance-label">${escapeHtml(formatDistance(lot.distance_m))}</span>
+      <span class="distance-label">${escapeHtml(formatProximity(lot))}</span>
     </div>
     <h3>${escapeHtml(lot.lot_name)}</h3>
     ${mapsUrl
@@ -266,7 +276,7 @@ function compactLot(lot) {
     <span class="compact-status">${escapeHtml(lot.decision_label)}</span>
     <div><strong>${escapeHtml(lot.lot_name)}</strong><small>${lot.available_spaces} / ${lot.total_spaces} 格可停</small></div>
     ${compactMetaLine(lot)}
-    <span>${escapeHtml(formatDistance(lot.distance_m))}</span>
+    <span>${escapeHtml(formatProximity(lot))}</span>
     ${mapAction}
   </article>`;
 }
@@ -306,7 +316,7 @@ function renderCards(data) {
 }
 
 function markerPopup(lot) {
-  return `<strong>${escapeHtml(lot.lot_name)}</strong><br>剩餘 ${lot.available_spaces} / ${lot.total_spaces} 格<br>${escapeHtml(formatDistance(lot.distance_m))}`;
+  return `<strong>${escapeHtml(lot.lot_name)}</strong><br>剩餘 ${lot.available_spaces} / ${lot.total_spaces} 格<br>${escapeHtml(formatProximity(lot))}`;
 }
 
 function renderMap(data) {
@@ -353,7 +363,7 @@ function renderMap(data) {
 
   const priorities = data.recommendations || [];
   document.querySelector("#map-priorities").innerHTML = priorities.length
-    ? priorities.map((lot, index) => `<li><button type="button" data-map-lot="${escapeHtml(lot.lot_id)}"><span>${index + 1}</span><strong>${escapeHtml(lot.lot_name)}</strong><small>${lot.available_spaces} 格可停・${escapeHtml(formatDistance(lot.distance_m))}</small></button></li>`).join("")
+    ? priorities.map((lot, index) => `<li><button type="button" data-map-lot="${escapeHtml(lot.lot_id)}"><span>${index + 1}</span><strong>${escapeHtml(lot.lot_name)}</strong><small>${lot.available_spaces} 格可停・${escapeHtml(formatProximity(lot))}</small></button></li>`).join("")
     : `<li class="map-empty">目前沒有首選位置</li>`;
 
   document.querySelectorAll("[data-map-lot]").forEach(button => {
