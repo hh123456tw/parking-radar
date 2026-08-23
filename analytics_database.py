@@ -1,5 +1,7 @@
 """匿名分析事件的參數化持久層；交易由呼叫端負責。"""
 
+from datetime import timedelta
+
 # 資料表 16 個可寫入欄位（不含自動產生的 event_id），順序即 INSERT 順序。
 EVENT_COLUMNS = (
     "event_type", "occurred_at", "request_id", "anonymous_id_hash",
@@ -65,6 +67,32 @@ def fetch_events(connection, start_utc, end_utc):
     with connection.cursor() as cursor:
         cursor.execute(sql, (start_utc, end_utc))
         return list(cursor.fetchall())
+
+
+def fetch_dashboard_events(connection, start_utc, end_utc):
+    """讀取時窗內查詢事件與至 end+24h 的導航事件，供儀表板彙整。"""
+    select = """
+        SELECT event_type, occurred_at, request_id, anonymous_id_hash,
+               district, area_bucket, place_type, query_mode, outcome_code,
+               duration_ms, result_count, clicked_rank, parking_lot_id,
+               walking_minutes, availability_bucket, source
+        FROM analytics_events
+    """
+    query_sql = select + (
+        " WHERE event_type IN ('query_completed', 'query_failed')"
+        " AND occurred_at >= %s AND occurred_at < %s ORDER BY occurred_at"
+    )
+    nav_sql = select + (
+        " WHERE event_type = 'navigation_clicked'"
+        " AND occurred_at >= %s AND occurred_at < %s ORDER BY occurred_at"
+    )
+    nav_end = end_utc + timedelta(hours=24)
+    with connection.cursor() as cursor:
+        cursor.execute(query_sql, (start_utc, end_utc))
+        rows = list(cursor.fetchall())
+        cursor.execute(nav_sql, (start_utc, nav_end))
+        rows.extend(cursor.fetchall())
+        return rows
 
 
 def delete_expired_events(connection, cutoff_utc):

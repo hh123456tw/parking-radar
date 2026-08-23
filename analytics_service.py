@@ -2,9 +2,11 @@
 
 import hashlib
 import hmac
-from datetime import datetime, timezone
-from math import floor
+import statistics
+from datetime import datetime, timedelta, timezone
+from math import ceil, floor
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 EVENT_TYPES = frozenset({
     "query_completed", "query_failed", "navigation_clicked", "pwa_opened",
@@ -18,6 +20,9 @@ OUTCOME_CODES = frozenset({
     "failed_validation", "failed_geocode", "failed_no_candidates",
     "failed_database", "failed_internal",
 })
+NAVIGATION_OBSERVATION_HOURS = 24
+TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+DASHBOARD_RANGES = frozenset({"today", "7d", "30d"})
 
 
 def analytics_identity(headers, secret):
@@ -143,3 +148,165 @@ def _build_event(
         "availability_bucket": availability_bucket,
         "source": source,
     }
+
+
+def parse_dashboard_range(value, now_utc):
+    """把 today/7d/30d 換算為 Asia/Taipei 午夜的 UTC 半開區間。"""
+    if value not in DASHBOARD_RANGES:
+        raise ValueError(f"invalid dashboard range: {value}")
+    local_now = now_utc.astimezone(TAIPEI_TZ)
+    local_end = local_now.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ) + timedelta(days=1)
+    days = {"today": 1, "7d": 7, "30d": 30}[value]
+    local_start = local_end - timedelta(days=days)
+    return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
+
+
+def summarize_events(rows, now_utc, min_devices=5):
+    """彙整儀表板指標：查詢、點擊、裝置、耗時與樣本門檻。"""
+    rows = [dict(row, occurred_at=_as_utc(row["occurred_at"])) for row in rows]
+    query_events = [
+        row for row in rows if row["event_type"] in QUERY_EVENT_TYPES
+    ]
+    nav_events = [
+        row for row in rows if row["event_type"] == "navigation_clicked"
+    ]
+
+    completed_ids = {
+        row["request_id"] for row in query_events
+        if row["event_type"] == "query_completed"
+    }
+    failed_ids = {
+        row["request_id"] for row in query_events
+        if row["event_type"] == "query_failed"
+    }
+    completed_queries = len(completed_ids)
+    total_queries = completed_queries + len(failed_ids)
+    degraded_queries = len({
+        row["request_id"] for row in query_events
+        if row["event_type"] == "query_completed"
+        and str(row.get("outcome_code") or "").startswith("degraded_")
+    })
+
+    eligible = {
+        row["request_id"]: row for row in query_events
+        if row["event_type"] == "query_completed"
+        and (row.get("result_count") or 0) >= 1
+    }
+    first_clicks = {}
+    for nav in sorted(nav_events, key=lambda row: row["occurred_at"]):
+        query = eligible.get(nav["request_id"])
+        if (
+            query is None
+            or nav.get("anonymous_id_hash") != query.get("anonymous_id_hash")
+        ):
+            continue
+        click_at = nav["occurred_at"]
+        observation_end = query["occurred_at"] + timedelta(
+            hours=NAVIGATION_OBSERVATION_HOURS
+        )
+        if click_at < query["occurred_at"] or click_at >= observation_end:
+            continue
+        if nav["request_id"] not in first_clicks:
+            first_clicks[nav["request_id"]] = nav
+
+    click_rank_counts = {
+        str(rank): sum(
+            1 for nav in first_clicks.values()
+            if nav.get("clicked_rank") == rank
+        )
+        for rank in (1, 2, 3)
+    }
+    click_rate = (
+        len(first_clicks) / len(eligible) * 100 if eligible else None
+    )
+    provisional = any(
+        row["occurred_at"] > now_utc - timedelta(
+            hours=NAVIGATION_OBSERVATION_HOURS
+        )
+        for row in query_events
+    )
+
+    query_devices = {
+        row["anonymous_id_hash"] for row in query_events
+    }
+    local_now = now_utc.astimezone(TAIPEI_TZ)
+    local_today = local_now.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    repeat_start_utc = (
+        local_today - timedelta(days=29)
+    ).astimezone(timezone.utc)
+    dates_by_device = {}
+    for row in query_events:
+        if row["occurred_at"] < repeat_start_utc:
+            continue
+        dates_by_device.setdefault(
+            row["anonymous_id_hash"], set()
+        ).add(row["occurred_at"].astimezone(TAIPEI_TZ).date())
+    repeat_devices = sum(
+        1 for dates in dates_by_device.values() if len(dates) >= 2
+    )
+    repeat_rate = (
+        repeat_devices / len(dates_by_device) * 100
+        if dates_by_device else None
+    )
+
+    durations = sorted(
+        row["duration_ms"] for row in query_events
+        if row.get("duration_ms") is not None
+    )
+    median_ms = statistics.median(durations) if durations else None
+    p95_ms = (
+        durations[ceil(0.95 * len(durations)) - 1] if durations else None
+    )
+
+    outcome_code_counts = {}
+    for row in query_events:
+        code = row.get("outcome_code")
+        if code:
+            outcome_code_counts[code] = outcome_code_counts.get(code, 0) + 1
+
+    return {
+        "completed_queries": completed_queries,
+        "query_success_rate": (
+            completed_queries / total_queries * 100 if total_queries else None
+        ),
+        "degraded_queries": degraded_queries,
+        "navigation_click_rate": click_rate,
+        "navigation_provisional": provisional,
+        "click_rank_counts": click_rank_counts,
+        "anonymous_query_devices": len(query_devices),
+        "repeat_use_rate": repeat_rate,
+        "response_median_ms": median_ms,
+        "response_p95_ms": p95_ms,
+        "districts": _segment_rows(query_events, "district", min_devices),
+        "place_types": _segment_rows(query_events, "place_type", min_devices),
+        "outcome_code_counts": outcome_code_counts,
+    }
+
+
+def _as_utc(value):
+    """資料庫回傳的無時區時間視為 UTC，統一成有時區再比較。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _segment_rows(query_events, key, min_devices):
+    """依欄位值統計查詢裝置數，未達樣本下限的切片不列出。"""
+    devices_by_value = {}
+    for row in query_events:
+        value = row.get(key)
+        if value is None:
+            continue
+        devices_by_value.setdefault(value, set()).add(
+            row["anonymous_id_hash"]
+        )
+    segments = [
+        {key: value, "devices": len(devices)}
+        for value, devices in devices_by_value.items()
+        if len(devices) >= min_devices
+    ]
+    return sorted(segments, key=lambda item: (-item["devices"], item[key]))
