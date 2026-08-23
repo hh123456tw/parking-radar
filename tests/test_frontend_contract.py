@@ -20,7 +20,7 @@ def test_decision_cards_keep_required_data_and_actions():
     assert 'target="_blank"' in script
     assert 'rel="noopener noreferrer"' in script
     assert 'data-history-lot="${escapeHtml(lot.lot_id)}"' in script
-    assert "function compactLot(lot, index)" in script
+    assert "function compactLot(lot)" in script
     assert "data.data_notice" in script
     assert "score-details" not in script
 
@@ -148,24 +148,65 @@ def test_opt_in_controls_and_privacy_link_exist():
     assert "crypto.randomUUID()" in script
 
 
-def test_decline_removes_consent_and_uuid_without_sending_events():
-    """拒絕選擇要同時刪除同意與本機 UUID，且不送出任何分析請求。"""
+def test_decline_persists_choice_and_removes_uuid_without_sending_events():
+    """拒絕選擇要固定寫入 declined、刪除本機 UUID，且不送出任何分析請求。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
     decline = script.split(
         'declineButton.addEventListener("click"', 1)[1]
-    assert "localStorage.removeItem(ANALYTICS_CONSENT_KEY)" in decline
+    assert 'localStorage.setItem(ANALYTICS_CONSENT_KEY, "declined")' in decline
     assert "localStorage.removeItem(ANALYTICS_ID_KEY)" in decline
+    assert "localStorage.removeItem(ANALYTICS_CONSENT_KEY)" not in decline
     assert "sendAnalyticsEvent" not in decline
+
+
+def test_consent_banner_shows_only_when_no_choice_exists():
+    """橫幅只在完全沒有選擇紀錄時顯示；已同意或已拒絕都不再打擾。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    banner = script.split(
+        "if (consentSection && acceptButton && declineButton)", 1)[1]
+
+    assert "localStorage.getItem(ANALYTICS_CONSENT_KEY) === null" in banner
+    assert "analyticsConsented()" not in banner.split(
+        "if (changeButton && consentSection)", 1)[0]
+
+
+def test_compact_navigation_links_use_rank_zero():
+    """其他場站的精簡導航不得偽裝成首選名次 1-3。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    primary = script.split("function primaryCard", 1)[1].split(
+        "function compactLot", 1)[0]
+    compact = script.split("function compactLot", 1)[1].split(
+        "function renderCards", 1)[0]
+
+    assert 'data-navigation-rank="${index + 1}"' in primary
+    assert 'data-navigation-rank="0"' in compact
+    assert "${index + 1}" not in compact
 
 
 def test_consent_banner_copy_is_exact():
     """同意橫幅文案必須逐字保留，不能淡化隱私承諾。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
-    copy = "是否允許匿名使用分析？只記錄查詢是否成功、速度與導航點擊；不保存地址、對話、IP 或手機位置，90 天後刪除。"
+    copy = "是否允許匿名使用分析？只記錄查詢是否成功、速度、導航點擊、行政區與約 1 公里的粗略區域；不保存完整地址、對話、IP 或手機位置，90 天後刪除。"
     assert copy in template
     assert "允許匿名分析" in template
     assert "不要分析" in template
     assert "查看隱私說明" in template
+    assert "行政區" in template
+    assert "約 1 公里的粗略區域" in template
+    assert "完整地址" in template
+
+
+def test_admin_dashboard_omits_place_type_diagnostic():
+    """地點類型欄位永遠沒有資料來源，儀表板不得再顯示空診斷表。"""
+    template = (ROOT / "templates" / "admin_analytics.html").read_text(
+        encoding="utf-8")
+    script = (ROOT / "static" / "admin_analytics.js").read_text(
+        encoding="utf-8")
+
+    assert "熱門地點類型" not in template
+    assert "place-type-body" not in template
+    assert "place-type-body" not in script
+    assert "place_types" not in script
 
 
 def test_footer_offers_privacy_note_and_change_choice():
@@ -173,6 +214,8 @@ def test_footer_offers_privacy_note_and_change_choice():
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     assert 'id="privacy-note"' in template
     assert 'id="analytics-choice"' in template
+    assert "不保存完整地址、對話、IP 或手機位置" in template
+    assert "行政區與約 1 公里見方的粗略區域" in template
 
 
 def test_navigation_uses_beacon_with_keepalive_fallback():

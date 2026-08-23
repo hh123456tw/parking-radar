@@ -72,6 +72,20 @@ def test_linux_status_missing_meminfo_is_gray(tmp_path, monkeypatch):
     assert status["load_5m"] == 0.3
 
 
+def test_linux_status_meminfo_empty_token_is_gray(tmp_path, monkeypatch):
+    """MemAvailable 缺值時不得以 IndexError 擊垮狀態讀取，要降級為灰色。"""
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(
+        "MemTotal: 1000 kB\nMemAvailable:\n", encoding="utf-8")
+    monkeypatch.setattr(
+        os, "getloadavg", lambda: (0.1, 0.3, 0.4), raising=False)
+
+    status = read_linux_status(meminfo_path=meminfo, disk_path=tmp_path)
+
+    assert status["memory_percent"] is None
+    assert status["load_5m"] == 0.3
+
+
 def test_linux_status_unsupported_load_and_disk_are_gray(
         tmp_path, monkeypatch):
     meminfo = tmp_path / "meminfo"

@@ -232,11 +232,12 @@ def summarize_events(rows, now_utc, min_devices=5, *, rolling_30d_rows=None):
     click_rate = (
         len(first_clicks) / len(eligible) * 100 if eligible else None
     )
+    # 暫估旗標只依「有結果的合格完成查詢」判斷；失敗或無結果查詢不會收到點擊。
     provisional = any(
-        row["occurred_at"] > now_utc - timedelta(
+        query["occurred_at"] > now_utc - timedelta(
             hours=NAVIGATION_OBSERVATION_HOURS
         )
-        for row in query_events
+        for query in eligible.values()
     )
 
     query_devices = {

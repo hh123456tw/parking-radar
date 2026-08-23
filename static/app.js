@@ -342,10 +342,10 @@ function feeMetaLine(lot) {
   </div>${feeNote}`;
 }
 
-function compactLot(lot, index) {
+function compactLot(lot) {
   const mapsUrl = googleMapsUrl(lot);
   const mapAction = mapsUrl
-    ? `<a href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer" data-navigation-rank="${index + 1}" data-lot-id="${escapeHtml(lot.lot_id)}" data-walking-minutes="${lot.walking_duration_minutes ?? ""}" data-availability-bucket="${availabilityBucket(lot.available_spaces)}">導航</a>`
+    ? `<a href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer" data-navigation-rank="0" data-lot-id="${escapeHtml(lot.lot_id)}" data-walking-minutes="${lot.walking_duration_minutes ?? ""}" data-availability-bucket="${availabilityBucket(lot.available_spaces)}">導航</a>`
     : `<span class="muted">無地圖</span>`;
   return `<article class="compact-lot ${escapeHtml(lot.decision_status)}">
     <span class="compact-status">${escapeHtml(lot.decision_label)}</span>
@@ -527,8 +527,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (consentSection && acceptButton && declineButton) {
-    // 尚未選擇才顯示橫幅；已同意或已拒絕的本頁載入不再打擾。
-    if (!analyticsConsented()) consentSection.hidden = false;
+    // 只有完全沒有選擇紀錄才顯示橫幅；已同意或已拒絕的本頁載入不再打擾。
+    if (localStorage.getItem(ANALYTICS_CONSENT_KEY) === null) {
+      consentSection.hidden = false;
+    }
     acceptButton.addEventListener("click", () => {
       localStorage.setItem(ANALYTICS_CONSENT_KEY, "accepted");
       // 同一台裝置只建立一次 UUID；之後重開選擇不會更換身份。
@@ -539,8 +541,8 @@ document.addEventListener("DOMContentLoaded", () => {
       recordPwaOpenedOnce();
     });
     declineButton.addEventListener("click", () => {
-      // 拒絕就同時刪除同意與 UUID，之後不再送出任何分析請求。
-      localStorage.removeItem(ANALYTICS_CONSENT_KEY);
+      // 拒絕就固定寫入 declined，並刪除 UUID；之後不再送出任何分析請求。
+      localStorage.setItem(ANALYTICS_CONSENT_KEY, "declined");
       localStorage.removeItem(ANALYTICS_ID_KEY);
       consentSection.hidden = true;
     });

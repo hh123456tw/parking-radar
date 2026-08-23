@@ -56,8 +56,26 @@ def test_access_log_format_omits_client_identity_and_query_string():
 def test_example_env_has_names_but_no_real_secrets():
     text = ENV_EXAMPLE.read_text(encoding="utf-8")
     assert "ANALYTICS_HMAC_SECRET=" in text
+    assert "ANALYTICS_ENABLED=1" in text
     assert "DEPLOY_VERSION=" in text
     assert "dev-only-change-me" not in text
+
+
+def test_access_log_format_omits_referrer_and_user_agent():
+    """日誌格式不得引用 referrer 或 User-Agent 變數。"""
+    logging_text = LOGGING.read_text(encoding="utf-8")
+    log_format_body = logging_text.split("log_format", 1)[1].split(";", 1)[0]
+    for variable in ("$http_referer", "$http_user_agent"):
+        assert variable not in log_format_body
+
+
+def test_exact_admin_path_redirects_into_protected_prefix():
+    """沒有斜線的 /admin 必須導向受保護的 /admin/，不能落到公開 proxy。"""
+    site = SITE.read_text(encoding="utf-8")
+    exact_block = site.split("location = /admin", 1)[1].split("}", 1)[0]
+    assert "return 301 /admin/;" in exact_block
+    assert "proxy_pass" not in exact_block
+    assert site.index("location = /admin") < site.index("location /admin/")
 
 
 def test_readme_applies_analytics_migration_before_restart_and_reload():

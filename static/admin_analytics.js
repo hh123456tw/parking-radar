@@ -108,8 +108,6 @@ function renderDiagnostics(summary) {
   renderTable("click-rank-body", clickRows, 3);
   renderTable("district-body", (summary.districts || []).map(
     (row) => [row.district, String(row.devices)]), 2);
-  renderTable("place-type-body", (summary.place_types || []).map(
-    (row) => [row.place_type, String(row.devices)]), 2);
   renderTable("outcome-body",
     Object.entries(summary.outcome_code_counts || {}), 2);
 }

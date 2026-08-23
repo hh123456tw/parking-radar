@@ -106,6 +106,30 @@ def test_recent_navigation_window_is_marked_provisional():
     assert summary["navigation_provisional"] is True
 
 
+def test_recent_failed_or_resultless_query_does_not_mark_provisional():
+    """暫估旗標只考慮有結果的合格完成查詢，失敗查詢不得觸發。"""
+    rows = [
+        query_row("query_failed", "req-f", "e" * 64, "failed_validation",
+                  50, 0, datetime(2026, 8, 23, 7, 55, tzinfo=timezone.utc)),
+        query_row("query_completed", "req-0", "f" * 64, "success",
+                  50, 0, datetime(2026, 8, 23, 7, 56, tzinfo=timezone.utc)),
+    ]
+    assert summarize_events(rows, NOW_UTC)["navigation_provisional"] is False
+
+
+def test_rank_zero_clicks_count_in_rate_but_not_rank_shares():
+    """rank 0（其他場站）要計入點擊率，但不得進入 1/2/3 名次占比。"""
+    rows = [
+        query_row("query_completed", "req-z", "a" * 64, "success", 100, 3,
+                  datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc)),
+        nav_row("req-z", "a" * 64, 0,
+                datetime(2026, 8, 23, 8, 10, tzinfo=timezone.utc)),
+    ]
+    summary = summarize_events(rows, NOW_UTC)
+    assert summary["navigation_click_rate"] == 100.0
+    assert summary["click_rank_counts"] == {"1": 0, "2": 0, "3": 0}
+
+
 def test_completed_observation_window_is_not_provisional():
     old_rows = [
         query_row("query_completed", "req-old", "e" * 64, "success", 90, 1,

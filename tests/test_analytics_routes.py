@@ -428,6 +428,42 @@ def test_navigation_event_writes_hashed_id_and_returns_204(monkeypatch):
     assert event["availability_bucket"] == "11_plus"
 
 
+def test_navigation_event_accepts_rank_zero_but_rejects_negative(monkeypatch):
+    """其他場站的精簡導航必須能送 rank 0；負值仍要拒絕。"""
+    app = make_analytics_app(monkeypatch)
+    written = []
+    app.extensions["analytics_writer"] = written.append
+    client = app.test_client()
+
+    accepted = client.post(
+        "/api/analytics/events",
+        json=valid_navigation_payload(clicked_rank=0),
+    )
+    rejected = client.post(
+        "/api/analytics/events",
+        json=valid_navigation_payload(clicked_rank=-1),
+    )
+
+    assert accepted.status_code == 204
+    assert written[0]["clicked_rank"] == 0
+    assert rejected.status_code == 400
+
+
+def test_navigation_event_rejects_parking_lot_id_over_32_chars(monkeypatch):
+    """parking_lot_id 上限必須與資料表 VARCHAR(32) 一致。"""
+    app = make_analytics_app(monkeypatch)
+    client = app.test_client()
+
+    assert client.post(
+        "/api/analytics/events",
+        json=valid_navigation_payload(parking_lot_id="L" * 33),
+    ).status_code == 400
+    assert client.post(
+        "/api/analytics/events",
+        json=valid_navigation_payload(parking_lot_id="L" * 32),
+    ).status_code == 204
+
+
 def test_event_hmac_derives_from_body_uuid_not_headers(monkeypatch):
     """HMAC 必須由 body 的 analytics_id 計算，即使標頭帶其他 UUID 也不受影響。"""
     app = make_analytics_app(monkeypatch)
@@ -503,6 +539,80 @@ def test_query_survives_writer_exception(monkeypatch, caplog):
     ]
     assert failures == ["analytics_write_failed event=query_completed"]
     assert "臺北市政府" not in caplog.text
+
+
+def test_terminal_events_use_elapsed_helper_for_duration(monkeypatch):
+    """所有終端事件（成功與各失敗路徑）都經由 elapsed_ms 記錄實際耗時。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "elapsed_ms", lambda _started, now=None: 1234)
+    written = []
+    app.extensions["analytics_writer"] = written.append
+
+    success = app.test_client().post(
+        "/api/query", json=manual_payload(), headers=analytics_headers())
+    validation = app.test_client().post(
+        "/api/query",
+        json={"mode": "manual", "district": "板橋區",
+              "arrival_time": "2026-08-23T18:00:00+08:00"},
+        headers=analytics_headers())
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: None)
+    geocode = app.test_client().post(
+        "/api/query", json=manual_payload(address="不存在的地址"),
+        headers=analytics_headers())
+    monkeypatch.setattr(
+        app_module, "parse_parking_query",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            app_module.IntentServiceError("Gemini 尚未設定")),
+    )
+    gemini = app.test_client().post(
+        "/api/query", json={"mode": "chat", "message": "我要去市政府"},
+        headers=analytics_headers())
+    monkeypatch.setattr(
+        app_module, "geocode_address", lambda *_args: {
+            "display_address": "臺北市政府", "latitude": 25.0375,
+            "longitude": 121.5637,
+        })
+    monkeypatch.setattr(
+        app_module, "fetch_current_lots",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
+    internal = app.test_client().post(
+        "/api/query", json=manual_payload(), headers=analytics_headers())
+
+    assert success.status_code == 200
+    assert validation.status_code == 400
+    assert geocode.status_code == 422
+    assert gemini.status_code == 503
+    assert internal.status_code == 503
+    assert [event["duration_ms"] for event in written] == [1234] * 5
+    assert [event["outcome_code"] for event in written] == [
+        "success", "failed_validation", "failed_geocode",
+        "failed_internal", "failed_internal",
+    ]
+
+
+def test_write_analytics_safely_tolerates_missing_event_type(monkeypatch, caplog):
+    """缺少 event_type 的畸形事件只能留下安全警告，不能讓端點失敗。"""
+    app = make_analytics_app(monkeypatch)
+    app.extensions["analytics_writer"] = lambda _event: (_ for _ in ()).throw(
+        RuntimeError("db down"))
+    monkeypatch.setattr(
+        app_module, "build_browser_event", lambda **_kwargs: {
+            "anonymous_id_hash": "a" * 64,
+        })
+    with caplog.at_level("WARNING"):
+        response = app.test_client().post(
+            "/api/analytics/events",
+            json=valid_navigation_payload(),
+        )
+    assert response.status_code == 204
+    failures = [
+        record.getMessage() for record in caplog.records
+        if "analytics_write_failed" in record.getMessage()
+    ]
+    assert failures == ["analytics_write_failed event=unknown"]
+    assert "不得接受" not in caplog.text
 
 
 def test_production_writer_commits_and_closes_fresh_connection(monkeypatch):

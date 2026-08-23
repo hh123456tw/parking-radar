@@ -99,7 +99,7 @@ def _read_memory_percent(meminfo_path):
         if total is None or available is None:
             return None
         return round((total - available) / total * 100, 1)
-    except (OSError, ValueError):
+    except (OSError, ValueError, IndexError):
         return None
 
 

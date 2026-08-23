@@ -45,7 +45,7 @@ flowchart TD
 
 ## 自動測試與 CI
 
-截至 2026-08-23 共 **199 項自動測試**（`pytest` 全數通過），涵蓋分析、路由、收集器、費用、行事曆、PWA 與 CI 合約；GitHub Actions 於每次 push／pull request 執行完整離線測試（見 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
+截至 2026-08-24 共 **298 項自動測試**（`pytest` 全數通過），涵蓋分析、路由、收集器、費用、行事曆、PWA、管理儀表板與 CI 合約；GitHub Actions 於每次 push／pull request 執行完整離線測試（見 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
 
 ## Windows 本機啟動
 
@@ -89,6 +89,7 @@ Register-ScheduledTask `
 | `GEMINI_MODEL` | 預設 `gemini-3.5-flash-lite` |
 | `NOMINATIM_USER_AGENT` | 必須包含可辨識的專題名稱與聯絡資訊 |
 | `OPENROUTESERVICE_API_KEY` | 免費步行路線 Matrix API 金鑰；留空時沿用直線距離 |
+| `ANALYTICS_ENABLED` | 匿名分析總開關；`1`（預設）啟用、`0` 停用。停用時事件端點一律 204 且不寫入，無需重啟即可套用 |
 | `ANALYTICS_HMAC_SECRET` | 匿名分析 HMAC 簽章秘密；部署時以 `openssl rand -hex 32` 產生，只放在 VM |
 | `DEPLOY_VERSION` | 管理儀表板顯示的部署版本識別（例如 Git commit 短碼） |
 
@@ -153,6 +154,9 @@ Register-ScheduledTask `
 
 管理儀表板（`/admin/` 下所有 HTML 與 API）由 Nginx Basic Auth 保護；公開使用者不需登入，
 Flask 不新增任何帳號機制。密碼雜湊與 `ANALYTICS_HMAC_SECRET` 只存在 VM 上，一律不進入 Git。
+
+地點類型（`place_type`）診斷目前暫緩：沒有可靠的允許清單來源，系統不會從自由文字推斷類別；
+事件欄位與彙整輸出保留為可空以維持向後相容，待有允許清單來源後再啟用。
 
 順序重點：先套用遷移建立 `analytics_events`，再重啟 Gunicorn 載入分析程式碼，
 最後才重載 Nginx 對外暴露 `/admin/`。htpasswd 與 Nginx 設定檔可先準備，

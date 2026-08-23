@@ -58,6 +58,12 @@ def snapshot_age_minutes(captured_at, now=None):
     return max(0, int((current - captured_at).total_seconds() // 60))
 
 
+def elapsed_ms(started, now=None):
+    """以 perf_counter 起點換算耗時毫秒；now 只供測試注入固定值。"""
+    current = now if now is not None else time.perf_counter()
+    return max(0, round((current - started) * 1000))
+
+
 def _latest_snapshot_time():
     """使用短連線讀取全庫最新快照時間，避免刷新後沿用舊交易。"""
     connection = get_connection()
@@ -270,7 +276,8 @@ def create_app(test_config=None):
             app.extensions["analytics_writer"](event)
         except Exception:
             app.logger.warning(
-                "analytics_write_failed event=%s", event["event_type"])
+                "analytics_write_failed event=%s",
+                event.get("event_type", "unknown"))
 
     def record_query_event(outcome_code, query_mode, request_id,
                            anonymous_hash, query_source, duration_ms,
@@ -347,7 +354,8 @@ def create_app(test_config=None):
         if not isinstance(payload, dict):
             return terminal({"error": "JSON 內容必須是物件"}, 400,
                             "failed_validation", query_mode, request_id,
-                            anonymous_hash, query_source, 0)
+                            anonymous_hash, query_source,
+                            elapsed_ms(query_started))
         try:
             if payload.get("mode") == "chat":
                 parsed = parse_parking_query(payload.get("message", ""), dict(session)).model_dump()
@@ -358,11 +366,12 @@ def create_app(test_config=None):
         except IntentServiceError as exc:
             return terminal({"error": str(exc), "fallback": "manual"}, 503,
                             "failed_internal", query_mode, request_id,
-                            anonymous_hash, query_source, 0)
+                            anonymous_hash, query_source,
+                            elapsed_ms(query_started))
         except (KeyError, TypeError, ValueError) as exc:
             return terminal({"error": str(exc)}, 400, "failed_validation",
                             query_mode, request_id, anonymous_hash,
-                            query_source, 0)
+                            query_source, elapsed_ms(query_started))
 
         connection = None
         try:
@@ -380,7 +389,8 @@ def create_app(test_config=None):
                     return terminal(
                         {"error": "畫面已更新，請重新整理頁面後再查詢"},
                         409, "failed_validation", query_mode, request_id,
-                        anonymous_hash, query_source, 0)
+                        anonymous_hash, query_source,
+                        elapsed_ms(query_started))
                 return jsonify(
                     needs_location_choice=True,
                     location_choices=verified_choices,
@@ -408,7 +418,8 @@ def create_app(test_config=None):
                     {"error": "找不到地址，請修正或改選行政區",
                      "fallback": "district"},
                     422, "failed_geocode", query_mode, request_id,
-                    anonymous_hash, query_source, 0)
+                    anonymous_hash, query_source,
+                    elapsed_ms(query_started))
             timings["geocode_ms"] = round(
                 (time.perf_counter() - geocode_started) * 1000)
 
@@ -524,7 +535,7 @@ def create_app(test_config=None):
             return terminal(
                 payload, 200, outcome,
                 query_mode, request_id, anonymous_hash, query_source,
-                round((time.perf_counter() - query_started) * 1000),
+                elapsed_ms(query_started),
                 result_count=len(ranked),
                 district=parsed.get("district"),
                 latitude=destination_coords.get("latitude"),
@@ -533,13 +544,13 @@ def create_app(test_config=None):
         except ParkingDataUnavailable as exc:
             return terminal({"error": str(exc)}, 503, "failed_database",
                             query_mode, request_id, anonymous_hash,
-                            query_source, 0)
+                            query_source, elapsed_ms(query_started))
         except Exception:
             app.logger.exception("停車查詢失敗")
             return terminal(
                 {"error": "服務暫時無法使用，請稍後再試"},
                 503, "failed_internal", query_mode, request_id,
-                anonymous_hash, query_source, 0)
+                anonymous_hash, query_source, elapsed_ms(query_started))
         finally:
             if connection is not None:
                 connection.close()
@@ -593,11 +604,13 @@ def create_app(test_config=None):
             walking_minutes = payload.get("walking_minutes")
             availability_bucket = payload.get("availability_bucket")
             if not isinstance(clicked_rank, int) or isinstance(
-                    clicked_rank, bool) or not 1 <= clicked_rank <= 99:
-                return jsonify(error="clicked_rank 必須是 1-99 的整數"), 400
+                    clicked_rank, bool) or not 0 <= clicked_rank <= 99:
+                return jsonify(error="clicked_rank 必須是 0-99 的整數"), 400
             if not isinstance(payload.get("parking_lot_id"), str) or not \
                     payload["parking_lot_id"].strip():
                 return jsonify(error="parking_lot_id 不能為空"), 400
+            if len(payload["parking_lot_id"].strip()) > 32:
+                return jsonify(error="parking_lot_id 不能超過 32 字元"), 400
             if walking_minutes is not None and (
                     isinstance(walking_minutes, bool)
                     or not isinstance(walking_minutes, (int, float))
