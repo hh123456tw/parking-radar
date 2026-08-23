@@ -1,6 +1,12 @@
-# 停車地獄雷達
+# 停車地獄雷達 🚗
 
-整合臺北市官方停車資料，以固定公式分析即時難度、歷史參考、距離與推薦；Gemini 只解析限定意圖。
+整合臺北市即時停車資料、實際步行距離與可解釋規則，回答「現在該停哪裡？」Gemini 只解析自然語言，推薦結果由可測試的 Python 規則決定。
+
+[Live Demo](https://aipe04.zebra-ai-gateway.com/) · [![CI](https://github.com/hh123456tw/parking-radar/actions/workflows/ci.yml/badge.svg)](https://github.com/hh123456tw/parking-radar/actions/workflows/ci.yml)
+
+![停車地獄雷達查詢結果](docs/images/parking-radar-demo.png)
+
+**Tech Stack:** Python 3.13 · Flask · MySQL · Pandas · Gemini · Leaflet · OpenRouteService · Pytest · Gunicorn · Nginx · GCP
 
 ## 功能範圍
 
@@ -8,9 +14,38 @@
 - 地址模式可使用 OpenRouteService 顯示停好車後的實際步行時間；服務失敗時退回直線距離。
 - 模糊地標可產生並驗證最多三個候選，使用者能在前端直接選擇。
 - 單頁 Leaflet 地圖與一張最近七天折線圖。
-- 不含導航、AI 空位預測、路邊格位、會員及個別民營業者爬蟲。
+- 結果圖卡可直接開啟 Google Maps 汽車導航；不含 AI 空位預測、路邊格位、會員及個別民營業者爬蟲。
 
 重要行為變更整理於 [CHANGELOG.md](CHANGELOG.md)。
+
+## 架構與工程決策
+
+```mermaid
+flowchart TD
+    U[使用者 / PWA] --> CF[Cloudflare HTTPS]
+    CF --> NX[Nginx]
+    NX --> GU[Gunicorn / Flask]
+    GU --> GM[Gemini 意圖解析]
+    GU --> GEO[Nominatim 地址搜尋]
+    GU --> ORS[OpenRouteService 步行路線]
+    GU --> AN[Python 固定推薦規則]
+    GU --> DB[(MySQL)]
+    COL[每 15 分鐘 Collector] --> API[臺北市開放資料]
+    COL --> DB
+    DB --> AN
+```
+
+幾個關鍵工程決定：
+
+- Gemini 只負責解析自然語言意圖；推薦、評分與警示全部由 Python 固定規則決定，結果可測試、可重現。
+- 官方資料中的負數狀態值是特殊狀態（例如 `-9`、`-11`），不是負車位，不進入數值計算。
+- 地址轉座標以 MySQL 快取優先，降低延遲並減少對外部地址服務的依賴。
+- 資料過期時仍顯示最近一次有效快照並標示警告，不因暫時抓不到資料而阻斷查詢。
+- 查詢紀錄只包含各階段耗時，不記錄目的地或座標。
+
+## 自動測試與 CI
+
+截至 2026-08-23 共 **199 項自動測試**（`pytest` 全數通過），涵蓋分析、路由、收集器、費用、行事曆、PWA 與 CI 合約；GitHub Actions 於每次 push／pull request 執行完整離線測試（見 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
 
 ## Windows 本機啟動
 
@@ -71,6 +106,8 @@ Register-ScheduledTask `
 - 頁面分開顯示官方動態資料時間與本系統抓取時間，避免誤判資料新鮮度。
 
 ## GCP 1 vCPU／1 GB 部署
+
+正式網站（https://aipe04.zebra-ai-gateway.com/）由 Cloudflare 提供 HTTPS；下列為通用自架部署指引。
 
 1. 建立 Ubuntu VM，執行 `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`，並在 `/etc/fstab` 加入 `/swapfile none swap sw 0 0`。
 2. 安裝 Python、MySQL、Nginx，建立 `parking` 系統使用者，專案放在 `/opt/parking-hell` 並由該使用者擁有。
