@@ -123,6 +123,23 @@ def test_query_without_consent_never_writes_analytics(monkeypatch):
     assert written == []
 
 
+def test_query_without_secret_works_and_never_writes_analytics(monkeypatch):
+    """未設定 HMAC 秘密時，即使送出同意標頭也不得寫入任何分析事件。"""
+    app = make_analytics_app(monkeypatch, ANALYTICS_HMAC_SECRET="")
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    written = []
+    app.extensions["analytics_writer"] = written.append
+
+    response = app.test_client().post(
+        "/api/query", json=manual_payload(), headers=analytics_headers())
+
+    body = response.get_json()
+    assert response.status_code == 200
+    UUID(body["request_id"])
+    assert body["recommendations"][0]["lot_id"] == "TPE1"
+    assert written == []
+
+
 def test_consented_success_returns_request_id_and_records_no_destination(monkeypatch):
     app = make_analytics_app(monkeypatch)
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
@@ -480,7 +497,12 @@ def test_query_survives_writer_exception(monkeypatch, caplog):
             "/api/query", json=manual_payload(), headers=analytics_headers())
     assert response.status_code == 200
     assert response.get_json()["recommendations"][0]["lot_id"] == "TPE1"
-    assert "analytics_write_failed" in caplog.text
+    failures = [
+        record.getMessage() for record in caplog.records
+        if "analytics_write_failed" in record.getMessage()
+    ]
+    assert failures == ["analytics_write_failed event=query_completed"]
+    assert "臺北市政府" not in caplog.text
 
 
 def test_production_writer_commits_and_closes_fresh_connection(monkeypatch):

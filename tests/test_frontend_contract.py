@@ -148,6 +148,16 @@ def test_opt_in_controls_and_privacy_link_exist():
     assert "crypto.randomUUID()" in script
 
 
+def test_decline_removes_consent_and_uuid_without_sending_events():
+    """拒絕選擇要同時刪除同意與本機 UUID，且不送出任何分析請求。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    decline = script.split(
+        'declineButton.addEventListener("click"', 1)[1]
+    assert "localStorage.removeItem(ANALYTICS_CONSENT_KEY)" in decline
+    assert "localStorage.removeItem(ANALYTICS_ID_KEY)" in decline
+    assert "sendAnalyticsEvent" not in decline
+
+
 def test_consent_banner_copy_is_exact():
     """同意橫幅文案必須逐字保留，不能淡化隱私承諾。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
@@ -166,12 +176,17 @@ def test_footer_offers_privacy_note_and_change_choice():
 
 
 def test_navigation_uses_beacon_with_keepalive_fallback():
-    """導航點擊先送 sendBeacon，不可用或失敗時退回 keepalive fetch。"""
+    """導航點擊先送 sendBeacon；失敗退回 keepalive fetch，且不得阻擋點擊。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
     assert "navigator.sendBeacon" in script
     assert "keepalive:true" in script.replace(" ", "")
     assert "data-navigation-rank" in script
+    click_handler = script.split(
+        'document.addEventListener("click"', 1)[1].split(
+            "async function submitQuery", 1)[0]
+    assert "preventDefault" not in click_handler
+    assert ".catch(() => {})" in script
 
 
 def test_navigation_capture_uses_single_delegated_handler():
@@ -219,3 +234,12 @@ def test_pwa_open_and_navigation_event_types_exist():
 
     assert '"pwa_opened"' in script
     assert '"navigation_clicked"' in script
+
+
+def test_admin_analytics_js_renders_empty_and_disabled_states():
+    """管理儀表板必須呈現零資料、未設定與載入失敗三種誠實狀態。"""
+    script = (ROOT / "static" / "admin_analytics.js").read_text(encoding="utf-8")
+
+    assert "本時段沒有資料" in script
+    assert "匿名分析未設定：缺少 HMAC 秘密，統計保持空白。" in script
+    assert "指標載入失敗" in script

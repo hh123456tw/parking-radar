@@ -121,6 +121,28 @@ def test_segments_hide_districts_and_place_types_below_min_devices():
     assert summarize_events(metric_fixture_rows(), NOW_UTC)["districts"] == []
 
 
+def test_segment_threshold_hides_four_devices_shows_five():
+    """預設樣本下限 5：四裝置行政區隱藏，五裝置行政區出現。"""
+    rows = [
+        query_row(
+            "query_completed", f"req-4-{index}",
+            f"d4-{index}".ljust(64, "0"), "success", 100, 1,
+            datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc),
+            district="四甲區")
+        for index in range(4)
+    ]
+    rows += [
+        query_row(
+            "query_completed", f"req-5-{index}",
+            f"d5-{index}".ljust(64, "0"), "success", 100, 1,
+            datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc),
+            district="五乙區")
+        for index in range(5)
+    ]
+    summary = summarize_events(rows, NOW_UTC)
+    assert summary["districts"] == [{"district": "五乙區", "devices": 5}]
+
+
 def test_response_durations_use_median_and_nearest_rank_p95():
     summary = summarize_events(metric_fixture_rows(), NOW_UTC)
     assert summary["response_median_ms"] == 150.0

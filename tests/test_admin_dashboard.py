@@ -215,6 +215,19 @@ def test_analytics_api_honestly_empty_without_secret(monkeypatch):
         "analytics"]["tone"] == "gray"
 
 
+def test_analytics_api_empty_events_with_secret_returns_zero_summary(monkeypatch):
+    """秘密已設定但尚無事件時，儀表板回傳零/空狀態而非假造資料。"""
+    body = make_admin_client(monkeypatch).get(
+        "/admin/api/analytics?range=today").get_json()
+    assert body["analytics_enabled"] is True
+    assert body["summary"]["completed_queries"] == 0
+    assert body["summary"]["query_success_rate"] is None
+    assert body["summary"]["navigation_click_rate"] is None
+    assert body["summary"]["anonymous_query_devices"] == 0
+    assert body["summary"]["districts"] == []
+    assert body["summary"]["place_types"] == []
+
+
 def test_analytics_api_returns_503_when_database_read_fails(monkeypatch):
     """資料庫讀取失敗時必須回傳固定 503，不能把故障偽裝成零流量。"""
     client = make_admin_client(monkeypatch, database_error=True)
