@@ -3,7 +3,7 @@
 - 日期：2026-08-24（台北時區）
 - 分支工作樹：`.worktrees/parking-analytics-dashboard`
 - 結果：**通過**。所有離線檢查綠燈；隱私/秘密掃描逐項檢視無外洩；本機自動化驗收全數通過；無部署、無合併、無推送。
-- 最終測試數：**285 passed**（Task 8 前基線 280 + 新增 5 個驗收測試）。
+- 最終測試數：**286 passed**（Task 8 前基線 280 + 新增 6 個驗收測試，其中 1 個為 CI 涵蓋合約）。
 
 ## 1. 離線自動化檢查（Step 1）
 
@@ -18,12 +18,35 @@ node --check static/admin_analytics.js
 
 結果：
 
-- `pytest`：`285 passed in 2.08s`（最終驗證重跑，見第 8 節）。
+- `pytest`：`286 passed in 2.04s`（最終驗證重跑，見第 8 節）。
 - `compileall`：靜默，exit 0，無任何警告。
 - `node --check static/app.js`：exit 0。
 - `node --check static/admin_analytics.js`：exit 0。
 
-無警告、無 skip、無 xfail。CI 合約測試（`tests/test_ci_contract.py`）同時確認 push/PR workflow 內含 pytest、compileall 與 Node 檢查。
+無警告、無 skip、無 xfail。CI 合約測試（`tests/test_ci_contract.py`）同時確認 push/PR workflow 內含 pytest、compileall（含分析四模組）與 Node 檢查（含 admin_analytics.js）。
+
+### 複審修補：CI 涵蓋分析功能（Round 1/5，Important）
+
+複審發現：GitHub Actions 的 compileall 清單未包含 `analytics_service.py`、`analytics_database.py`、`status_service.py`、`analytics_cleanup.py`，Node 檢查亦缺 `static/admin_analytics.js`——整個功能對 CI 盲區。
+
+TDD RED：先新增 `tests/test_ci_contract.py::test_ci_compiles_analytics_modules_and_checks_admin_js`，要求 compileall 那一行含四個模組、JavaScript 步驟含 `node --check static/admin_analytics.js`。修補前執行：
+
+```text
+1 failed, 1 passed in 0.06s
+AssertionError: assert 'analytics_service.py' in '        run: python -m compileall -q app.py ai_service.py analysis.py ...'
+```
+
+GREEN：最小修改 `.github/workflows/ci.yml`（compileall 行補上四模組、JS 步驟補上 `node --check static/admin_analytics.js`；保留 Python 3.13／Node 22／離線測試，無部署、無 secrets）。修補後執行：
+
+```text
+tests/test_ci_contract.py: 2 passed
+python -m pytest -q: 286 passed in 2.04s
+python -m compileall -q .: exit 0（靜默）
+CI 同款 compileall 指令：exit 0（靜默）
+node --check static/app.js: exit 0
+node --check static/admin_analytics.js: exit 0
+node --check static/sw.js: exit 0
+```
 
 ## 2. 隱私與秘密掃描（Step 2）
 
@@ -113,6 +136,7 @@ assert "臺北市政府" not in caplog.text
 ## 7. 變更與提交
 
 - `tests/test_analytics_routes.py`、`tests/test_admin_dashboard.py`、`tests/test_analytics_metrics.py`、`tests/test_frontend_contract.py`：驗收測試補強與新增（無生產程式碼變更）。
+- `.github/workflows/ci.yml`、`tests/test_ci_contract.py`：複審修補，CI 現在編譯分析四模組並 node-check `admin_analytics.js`。
 - `docs/QA_REVIEW_2026-08-23_ANALYTICS.md`（本報告）。
 - `docs/superpowers/plans/2026-08-23-parking-analytics-dashboard.md`：既有實作計劃文件，唯一意圖中的未追蹤檔，併入 Task 8 文件提交。
 
@@ -120,16 +144,17 @@ assert "臺北市政府" not in caplog.text
 
 - `fb36927` `test: close task 8 analytics acceptance gaps`
 - `docs: add task 8 QA review and analytics plan`（HEAD，含本報告與計劃文件）
+- 複審修補提交（CI 涵蓋分析功能）
 
 ## 8. 最終驗證（Step 7，提交後乾淨 shell 重跑）
 
 提交後於乾淨 shell 重跑完整 Step 1 指令集，輸出如下：
 
 ```text
-285 passed in 2.08s
+286 passed in 2.04s
 compileall: exit 0（靜默）
 node --check static/app.js: exit 0
 node --check static/admin_analytics.js: exit 0
 ```
 
-最終狀態：所有檢查綠燈、分支已提交、未 merge／push／deploy。本任務未發現需要 RED→GREEN 生產修復的失敗。
+最終狀態：所有檢查綠燈、分支已提交、未 merge／push／deploy。複審修補（CI 涵蓋）以 RED→GREEN 完成，紀錄見第 1 節；無其他需要生產修復的失敗。
