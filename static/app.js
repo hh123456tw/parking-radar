@@ -607,6 +607,9 @@ function setupVoiceInput() {
   recognition.maxAlternatives = 1;
   let isListening = false;
   let isStarting = false;
+  let isStopping = false;
+  let receivedResult = false;
+  let receivedError = false;
 
   // 監聽中切換成紅色與可見「停止」，結束後回復「語音」與 aria-pressed=false；
   // 找不到 .voice-label 時仍維持按鈕狀態切換，不中斷正常文字更新。
@@ -618,15 +621,29 @@ function setupVoiceInput() {
     if (label) label.textContent = listening ? "停止" : "語音";
   }
 
+  // Safari 在 stop() 後仍可能需要時間整理最終文字；收尾期間禁止重新開始，避免舊 onend 干擾新錄音。
+  function setProcessing(processing) {
+    voiceButton.disabled = processing;
+    const label = voiceButton.querySelector(".voice-label");
+    if (label && processing) label.textContent = "辨識中";
+  }
+
   // 只有使用者主動點擊才開始；再點一次就停止，避免背景持續收音。
   // onstart 尚未觸發前忽略重複點擊，避免快速連點呼叫兩次 start()。
   voiceButton.addEventListener("click", () => {
     if (isListening) {
+      // Safari 可能要等辨識服務處理完才觸發 onend；先立即還原按鈕，避免畫面假裝仍在收音。
+      isStopping = true;
+      setListening(false);
+      setProcessing(true);
+      showStatus("正在辨識語音，請稍候", "");
       recognition.stop();
       return;
     }
-    if (isStarting) return;
+    if (isStarting || isStopping) return;
     isStarting = true;
+    receivedResult = false;
+    receivedError = false;
     try {
       recognition.start();
     } catch {
@@ -646,6 +663,7 @@ function setupVoiceInput() {
   recognition.onresult = event => {
     const transcript = event.results?.[0]?.[0]?.transcript || "";
     if (transcript) {
+      receivedResult = true;
       input.value = transcript;
       input.focus();
       showStatus("已填入語音結果，請確認後按分析", "");
@@ -653,6 +671,7 @@ function setupVoiceInput() {
   };
 
   recognition.onerror = event => {
+    receivedError = true;
     const code = event.error;
     let message;
     if (code === "not-allowed" || code === "service-not-allowed") {
@@ -669,7 +688,12 @@ function setupVoiceInput() {
 
   recognition.onend = () => {
     isStarting = false;
+    isStopping = false;
+    setProcessing(false);
     setListening(false);
+    if (!receivedResult && !receivedError) {
+      showStatus("沒有取得語音文字，請再試一次", "error");
+    }
   };
 }
 

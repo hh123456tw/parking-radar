@@ -158,7 +158,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "voice-v1" in template
+    assert "voice-v2" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -392,16 +392,18 @@ def test_new_interaction_events_use_delegated_handlers():
     assert "history_opened" in script
 
 
-def test_pwa_asset_versions_bumped_for_voice_input():
+def test_pwa_asset_versions_bumped_for_voice_stop_fix():
     """模板與服務器快取金鑰必須同步升版，避免手機沿用舊語音版畫面。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
 
-    assert "voice-v1" in template
+    assert "voice-v2" in template
     assert "analytics-v3" not in template
-    assert "parking-radar-shell-voice-v1" in sw
-    assert "style.css?v=voice-v1" in sw
-    assert "app.js?v=voice-v1" in sw
+    assert "parking-radar-shell-voice-v2" in sw
+    assert "style.css?v=voice-v2" in sw
+    assert "app.js?v=voice-v2" in sw
+    assert "voice-v1" not in template
+    assert "voice-v1" not in sw
 
 
 def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():
@@ -475,6 +477,60 @@ def test_voice_result_ignores_empty_transcript_and_focuses_message():
     assert 'showStatus("已填入語音結果，請確認後按分析"' in onresult
     assert "已填入語音結果，請確認後按分析" not in onresult.split(
         "if (transcript) {", 1)[0]
+
+
+def test_voice_manual_stop_immediately_leaves_listening_state():
+    """使用者按停止時要立即還原按鈕，不能等待 Safari 延遲觸發 onend。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    voice = script.split("function setupVoiceInput()", 1)[1].split(
+        'document.addEventListener("DOMContentLoaded"', 1)[0]
+    click_handler = voice.split(
+        'voiceButton.addEventListener("click", () => {', 1)[1].split(
+        "recognition.onstart", 1)[0]
+    stop_branch = click_handler.split("if (isListening) {", 1)[1].split(
+        "return;", 1)[0]
+
+    assert "setListening(false)" in stop_branch
+    assert stop_branch.index("setListening(false)") < stop_branch.index(
+        "recognition.stop()")
+    assert "正在辨識語音，請稍候" in stop_branch
+
+
+def test_voice_stop_waits_for_terminal_event_before_allowing_restart():
+    """停止後必須鎖住重啟，直到 Safari 的 onend 完成，避免舊事件污染下一輪。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    voice = script.split("function setupVoiceInput()", 1)[1].split(
+        'document.addEventListener("DOMContentLoaded"', 1)[0]
+    click_handler = voice.split(
+        'voiceButton.addEventListener("click", () => {', 1)[1].split(
+        "recognition.onstart", 1)[0]
+    onend = voice.split("recognition.onend", 1)[1]
+
+    assert "let isStopping = false" in voice
+    assert "isStopping = true" in click_handler
+    assert "if (isStarting || isStopping) return" in click_handler
+    assert "isStopping = false" in onend
+    assert "voiceButton.disabled = processing" in voice
+
+
+def test_voice_end_always_finishes_processing_with_result_or_clear_error():
+    """stop 仍保留最終文字；若 Safari 沒有結果，onend 必須結束等待並顯示錯誤。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    voice = script.split("function setupVoiceInput()", 1)[1].split(
+        'document.addEventListener("DOMContentLoaded"', 1)[0]
+    onresult = voice.split("recognition.onresult", 1)[1].split(
+        "recognition.onerror", 1)[0]
+    onerror = voice.split("recognition.onerror", 1)[1].split(
+        "recognition.onend", 1)[0]
+    onend = voice.split("recognition.onend", 1)[1]
+
+    assert "receivedResult = true" in onresult
+    assert "input.value = transcript" in onresult
+    assert "receivedError = true" in onerror
+    assert "setProcessing(false)" in onend
+    assert "if (!receivedResult && !receivedError)" in onend
+    assert "沒有取得語音文字，請再試一次" in onend
+    assert "input.value" not in onend
 
 
 def test_admin_analytics_js_renders_empty_and_disabled_states():
