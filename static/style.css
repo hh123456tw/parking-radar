@@ -96,10 +96,10 @@ summary { color:#c7d1db; cursor:pointer; }
 .location-choice-grid button:hover, .location-choice-grid button:focus-visible { border-color:var(--orange); }
 .location-choice-grid span { color:var(--muted); line-height:1.45; }
 
-/* 結果採一張完整首選加兩個精簡替代，避免手機連續出現三張大型卡片。 */
-.card-grid { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(280px,1fr); gap:16px; }
+/* 前三個選擇使用同尺寸比較卡，排名只靠文字表達，不用額外首選底色。 */
+.card-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:stretch; gap:14px; }
 .parking-card {
-  display:flex; flex-direction:column; min-width:0; min-height:350px; padding:18px;
+  display:flex; flex-direction:column; min-width:0; min-height:390px; height:100%; padding:18px;
   border:1px solid #314139; border-top:4px solid var(--green); border-radius:14px;
   background:var(--panel-2);
 }
@@ -110,6 +110,10 @@ summary { color:#c7d1db; cursor:pointer; }
 .parking-card.warning .capacity-bar i { background:var(--yellow); }
 .parking-card.warning .primary-action { color:#2b2510; background:var(--yellow); }
 .distance-label { margin-left:auto; color:#d4dbe2; font-weight:700; }
+.parking-card h3, .parking-address, .decision-summary {
+  display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+}
+.parking-card h3 { min-height:3em; }
 .cheapest-badge {
   padding:4px 9px; border:1px solid #7a6630; border-radius:999px;
   color:#ffe49a; background:#2b2618; font-size:.82rem; font-weight:850;
@@ -154,20 +158,6 @@ summary { color:#c7d1db; cursor:pointer; }
 .primary-action { color:#14231d; background:var(--green); }
 .secondary-action { color:#e5ebf1; background:#26313d; border:1px solid #374555; }
 .primary-action.disabled { opacity:.5; }
-
-.alternative-choices { display:grid; align-content:start; gap:10px; }
-.alternative-choices h3 { margin:0 0 2px; }
-.alternative-card {
-  display:grid; grid-template-columns:minmax(0,1fr) auto; gap:5px 12px;
-  align-items:center; padding:14px; border:1px solid var(--line);
-  border-left:4px solid var(--green); border-radius:11px; background:var(--panel-2);
-}
-.alternative-card.warning { border-left-color:var(--yellow); }
-.alternative-card > strong, .alternative-card > span { min-width:0; }
-.alternative-card > a, .alternative-card > .muted {
-  grid-column:2; grid-row:2/6; align-self:center; color:#a9d5ff;
-}
-.alternative-heading { display:flex; flex-wrap:wrap; gap:7px; grid-column:1/-1; }
 
 /* 安全與必要備選改為精簡列，避免與三個首選競爭視覺焦點。 */
 .compact-list { display:grid; gap:8px; }
@@ -249,7 +239,7 @@ footer { padding:8px 0 40px; color:var(--muted); font-size:.88rem; }
   .summary-panel, .map-layout { grid-template-columns:1fr; }
   .card-grid { grid-template-columns:1fr; }
   .location-choice-grid { grid-template-columns:1fr; }
-  .parking-card { min-height:0; }
+  .parking-card { min-height:350px; }
 }
 @media (max-width:680px) {
   .hero, main, footer { width:min(100% - 20px,1120px); }
@@ -262,5 +252,4 @@ footer { padding:8px 0 40px; color:var(--muted); font-size:.88rem; }
   .compact-lot a { text-align:left; }
   #map { height:350px; }
   .card-actions { grid-template-columns:1fr; }
-  .alternative-card { grid-template-columns:1fr auto; }
 }

@@ -68,7 +68,7 @@ def test_promoted_backup_card_keeps_warning_label():
     """低風險不足時補入的黃色場站，不能在卡片上假裝成綠色首選。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-    assert 'const rankLabel = isBackup ? "備選" : "首選"' in script
+    assert 'isBackup ? "備選" : (index === 0 ? "首選" : "選擇")' in script
     assert 'class="parking-card ${cardTone}"' in script
 
 
@@ -96,13 +96,18 @@ def test_compact_lot_recommended_uses_green_accent():
     assert ".compact-lot.recommended { --accent:var(--green); }" in style
 
 
-def test_results_prioritize_one_full_card_and_collapse_remaining_lots():
-    """手機結果只保留一張完整首選，其餘首選精簡，其他場站預設收合。"""
+def test_top_three_use_equal_cards_and_collapse_remaining_lots():
+    """前三個選擇必須共用同一張卡片，其他場站仍預設收合。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    style = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
 
-    assert "recommendations.slice(1).map((lot, index) =>" in script
-    assert "alternativeCard(lot, index + 1)" in script
+    assert "recommendations.map((lot, index) => primaryCard(lot, index)).join" in script
+    assert "function alternativeCard" not in script
+    assert "grid-template-columns:repeat(3,minmax(0,1fr))" in style
+    assert "height:100%" in style.split(".parking-card", 1)[1].split("}", 1)[0]
+    assert ".parking-card:first-child" not in style
+    assert ".parking-card:nth-child" not in style
     assert 'id="other-toggle"' in template
     assert 'aria-controls="other-lots"' in template
     assert 'id="other-lots" class="compact-list" hidden' in template
@@ -126,24 +131,20 @@ def test_exact_hourly_prices_can_show_a_cheapest_badge_without_resorting():
         "const decoratePrice", 1)[1].split("};", 1)[0]
 
 
-def test_alternative_choices_keep_hourly_fee_daily_cap_and_facility_type():
-    """第二、三選擇雖然精簡，仍保留使用者會比較的價格上限與場站型態。"""
+def test_all_top_choices_keep_the_same_decision_information_and_actions():
+    """前三張共用的卡片必須都有價格、上限、型態、導航及趨勢操作。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-    alternative = script.split("function alternativeCard", 1)[1].split(
+    primary = script.split("function primaryCard", 1)[1].split(
         "function feeMetaLine", 1)[0]
+    fee_meta = script.split("function feeMetaLine", 1)[1].split(
+        "function compactLot", 1)[0]
 
-    assert "lot.hourly_fee_label" in alternative
-    assert "lot.daily_cap_label" in alternative
-    assert "lot.facility_type_label" in alternative
-
-
-def test_alternative_heading_and_no_map_state_match_actual_content():
-    """替代數量文案要依資料變化，無地圖狀態也要維持右側動作欄對齊。"""
-    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-    style = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
-
-    assert "另外 ${recommendations.length - 1} 個選擇" in script
-    assert ".alternative-card > .muted" in style
+    assert "feeMetaLine(lot)" in primary
+    assert "lot.hourly_fee_label" in fee_meta
+    assert "lot.daily_cap_label" in fee_meta
+    assert "lot.facility_type_label" in fee_meta
+    assert "開始導航" in primary
+    assert "查看空位趨勢" in primary
 
 
 def test_map_appears_before_collapsed_inventory():
@@ -216,7 +217,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "decision-ui-v1" in template
+    assert "decision-ui-v2" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -456,14 +457,14 @@ def test_pwa_asset_versions_bumped_for_decision_ui():
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-    assert "decision-ui-v1" in template
+    assert "decision-ui-v2" in template
     assert "analytics-v3" not in template
-    assert "parking-radar-shell-decision-ui-v1" in sw
-    assert "style.css?v=decision-ui-v1" in sw
-    assert "app.js?v=decision-ui-v1" in sw
-    assert 'register("/static/sw.js?v=decision-ui-v1"' in script
-    assert "voice-v6" not in template
-    assert "voice-v6" not in sw
+    assert "parking-radar-shell-decision-ui-v2" in sw
+    assert "style.css?v=decision-ui-v2" in sw
+    assert "app.js?v=decision-ui-v2" in sw
+    assert 'register("/static/sw.js?v=decision-ui-v2"' in script
+    assert "decision-ui-v1" not in template
+    assert "decision-ui-v1" not in sw
 
 
 def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():

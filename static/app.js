@@ -381,7 +381,7 @@ function primaryCard(lot, index) {
   const mapsUrl = googleMapsUrl(lot);
   const isBackup = lot.decision_status === "warning";
   const cardTone = isBackup ? "warning" : "recommended";
-  const rankLabel = isBackup ? "備選" : "首選";
+  const rankLabel = isBackup ? "備選" : (index === 0 ? "首選" : "選擇");
   const freePercent = Math.max(0, Math.min(100,
     lot.available_spaces / lot.total_spaces * 100));
   const primaryReason = lot.reasons?.[0] || "依目前空位與距離列入首選";
@@ -423,29 +423,6 @@ function primaryCard(lot, index) {
       ${mapsLink}
       <button class="secondary-action" type="button" data-history-lot="${escapeHtml(lot.lot_id)}" data-lot-name="${escapeHtml(lot.lot_name)}">查看空位趨勢</button>
     </div>
-  </article>`;
-}
-
-// 第二、三選擇只保留比較所需資訊，避免手機畫面連續出現三張大型卡片。
-function alternativeCard(lot, index) {
-  const mapsUrl = googleMapsUrl(lot);
-  const hourly = displayValue(lot.hourly_fee_label);
-  const cap = displayValue(lot.daily_cap_label);
-  const capText = cap === "官方未標示" ? "上限未標示" : `上限 ${cap}`;
-  const facility = displayValue(lot.facility_type_label, "型態待確認");
-  const mapsLink = mapsUrl
-    ? `<a href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer" data-navigation-rank="${index + 1}" data-lot-id="${escapeHtml(lot.lot_id)}" data-walking-minutes="${lot.walking_duration_minutes ?? ""}" data-availability-bucket="${availabilityBucket(lot.available_spaces)}">導航</a>`
-    : `<span class="muted">無地圖</span>`;
-  return `<article class="alternative-card ${escapeHtml(lot.decision_status)}">
-    <div class="alternative-heading">
-      <span class="rank-badge">選擇 ${index + 1}</span>
-      ${cheapestBadge(lot)}
-    </div>
-    <strong>${escapeHtml(lot.lot_name)}</strong>
-    <span>${lot.available_spaces} / ${lot.total_spaces} 格可停</span>
-    <span>${hourly}・${capText}</span>
-    <span>${facility}・${escapeHtml(formatProximity(lot))}</span>
-    ${mapsLink}
   </article>`;
 }
 
@@ -528,12 +505,7 @@ function renderCards(data) {
   const warning = rawWarning.map(decoratePrice);
   const otherLots = [...otherRecommended, ...warning];
   document.querySelector("#recommendations").innerHTML = recommendations.length
-    ? `${primaryCard(recommendations[0], 0)}
-       ${recommendations.length > 1 ? `<div class="alternative-choices">
-         <h3>另外 ${recommendations.length - 1} 個選擇</h3>
-         ${recommendations.slice(1).map((lot, index) =>
-           alternativeCard(lot, index + 1)).join("")}
-       </div>` : ""}`
+    ? recommendations.map((lot, index) => primaryCard(lot, index)).join("")
     : `<p class="group-empty">附近目前沒有可以前往或可供備選的場站。</p>`;
 
   const excludedSummary = document.querySelector("#excluded-summary");
@@ -851,8 +823,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!("serviceWorker" in navigator)) return;
   // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
-  navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v1", {scope:"/"})
-    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v1"));
+  navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v2", {scope:"/"})
+    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v2"));
 
   let deferredPrompt = null;
   const installButton = document.querySelector("#install-app");
