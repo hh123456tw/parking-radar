@@ -47,6 +47,9 @@ class SpyCursor:
     def fetchall(self):
         return self.rows
 
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
     def __enter__(self):
         return self
 
@@ -202,6 +205,31 @@ def test_update_query_feedback_uses_exact_sql_and_parameter_order():
     assert "WHERE request_id = %s AND anonymous_id_hash = %s" in sql
     assert params == ("found_space", VALID_REQUEST_ID, "b" * 64)
     assert count == 1
+
+
+def test_update_query_feedback_identical_repeat_returns_match_via_existence():
+    """相同回饋重複送出時 MySQL 變更列數為 0，存在性查詢命中仍回傳 1。"""
+    connection = SpyConnection(rowcount=0, rows=[{"1": 1}])
+    count = update_query_feedback(
+        connection, VALID_REQUEST_ID, "b" * 64, "found_space")
+    assert count == 1
+    update_sql, update_params = connection.executions[0]
+    exists_sql, exists_params = connection.executions[1]
+    assert "UPDATE analytics_query_details" in update_sql
+    assert update_params == ("found_space", VALID_REQUEST_ID, "b" * 64)
+    assert "SELECT 1" in exists_sql
+    assert "WHERE request_id = %s AND anonymous_id_hash = %s" in exists_sql
+    assert exists_params == (VALID_REQUEST_ID, "b" * 64)
+
+
+def test_update_query_feedback_missing_request_returns_zero():
+    """無匹配 request＋hash 時，UPDATE 0 列且存在性查詢未命中回傳 0。"""
+    connection = SpyConnection(rowcount=0)
+    count = update_query_feedback(
+        connection, VALID_REQUEST_ID, "b" * 64, "found_space")
+    assert count == 0
+    assert len(connection.executions) == 2
+    assert "SELECT 1" in connection.executions[1][0]
 
 
 def test_fetch_insight_details_uses_bounded_window_and_limit():

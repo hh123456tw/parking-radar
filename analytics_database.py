@@ -196,16 +196,27 @@ def replace_recommendation_snapshots(connection, request_id, rows):
 
 def update_query_feedback(connection, request_id, anonymous_id_hash,
                           feedback_code):
-    """只更新同 request 且同裝置雜湊的明細回饋，回傳受影響列數。"""
-    sql = """
+    """只更新同 request 且同裝置雜湊的明細回饋，存在即回傳 1。
+
+    MySQL 預設回報實際變更列數，重複送出相同 feedback_code 會得到 0；
+    此時只查一次存在性：request＋hash 存在仍回傳 1（204），不存在回傳 0（404）。
+    """
+    update_sql = """
         UPDATE analytics_query_details
         SET feedback_code = %s
         WHERE request_id = %s AND anonymous_id_hash = %s
     """
     params = (feedback_code, request_id, anonymous_id_hash)
     with connection.cursor() as cursor:
-        cursor.execute(sql, params)
-        return cursor.rowcount
+        cursor.execute(update_sql, params)
+        if cursor.rowcount:
+            return cursor.rowcount
+        cursor.execute(
+            "SELECT 1 FROM analytics_query_details"
+            " WHERE request_id = %s AND anonymous_id_hash = %s",
+            (request_id, anonymous_id_hash),
+        )
+        return 1 if cursor.fetchone() else 0
 
 
 def fetch_insight_details(connection, start_utc, end_utc, recent_limit=20):

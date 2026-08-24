@@ -522,6 +522,26 @@ def test_insights_destinations_lots_and_location_choice_breakdown():
     }
 
 
+def test_insights_navigation_requires_eligible_in_window_completed_query():
+    """孤兒導航、hash 不符或超出 24 小時觀察窗的導航不得計入漏斗與場站。"""
+    events = sample_events()
+    events.append(nav_row(
+        "req-orphan", "a" * 64, 1,
+        datetime(2026, 8, 23, 4, 0, tzinfo=timezone.utc), lot_id="TPE0009"))
+    events.append(nav_row(
+        "req-1", "z" * 64, 1,
+        datetime(2026, 8, 23, 0, 20, tzinfo=timezone.utc), lot_id="TPE0008"))
+    events.append(nav_row(
+        "req-1", "a" * 64, 1,
+        datetime(2026, 8, 24, 0, 30, tzinfo=timezone.utc), lot_id="TPE0007"))
+    result = summarize_insights(
+        sample_details(), sample_recommendations(), events)
+    assert result["funnel"]["navigations"] == 2
+    assert {row["lot_name"] for row in result["lots"]} == {
+        "台北車站地下停車場", "京站停車場",
+    }
+
+
 def test_insights_recent_queries_are_newest_first_without_private_fields():
     result = summarize_insights(
         sample_details(), sample_recommendations(), sample_events())

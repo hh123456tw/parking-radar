@@ -25,7 +25,7 @@ jobs:
       - name: Run Python tests
         run: python -m pytest -q
       - name: Compile Python
-        run: python -m compileall -q app.py ai_service.py analysis.py analytics_cleanup.py analytics_database.py analytics_service.py calendar_service.py collector.py config.py database.py fee_service.py geocoder.py parking_metadata.py status_service.py walking_service.py tests
+        run: python -m compileall -q app.py ai_service.py analysis.py analytics_capture.py analytics_cleanup.py analytics_database.py analytics_service.py calendar_service.py collector.py config.py database.py fee_service.py geocoder.py parking_metadata.py status_service.py walking_service.py tests
       - name: Check JavaScript syntax
         run: |
           node --check static/app.js

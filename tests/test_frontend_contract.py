@@ -338,6 +338,22 @@ def test_feedback_uses_delegated_handler_and_disables_after_204():
     assert "feedback_code" in script
 
 
+def test_feedback_buttons_lock_before_fetch_and_restore_only_on_failure():
+    """按鈕必須在 fetch 前原子停用；只有失敗分支（非 204／網路錯誤）才恢復。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    feedback = script.split("async function sendFeedback(code)", 1)[1].split(
+        "async function submitQuery(payload)", 1)[0]
+
+    assert feedback.index("disabled = true") < feedback.index(
+        'fetch("/api/analytics/feedback"')
+    assert feedback.count("disabled = false") == 2
+    success_at = feedback.index("已記錄你的回饋，感謝！")
+    catch_at = feedback.index("} catch {")
+    assert success_at < catch_at
+    # 成功訊息與 catch 之間不能有恢復；catch 內的恢復只屬網路失敗分支。
+    assert "disabled = false" not in feedback[success_at:catch_at]
+
+
 def test_new_interaction_events_use_delegated_handlers():
     """地圖、歷史與導航各以委派處理，新事件型態都出現在前端。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
@@ -371,3 +387,12 @@ def test_admin_analytics_js_renders_empty_and_disabled_states():
     assert "尚無任何資料，請先完成一次新查詢" in script
     assert "匿名分析未設定：缺少 HMAC 秘密，統計保持空白。" in script
     assert "指標載入失敗" in script
+
+
+def test_dashboard_tables_are_wrapped_in_table_scroll():
+    """行政區／目的地／停車場表格必須直接包在 .table-scroll 內，行動版可橫向捲動。"""
+    html = DASHBOARD_TEMPLATE.read_text(encoding="utf-8")
+    for body_id in ("district-body", "destination-body", "lot-body"):
+        prefix = html.split(f'<tbody id="{body_id}">', 1)[0]
+        before_table = prefix.rsplit("<table", 1)[0]
+        assert before_table.rstrip().endswith('<div class="table-scroll">')

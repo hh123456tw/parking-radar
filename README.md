@@ -46,7 +46,7 @@ flowchart TD
 
 ## 自動測試與 CI
 
-截至 2026-08-24 共 **298 項自動測試**（`pytest` 全數通過），涵蓋分析、路由、收集器、費用、行事曆、PWA、管理儀表板與 CI 合約；GitHub Actions 於每次 push／pull request 執行完整離線測試（見 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
+截至 2026-08-24 共 **373 項自動測試**（`pytest` 全數通過），涵蓋分析、路由、收集器、費用、行事曆、PWA、管理儀表板與 CI 合約；GitHub Actions 於每次 push／pull request 執行完整離線測試（見 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
 
 ## Windows 本機啟動
 

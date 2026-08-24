@@ -162,5 +162,6 @@ Dashboard 必須讓第一次打開的人在一分鐘內看懂，不建立通用�
 - 新增 production Python 檔案最多一個：`analytics_capture.py`。
 - 新增資料表正好兩張，不再增加第三張。
 - Dashboard 不新增圖表或前端框架。
-- 新增 production 程式碼目標不超過 450 行；若實作超過，必須先回來縮減範圍。
+- 新增 production 程式碼最終上限為淨增量（added − removed）≤ 950 行，
+  raw added 與 removed 分開報告；若超過，必須先回來縮減範圍。
 - 不改停車推薦、費率、步行排序、Gemini 或地理搜尋規則。

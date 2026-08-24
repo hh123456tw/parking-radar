@@ -144,6 +144,8 @@ async function sendFeedback(code) {
   if (!analyticsConsented() || !activeRequestId) return;
   const buttons = [...document.querySelectorAll("[data-feedback]")];
   if (buttons.some(button => button.disabled)) return;
+  // 送出前原子停用全部按鈕，避免快速連點送出兩次；只有失敗才恢復可用。
+  buttons.forEach(button => { button.disabled = true; });
   try {
     const response = await fetch("/api/analytics/feedback", {
       method:"POST", headers:{"Content-Type":"application/json"},
@@ -153,12 +155,13 @@ async function sendFeedback(code) {
     if (response.status !== 204) {
       const data = await response.json().catch(() => ({}));
       status.textContent = data.error || "回饋記錄失敗";
+      buttons.forEach(button => { button.disabled = false; });
       return;
     }
-    buttons.forEach(button => { button.disabled = true; });
     status.textContent = "已記錄你的回饋，感謝！";
   } catch {
     status.textContent = "回饋記錄失敗";
+    buttons.forEach(button => { button.disabled = false; });
   }
 }
 

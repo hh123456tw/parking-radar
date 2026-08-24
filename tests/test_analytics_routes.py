@@ -1010,6 +1010,22 @@ def test_feedback_returns_404_when_no_matching_detail(monkeypatch):
     assert response.status_code == 404
 
 
+def test_feedback_identical_repeat_returns_204_when_detail_exists(monkeypatch):
+    """同 request＋hash 重複送出相同回饋時，即使 UPDATE 0 列也必須回 204。"""
+    app = make_analytics_app(monkeypatch)
+    calls = []
+    app.extensions["analytics_feedback_writer"] = (
+        lambda *args: calls.append(args) or 1)
+    client = app.test_client()
+    payload = {
+        "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+        "feedback_code": "found_space",
+    }
+    assert client.post("/api/analytics/feedback", json=payload).status_code == 204
+    assert client.post("/api/analytics/feedback", json=payload).status_code == 204
+    assert len(calls) == 2
+
+
 def test_feedback_survives_writer_exception(monkeypatch, caplog):
     app = make_analytics_app(monkeypatch)
     app.extensions["analytics_feedback_writer"] = (

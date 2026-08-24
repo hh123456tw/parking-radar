@@ -355,18 +355,40 @@ def summarize_insights(details, recommendations, events, min_devices=1):
         "shown": event_counts["location_choice_shown"],
         "selected": event_counts["location_choice_selected"],
     }
+    # 與 summarize_events 相同的資格語意：導航只屬於「有結果的完成查詢」，
+    # 同 request、同裝置雜湊且在查詢後 24 小時觀察窗內才計入。
+    eligible = {
+        row["request_id"]: row for row in events
+        if row["event_type"] == "query_completed"
+        and (row.get("result_count") or 0) >= 1
+    }
+
+    def _navigation_is_eligible(row):
+        query = eligible.get(row.get("request_id"))
+        if query is None:
+            return False
+        if row.get("anonymous_id_hash") != query.get("anonymous_id_hash"):
+            return False
+        click_at = _as_utc(row["occurred_at"])
+        query_at = _as_utc(query["occurred_at"])
+        return query_at <= click_at < query_at + timedelta(
+            hours=NAVIGATION_OBSERVATION_HOURS)
+
+    eligible_navigations = [
+        row for row in events
+        if row["event_type"] == "navigation_clicked"
+        and _navigation_is_eligible(row)
+    ]
     funnel = {
         "completed": event_counts["query_completed"],
         "location_choices": location_choice_counts["selected"],
-        "navigations": event_counts["navigation_clicked"],
+        "navigations": len(eligible_navigations),
         "feedback": 0,
     }
     nav_counts = {}
     nav_ranks = {}
     navigated_lot_ids = {}
-    for row in events:
-        if row["event_type"] != "navigation_clicked":
-            continue
+    for row in eligible_navigations:
         lot_id = row.get("parking_lot_id")
         if not lot_id:
             continue
