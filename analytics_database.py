@@ -90,7 +90,7 @@ def fetch_events(connection, start_utc, end_utc):
 
 
 def fetch_dashboard_events(connection, start_utc, end_utc):
-    """讀取時窗內查詢事件與至 end+24h 的導航事件，供儀表板彙整。"""
+    """讀取時窗內查詢/地點確認事件與至 end+24h 的導航事件。"""
     select = """
         SELECT event_type, occurred_at, request_id, anonymous_id_hash,
                district, area_bucket, place_type, query_mode, outcome_code,
@@ -99,7 +99,8 @@ def fetch_dashboard_events(connection, start_utc, end_utc):
         FROM analytics_events
     """
     query_sql = select + (
-        " WHERE event_type IN ('query_completed', 'query_failed')"
+        " WHERE event_type IN ('query_completed', 'query_failed',"
+        " 'location_choice_shown', 'location_choice_selected')"
         " AND occurred_at >= %s AND occurred_at < %s ORDER BY occurred_at"
     )
     nav_sql = select + (

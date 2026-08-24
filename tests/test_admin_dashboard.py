@@ -482,3 +482,30 @@ def test_analytics_api_segments_use_config_min_devices(monkeypatch):
         {"district": "中正區", "queries": 3},
     ]
     assert hidden.get_json()["insights"]["districts"] == []
+
+
+def test_analytics_api_location_choice_events_reach_insights(monkeypatch):
+    """choice 事件須隨既有 dashboard fetch 進入 insights，而不是永遠為 0。"""
+    selected = [
+        query_row("query_completed", "req-a", "a" * 64, "success", 100, 3,
+                  datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc)),
+        choice_row("req-choice", "d" * 64, "location_choice_shown",
+                   datetime(2026, 8, 23, 0, 5, tzinfo=timezone.utc)),
+        choice_row("req-choice", "d" * 64, "location_choice_selected",
+                   datetime(2026, 8, 23, 0, 6, tzinfo=timezone.utc)),
+    ]
+    client = make_admin_client(
+        monkeypatch, analytics_queues=[selected, [], [], [], []])
+
+    body = client.get("/admin/api/analytics?range=today").get_json()
+
+    assert body["insights"]["funnel"]["location_choices"] == 1
+    assert body["insights"]["location_choice_counts"] == {
+        "shown": 1, "selected": 1,
+    }
+    assert body["summary"]["completed_queries"] == 1
+    assert body["summary"]["navigation_click_rate"] == 0.0
+    executions = client.connections[-1].executions
+    assert "location_choice_shown" in executions[0][0]
+    assert "location_choice_selected" in executions[0][0]
+    assert len(executions) == 5

@@ -301,18 +301,29 @@ def test_dashboard_fetch_extends_navigation_window_past_range_end():
     end = datetime(2026, 8, 23, 16, 0, tzinfo=timezone.utc)
     query = query_row("query_completed", "req-db", "h" * 64, "success",
                       80, 1, datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc))
+    choice_shown = choice_row(
+        "req-choice", "i" * 64, "location_choice_shown",
+        datetime(2026, 8, 23, 9, 0, tzinfo=timezone.utc))
+    choice_selected = choice_row(
+        "req-choice", "i" * 64, "location_choice_selected",
+        datetime(2026, 8, 23, 9, 1, tzinfo=timezone.utc))
     nav = nav_row("req-db", "h" * 64, 1,
                   datetime(2026, 8, 23, 23, 0, tzinfo=timezone.utc))
-    connection = _RecordingConnection([[query], [nav]])
+    connection = _RecordingConnection(
+        [[query, choice_shown, choice_selected], [nav]])
     rows = fetch_dashboard_events(connection, start, end)
     query_sql, query_params = connection.cursor_instance.executions[0]
     nav_sql, nav_params = connection.cursor_instance.executions[1]
-    assert "event_type IN ('query_completed', 'query_failed')" in query_sql
+    assert (
+        "event_type IN ('query_completed', 'query_failed',"
+        " 'location_choice_shown', 'location_choice_selected')"
+        in query_sql
+    )
     assert "occurred_at >= %s AND occurred_at < %s" in query_sql
     assert query_params == (start, end)
     assert "event_type = 'navigation_clicked'" in nav_sql
     assert nav_params == (start, end + timedelta(hours=24))
-    assert rows == [query, nav]
+    assert rows == [query, choice_shown, choice_selected, nav]
     summary = summarize_events(rows, NOW_UTC)
     assert summary["navigation_click_rate"] == 100.0
 
