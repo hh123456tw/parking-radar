@@ -55,7 +55,7 @@ def test_service_worker_excludes_network_only_targets_before_cache():
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
     fetch_handler = sw.split('addEventListener("fetch"', 1)[1]
     guard = fetch_handler.split("event.respondWith", 1)[0]
-    for token in ("/api/", "tile.openstreetmap.org", "google.com/maps"):
+    for token in ("/api/", "/admin/", "tile.openstreetmap.org", "google.com/maps"):
         assert token in guard
 
 

@@ -54,7 +54,12 @@ function setNote(noteId, text, isError = false) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url, { headers: { Accept: "application/json" } });
+  const separator = url.includes("?") ? "&" : "?";
+  const freshUrl = `${url}${separator}_=${Date.now()}`;
+  const response = await fetch(freshUrl, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }

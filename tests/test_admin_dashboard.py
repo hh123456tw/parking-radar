@@ -1,10 +1,12 @@
 """管理儀表板路由測試：唯讀、no-store、範圍驗證與狀態降級。"""
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import app as app_module
 import status_service
 
+ROOT = Path(__file__).parents[1]
 NOW_UTC = datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc)
 STATUS_TIMES = [{
     "official_data_at": datetime(2026, 8, 23, 7, 15, tzinfo=timezone.utc),
@@ -172,8 +174,17 @@ def test_admin_page_versions_static_assets_to_bypass_pwa_cache(monkeypatch):
     body = make_admin_client(monkeypatch).get(
         "/admin/analytics").get_data(as_text=True)
 
-    assert "/static/admin_analytics.css?v=admin-v2" in body
-    assert "/static/admin_analytics.js?v=admin-v2" in body
+    assert "/static/admin_analytics.css?v=admin-v3" in body
+    assert "/static/admin_analytics.js?v=admin-v3" in body
+
+
+def test_admin_api_requests_use_unique_urls_to_escape_existing_pwa_cache():
+    """舊 Service Worker 尚未更新時，管理 API 仍須強制走新的請求網址。"""
+    script = (ROOT / "static" / "admin_analytics.js").read_text(
+        encoding="utf-8")
+
+    assert "Date.now()" in script
+    assert "freshUrl" in script
 
 
 def test_status_api_degrades_each_component_independently(monkeypatch):

@@ -28,6 +28,7 @@ self.addEventListener("fetch", event => {
   // 資料、非 GET 與外部請求在快取找查前直接放行，避免擋到即時資料。
   if (request.method !== "GET") return;
   if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.startsWith("/admin/")) return;
   if (url.origin !== self.location.origin) return;
   if (url.hostname.endsWith("tile.openstreetmap.org")) return;
   if (url.href.includes("google.com/maps")) return;
