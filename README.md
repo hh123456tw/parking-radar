@@ -1,25 +1,40 @@
 # 停車地獄雷達 🚗
 
-整合臺北市即時停車資料、實際步行距離與可解釋規則，回答「現在該停哪裡？」Gemini 只解析自然語言，推薦結果由可測試的 Python 規則決定。
+整合臺北市即時停車資料、實際步行距離與可解釋規則，回答使用者最在意的問題：**「現在該停哪裡？」**
+
+Gemini 只負責理解自然語言；停車場篩選、風險判斷與推薦排序皆由可測試的 Python 規則決定。
 
 [Live Demo](https://aipe04.zebra-ai-gateway.com/) · [![CI](https://github.com/hh123456tw/parking-radar/actions/workflows/ci.yml/badge.svg)](https://github.com/hh123456tw/parking-radar/actions/workflows/ci.yml)
 
 ![停車地獄雷達查詢結果](docs/images/parking-radar-demo.png)
 
-**Tech Stack:** Python 3.13 · Flask · MySQL · Pandas · Gemini · Leaflet · OpenRouteService · Pytest · Gunicorn · Nginx · GCP
+## 為什麼做這個專案？
 
-## 功能範圍
+一般停車場網站只告訴使用者「附近有哪些停車場」，但駕駛真正需要判斷的是：
 
-- 臺北市路外停車場、地址 1.5 公里搜尋、三名首選、其他安全場站及平日／週末歷史參考。
-- 地址模式可使用 OpenRouteService 顯示停好車後的實際步行時間；服務失敗時退回直線距離。
-- 模糊地標可產生並驗證最多三個候選，使用者能在前端直接選擇。
-- iPhone Safari／主畫面 PWA 可用一次性繁體中文語音輸入；辨識結果只填入目的地欄位，確認後才送出。
-- 單頁 Leaflet 地圖與一張最近七天折線圖。
-- 結果圖卡可直接開啟 Google Maps 汽車導航；不含 AI 空位預測、路邊格位、會員及個別民營業者爬蟲。
+- 哪些停車場現在還有機會？
+- 最近的停車場是否已經快滿？
+- 停好車後要走多久？
+- 今天的費率、上限與場站型態是什麼？
+- 官方或外部服務暫時失敗時，系統能否繼續使用？
 
-重要行為變更整理於 [CHANGELOG.md](CHANGELOG.md)。
+停車地獄雷達把即時空位、步行距離、費率與歷史樣本整理成容易理解的圖卡，並清楚說明推薦原因。
 
-## 架構與工程決策
+## 核心功能
+
+- 查詢臺北市路外停車場即時剩餘車位與總車位。
+- 以地址、行政區、地標或自然語言搜尋目的地。
+- 模糊搜尋最多提供三個候選地點，避免系統自行選錯目的地。
+- 使用 OpenRouteService 計算停好車後的步行時間；失敗時退回直線距離。
+- 先排除無效及高風險場站，再從可前往場站中優先選擇步行距離較近者。
+- 顯示當日費率、停車上限、平假日與地下／平面／機械等場站資訊；無法可靠判斷時明確顯示未知。
+- 圖卡可直接開啟 Google Maps 汽車導航，並可按需查看最近七天空位趨勢。
+- 支援 iPhone Safari 與主畫面 PWA 的繁體中文語音輸入。
+- 管理儀表板提供匿名使用分析與伺服器狀態；公開查詢不需要登入。
+
+專案目前聚焦臺北市路外停車場，不包含 AI 空位預測、路邊車格、會員系統及個別民營業者爬蟲。
+
+## 系統架構
 
 ```mermaid
 flowchart TD
@@ -36,234 +51,128 @@ flowchart TD
     DB --> AN
 ```
 
-幾個關鍵工程決定：
+### 查詢流程
 
-- Gemini 只負責解析自然語言意圖；推薦、評分與警示全部由 Python 固定規則決定，結果可測試、可重現。
-- 官方資料中的負數狀態值是特殊狀態（例如 `-9`、`-11`），不是負車位，不進入數值計算。
-- 地址轉座標以 MySQL 快取優先，降低延遲並減少對外部地址服務的依賴。
-- 資料過期時仍顯示最近一次有效快照並標示警告，不因暫時抓不到資料而阻斷查詢。
-- 同意匿名分析時，查詢紀錄包含各階段耗時，並在 14 天內保留解析輸入與目的地名稱；
-  不保存座標、Cookie、Authorization、API 金鑰或模型原始回應，其餘分析資料 90 天後刪除。
+```text
+使用者輸入目的地
+        ↓
+Gemini 解析意圖，或使用手動查詢
+        ↓
+Nominatim 找出並驗證目的地座標
+        ↓
+MySQL 取得最新有效停車資料
+        ↓
+Python 套用固定風險規則
+        ↓
+OpenRouteService 補上步行時間
+        ↓
+前端顯示推薦圖卡、地圖與導航連結
+```
+
+## 核心工程決策
+
+### 1. AI 只理解問題，不決定推薦
+
+Gemini 負責將「我要去台北車站」等自然語言轉成結構化查詢。推薦結果仍由 Python 規則產生，因此可以重現、測試並說明原因；Gemini 無法使用時，手動查詢仍可正常運作。
+
+### 2. 先判斷風險，再比較距離
+
+系統先排除無效資料及高風險場站，再於安全場站中比較步行時間。這可避免「最近，但只剩一格」的停車場被排在第一名。
+
+### 3. 官方特殊值不當成負車位
+
+臺北市資料中的 `-9`、`-11`、`-12`、`-13` 代表特殊狀態，不是負的剩餘車位。清洗時會排除這些數值，避免地獄指數與排名失真。
+
+### 4. 外部服務失敗時仍可查詢
+
+- Gemini 失敗：退回手動查詢。
+- Nominatim 找不到唯一地點：顯示候選地點供使用者選擇。
+- OpenRouteService 失敗：退回直線距離並標示距離來源。
+- 官方資料暫時無法更新：顯示最近一次有效資料與資料時間。
+
+### 5. 地址與外部結果優先使用快取
+
+地址座標與停車場中繼資料先從 MySQL 快取取得，降低首次以外查詢的等待時間，也減少對免費外部 API 的依賴。
+
+### 6. 分析資料與管理介面分離
+
+公開使用者不需要登入；管理介面由反向代理層的身份驗證保護。正式部署必須使用強隨機密碼或受控身份驗證服務，任何憑證皆不得提交至版本庫。
+
+## 推薦規則摘要
+
+- 排除無效資料及搜尋範圍外的場站。
+- 剩餘不超過 3 格：不建議前往。
+- 剩餘不超過 10 格，或空位率低於 10%：列為備選。
+- 其他有效場站：列為可以前往。
+- 可以前往的場站優先，再依實際步行時間由近到遠排列。
+- 安全場站不足時才補入備選；高風險場站只顯示排除數量。
+
+地獄指數的基本概念是「已使用車位占總車位的比例」。歷史資料只作為趨勢參考，不代表抵達時仍有相同空位。
+
+## 技術組合
+
+**Backend:** Python 3.13 · Flask · MySQL · Pandas
+
+**AI & APIs:** Gemini · Nominatim · OpenRouteService · 臺北市開放資料
+
+**Frontend:** Vanilla JavaScript · Leaflet · Chart.js · PWA
+
+**Engineering:** Pytest · GitHub Actions · Gunicorn · Nginx · Cloudflare · GCP
 
 ## 自動測試與 CI
 
-截至 2026-08-24 共 **384 項自動測試**（`pytest` 全數通過），涵蓋分析、路由、收集器、費用、行事曆、PWA、管理儀表板與 CI 合約；GitHub Actions 於每次 push／pull request 執行完整離線測試（見 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
+完整自動化測試套件涵蓋分析規則、API、資料收集、地址搜尋、步行路線、費率解析、PWA、Analytics 與管理儀表板。GitHub Actions 會在每次 push 與 pull request 執行離線測試。
 
-## Windows 本機啟動
+```powershell
+python -m pytest -q
+node --check static/app.js
+```
+
+## Windows 快速啟動
+
+需求：Python 3.11+、MySQL 8，以及可選的 Gemini、Nominatim 與 OpenRouteService 設定。
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
+
 mysql -u root -p -e "CREATE DATABASE parking_hell CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 Get-Content -Raw schema.sql | mysql -u root -p parking_hell
+
 python collector.py --once
-python -m pytest -q
 flask --app app run --debug
 ```
 
-若要在 Windows 每 15 分鐘自動收集一次，可於 PowerShell 以系統管理員註冊工作排程器：
+開啟 <http://127.0.0.1:5000>。對話服務沒有設定金鑰時，網站會自動改用手動查詢。
 
-```powershell
-$projectRoot = (Resolve-Path .).Path
-$action = New-ScheduledTaskAction `
-  -Execute "$projectRoot\.venv\Scripts\python.exe" `
-  -Argument "collector.py --once" `
-  -WorkingDirectory $projectRoot
-$trigger = New-ScheduledTaskTrigger `
-  -Once -At (Get-Date).AddMinutes(1) `
-  -RepetitionInterval (New-TimeSpan -Minutes 15)
-Register-ScheduledTask `
-  -TaskName "ParkingRadarCollector" `
-  -Action $action -Trigger $trigger `
-  -Description "每 15 分鐘收集臺北市停車快照"
-```
-
-## 環境變數
+## 主要環境變數
 
 | 名稱 | 用途 |
 |---|---|
-| `FLASK_SECRET_KEY` | Flask session 簽章；部署時必須換成長隨機字串 |
-| `MYSQL_HOST` / `MYSQL_PORT` | MySQL 位址，部署時固定 localhost:3306 |
-| `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` | 專題資料庫帳號與名稱 |
-| `GEMINI_API_KEY` | 留空時停用對話並使用手動表單 |
-| `GEMINI_MODEL` | 預設 `gemini-3.5-flash-lite` |
-| `NOMINATIM_USER_AGENT` | 必須包含可辨識的專題名稱與聯絡資訊 |
-| `OPENROUTESERVICE_API_KEY` | 免費步行路線 Matrix API 金鑰；留空時沿用直線距離 |
-| `ANALYTICS_ENABLED` | 匿名分析總開關；`1`（預設）啟用、`0` 停用。停用時事件端點一律 204 且不寫入，無需重啟即可套用 |
-| `ANALYTICS_REQUIRE_CONSENT` | `1`（預設）顯示允許／拒絕介面與頁尾隱私說明；封閉團隊測試可設 `0`，分析預設啟用且不顯示上述介面與說明 |
-| `ANALYTICS_HMAC_SECRET` | 匿名分析 HMAC 簽章秘密；部署時以 `openssl rand -hex 32` 產生，只放在 VM |
-| `ANALYTICS_SEGMENT_MIN_DEVICES` | 管理儀表板匿名區段樣本下限；程式預設 `5`，封閉團隊 VM 設 `1` 以便看到單一測試裝置的資料 |
-| `DEPLOY_VERSION` | 管理儀表板顯示的部署版本識別（例如 Git commit 短碼） |
+| `MYSQL_HOST`、`MYSQL_PORT` | MySQL 連線位置 |
+| `MYSQL_USER`、`MYSQL_PASSWORD`、`MYSQL_DATABASE` | 專案資料庫帳號與名稱 |
+| `GEMINI_API_KEY`、`GEMINI_MODEL` | 自然語言意圖解析；留空時停用 |
+| `NOMINATIM_USER_AGENT` | 地址搜尋服務識別資訊 |
+| `OPENROUTESERVICE_API_KEY` | 實際步行路線；留空時改用直線距離 |
+| `ANALYTICS_ENABLED` | 管理分析功能總開關 |
+| `ANALYTICS_HMAC_SECRET` | 分析識別簽章秘密，只能存放於部署環境 |
+| `DEPLOY_VERSION` | 管理儀表板顯示的部署版本 |
 
-對話只說目的地而未指定抵達時間時，系統會自動使用 `Asia/Taipei` 的目前時間。
+完整範例請參考 [.env.example](.env.example)，不要將 `.env` 或任何真實金鑰提交至版本庫。
 
-## 計算與資料清洗
+## 資料來源與限制
 
-- 停車場地獄指數：`(總車位 - 剩餘車位) / 總車位 × 100`。
-- 行政區地獄指數：`全區已使用有效車位 / 全區有效總車位 × 100`。
-- 有歷史樣本：即時容易度 50% + 距離容易度 30% + 歷史容易度 20%。
-- 歷史不足：即時容易度 60% + 距離容易度 40%。
-- `-9`、`-11`、`-12`、`-13` 是官方特殊狀態，不是負車位，不進入數值計算。
-- 歷史分析為過去樣本參考，不代表抵達時仍有相同空位。
-- 圖卡的推薦、備選、排除與白話原因全部由 Python 固定規則產生；Gemini 只解析對話條件。
-- 停車場地址與 Google 地圖連結使用既有座標或地址，不使用付費 Google Maps API。
-- 推薦先依空位規則分級，再於同風險場站中比較步行時間。所有安全場站優先顯示，安全場站不足三座時才補入備選；高風險場站只顯示排除數量。為控制速度，每次最多查詢 15 座，路線名額先給安全場站、剩餘名額才給備選；OpenRouteService 失敗或沒有金鑰時，會退回直線距離排序並明確標示。
-- 頁面分開顯示官方動態資料時間與本系統抓取時間，避免誤判資料新鮮度。
+- 停車資料來自臺北市政府開放資料，頁面會分別顯示官方資料時間與系統抓取時間。
+- 地圖與地標資料使用 OpenStreetMap，OSM 標示保持可見。
+- 官方費率為自由文字；系統只顯示能可靠解析的結果，原始費率仍保留供使用者查看。
+- 系統無法可靠判斷費率或場站型態時會顯示未知，不以猜測值取代官方資訊。
+- 路線、地標與生成式 AI 服務皆可能受免費額度、網路或供應商狀態影響。
 
-## GCP 1 vCPU／1 GB 部署
+## Documentation
 
-正式網站（https://aipe04.zebra-ai-gateway.com/）由 Cloudflare 提供 HTTPS；下列為通用自架部署指引。
-
-1. 建立 Ubuntu VM，執行 `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`，並在 `/etc/fstab` 加入 `/swapfile none swap sw 0 0`。
-2. 安裝 Python、MySQL、Nginx，建立 `parking` 系統使用者，專案放在 `/opt/parking-hell` 並由該使用者擁有。
-3. 在 MySQL 設定加入：`bind-address=127.0.0.1`、`innodb_buffer_pool_size=128M`、`max_connections=30`、`performance_schema=OFF`，重新啟動後確認 3306 未對外開放。
-4. 建立 `.venv` 與不進 Git 的 `.env`，執行 schema 與第一次 collector。
-   若要顯示實際步行時間，在 `.env` 加入 `OPENROUTESERVICE_API_KEY=你的金鑰`。
-5. 安裝 `deploy/parking-radar.service` 與 `deploy/nginx-parking-radar.conf`；其中 nginx 必須為 `location /static/` 加上 `Service-Worker-Allowed: /` 回應標頭，否則 PWA 服務工人無法以 `/` 範圍註冊（見下方「部署補充」）。
-6. 以 `systemctl enable --now parking-radar nginx` 啟動。
-7. 以 `parking` 使用者執行 `crontab -e` 加入：
-
-```cron
-*/15 * * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python collector.py --once >> /opt/parking-hell/collector.log 2>&1
-```
-
-### 部署補充：行事曆、費率與設施中繼資料
-
-首次部署或升級既有部署時，依序完成以下步驟：
-
-1. 備份 `parking_lots`：
-   `mysqldump -u parking -p parking_hell parking_lots > parking_lots.backup.sql`
-2. 套用中繼資料遷移（重複執行安全）：
-   `mysql -u parking -p parking_hell < migrations/20260819_add_parking_metadata.sql`
-3. 收集一次資料：
-   `/opt/parking-hell/.venv/bin/python collector.py --once`
-4. 下載行事曆：
-   `/opt/parking-hell/.venv/bin/python calendar_service.py --sync`
-5. 同步費用與設施型態：
-   `/opt/parking-hell/.venv/bin/python parking_metadata.py --sync`
-6. 安裝並啟用每月維護計時器：
-   `sudo install -m 644 deploy/parking-metadata-refresh.service deploy/parking-metadata-refresh.timer /etc/systemd/system/`
-   `sudo systemctl daemon-reload && sudo systemctl enable --now parking-metadata-refresh.timer`
-7. 重啟 Gunicorn 並確認健康檢查：
-   `sudo systemctl restart parking-radar && curl -fsS http://127.0.0.1:8000/health`
-8. 查詢「台北車站」，確認主要與精簡卡片、地圖與七天歷史行為皆正常。
-9. 安裝 PWA：Android Chrome 使用「安裝應用程式」；iOS Safari 使用「加入主畫面」（需 HTTPS，見下方「PWA 需 HTTPS」說明）。
-
-計時器於每月執行一次（`OnCalendar=monthly`），補行錯過批次（`Persistent=true`），並附加一小時隨機延遲
-（`RandomizedDelaySec=1h`），避免與資料來源尖峰重疊。維護任務是獨立的 `Type=oneshot` 單位，其成敗不會重啟或停止 `parking-radar.service`。
-
-### 部署補充：分析儀表板管理端保護與清理
-
-管理儀表板（`/admin/` 下所有 HTML 與 API）由 Nginx Basic Auth 保護；公開使用者不需登入，
-Flask 不新增任何帳號機制。密碼雜湊與 `ANALYTICS_HMAC_SECRET` 只存在 VM 上，一律不進入 Git。
-
-地點類型（`place_type`）診斷目前暫緩：沒有可靠的允許清單來源，系統不會從自由文字推斷類別；
-事件欄位與彙整輸出保留為可空以維持向後相容，待有允許清單來源後再啟用。
-
-順序重點：先套用遷移建立 `analytics_events`，再重啟 Gunicorn 載入分析程式碼，
-最後才重載 Nginx 對外暴露 `/admin/`。htpasswd 與 Nginx 設定檔可先準備，
-但不要在資料表存在前啟動分析程式碼或重載 Nginx。
-
-團隊測試環境預設使用 `admin/admin` 作為示範帳密；此帳密只能用於封閉團隊測試，
-正式對外前必須以 `sudo htpasswd /etc/nginx/.htpasswd-parking-radar admin` 更換密碼。
-
-1. 產生 HMAC 秘密並寫入 `.env`（只在 VM 上執行）：
-   `openssl rand -hex 32`
-   把輸出貼到 `/opt/parking-hell/.env` 的 `ANALYTICS_HMAC_SECRET=` 之後。
-2. 安裝 `apache2-utils` 並建立管理帳密檔：
-   `sudo apt install -y apache2-utils`
-   `sudo htpasswd -c /etc/nginx/.htpasswd-parking-radar admin`
-3. 更新 `deploy/nginx-parking-radar.conf`（沿用既有安裝方式覆蓋站台設定），並安裝日誌格式／限流設定：
-   `sudo install -m 644 deploy/nginx-parking-radar-log-format.conf /etc/nginx/conf.d/`
-4. 套用分析事件遷移（重複執行安全）：
-   `mysql -u parking -p parking_hell < migrations/20260823_add_analytics_events.sql`
-5. 重啟 Gunicorn 讓分析程式碼在資料表存在後載入，並確認健康檢查：
-   `sudo systemctl restart parking-radar && curl -fsS http://127.0.0.1:8000/health`
-6. 測試並重載 Nginx：
-   `sudo nginx -t && sudo systemctl reload nginx`
-7. 以 `parking` 使用者加入每日清理 cron：
-   `17 3 * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python analytics_cleanup.py >> /opt/parking-hell/analytics-cleanup.log 2>&1`
-8. 驗證：
-   - `curl -i http://127.0.0.1/admin/analytics` 未帶密碼時回傳 401；帶密碼時回傳 200 且回應含 `Cache-Control: no-store`。
-   - `sudo tail -f /var/log/nginx/parking-radar.access.log` 每行只含時間、方法＋路徑、協定、狀態、回應位元組與處理時間，不含 IP。
-   - 儀表板顯示 `.env` 的 `DEPLOY_VERSION`，且分析功能為啟用狀態。
-
-#### 回滾
-
-- Nginx：還原先前的 `nginx-parking-radar.conf`，移除 `/etc/nginx/conf.d/nginx-parking-radar-log-format.conf`，再執行 `sudo nginx -t && sudo systemctl reload nginx`。
-- Cron：只移除 analytics cleanup 那一行，其餘（collector 等）全部保留。
-- 應用程式：切回前一個部署 commit 後以 `sudo systemctl restart parking-radar` 重啟。
-- 資料：保留 `analytics_events` 表與既有事件；除非擁有者明確決定刪除，否則不執行 DROP。
-
-### 部署補充：分析洞察（查詢明細、推薦快照與回饋）
-
-在既有分析事件之上，本版新增 `analytics_query_details`（每筆查詢一列）與
-`analytics_recommendations`（每筆成功查詢最多三列快照）兩張表，並在
-`/admin/analytics` 顯示四區儀表板。部署順序與既有分析儀表板相同：先套用遷移，
-再重啟 Gunicorn 載入新程式碼，最後才重載 Nginx；`/admin/analytics` 與既有
-`/admin/` 路徑一樣由 Nginx Basic Auth 保護，未授權存取回傳 401。
-
-1. 套用洞察遷移（重複執行安全，與 `schema.sql` 定義一致）：
-   `mysql -u parking -p parking_hell < migrations/20260824_add_analytics_insights.sql`
-2. 在 `/opt/parking-hell/.env` 設定 `ANALYTICS_SEGMENT_MIN_DEVICES=1`（程式預設仍為
-   `5`；未來公開時移除 VM 覆寫即可恢復預設）。
-3. 重啟 Gunicorn 並確認健康檢查：
-   `sudo systemctl restart parking-radar && curl -fsS http://127.0.0.1:8000/health`
-4. 確認每日清理 cron 沿用既有 `analytics_cleanup.py` 那一行，無需新增第二條。
-
-#### 保留與清理
-
-- 原始輸入（`raw_query_text`）、解析 JSON 與目的地名稱在查詢滿 14 天後清成 `NULL`；
-  每日清理會先清字，再刪除 90 天前的推薦快照、查詢明細與事件，全部在同一交易提交。
-- 行政區只在分析時推導，不會回寫查詢的 `district`，也不會縮小停車場搜尋範圍；
-  既有 `district IS NULL` 的舊事件不會回填。
-- 回饋碼固定三種：`found_space`（有，找到車位）、`full_on_arrival`（到場已滿）、
-  `did_not_go`（沒有前往），由 `POST /api/analytics/feedback` 接受；重複點擊採最後
-  一次選擇，回饋 API 失敗不影響公開查詢。
-
-#### 分析洞察回滾
-
-- 應用程式：切回前一個部署 commit 後 `sudo systemctl restart parking-radar` 重啟；
-  兩張新表可保留，舊版程式不會讀取它們。
-- 環境：從 `/opt/parking-hell/.env` 移除 `ANALYTICS_SEGMENT_MIN_DEVICES=1`（恢復預設
-  `5`）或設 `ANALYTICS_ENABLED=0` 停用分析。
-- 資料：保留兩張新表與既有事件，不執行 DROP；如需完整回復，使用部署前的 MySQL 備份
-  還原。
-
-PWA 離線外殼需要 nginx 對 `sw.js` 回應 `Service-Worker-Allowed: /`。前端以 `scope: "/"` 註冊（見 `static/app.js`），若 nginx 未在 `location /static/` 傳回該標頭，瀏覽器會拒絕超出
-`/static/` 的範圍，服務工人便無法控制並離線快取整站。`deploy/nginx-parking-radar.conf` 對應區塊需為：
-
-```nginx
-location /static/ {
-    alias /opt/parking-hell/static/;
-    expires 1h;
-    add_header Service-Worker-Allowed /;
-}
-```
-
-**PWA 需 HTTPS**：Service Worker 只在「安全來源」（secure context）可用。以純 HTTP 存取部署網址時，
-`navigator.serviceWorker` 不存在，`/static/sw.js` 無法註冊，離線外殼與「加入主畫面」安裝提示都不會出現；
-本範例設定只監聽 `listen 80`。若要讓手機安裝此 PWA，請為網域申請憑證並讓 nginx 以 HTTPS 提供（例如先把
-`server_name` 改為你的網域，再用 `certbot --nginx` 取得並自動套用 Let's Encrypt 憑證，或手動將
-`deploy/nginx-parking-radar.conf` 改為 `listen 443 ssl` 並設定 `ssl_certificate` 與
-`ssl_certificate_key`）。本機自用時，`http://localhost` 本身即為安全來源，可直接啟用安裝功能而不需 HTTPS。
-
-語音輸入使用 Safari 的 Web Speech API；按鈕未出現時仍可使用 iPhone 鍵盤聽寫。首次使用需允許麥克風，切到背景時 Safari 會停止辨識。本專案不保存音訊，但 Safari 的辨識服務是否使用網路由瀏覽器與系統決定。
-
-### 資料來源與授權
-
-- 官方停車資料依臺北市開放資料授權，可商業再利用，但須標示資料來源為臺北市政府。
-- 地圖與地標資料使用 OpenStreetMap；OSM 標示在頁面保持可見。
-- 系統無法判斷時以明確「未知」標籤呈現，不代表實際收費或設施型態的保證。
-- 本系統不含會員帳號，也不儲存個人目的地歷史；所有查詢一律匿名。
-
-## 展示檢查
-
-1. 手動選行政區可完成查詢。
-2. 輸入臺北市地址可顯示 1.5 公里候選、最近與前三名推薦。
-3. Gemini 可處理推薦、歷史、平週末比較及一次簡單追問。
-4. 關閉 Gemini 金鑰後，頁面會引導手動查詢。
-5. Nominatim 查不到地址時，可退回行政區查詢。
-6. 地圖、唯一折線圖、資料時間與 OpenStreetMap 標示皆可見。
+- [Changelog](CHANGELOG.md)
+- [QA Review](docs/QA_REVIEW_2026-08-21.md)
+- [Analytics QA Review](docs/QA_REVIEW_2026-08-23_ANALYTICS.md)
+- [Deployment Configurations](deploy/)

@@ -586,7 +586,7 @@ git commit -m "feat: simplify analytics dashboard insights"
 
 - [ ] **Step 1: Update the runbook**
 
-Document the migration command, `ANALYTICS_SEGMENT_MIN_DEVICES`, 14-day scrubbing, 90-day deletion, feedback codes, Dashboard URL, team `admin/admin` warning and rollback order. Explicitly state that old `district=NULL` events are not backfilled.
+Document the migration command, `ANALYTICS_SEGMENT_MIN_DEVICES`, 14-day scrubbing, 90-day deletion, feedback codes, Dashboard URL, admin credential security warning and rollback order. Explicitly state that old `district=NULL` events are not backfilled.
 
 - [ ] **Step 2: Run every offline quality gate**
 
@@ -645,7 +645,7 @@ With a fresh browser profile:
 1. Open the homepage and confirm team mode has no consent card and no console errors.
 2. Query `台北車站`; confirm three recommendation cards and destination `臺北市中正區北平西路3號`.
 3. Open history, click the first navigation link, then submit `有，找到車位`.
-4. Open `/admin/analytics` with `admin/admin`; confirm 中正區, the query, three snapshots, timing stages, navigation and feedback appear.
+4. Open `/admin/analytics` with deployment-managed credentials; confirm 中正區, the query, three snapshots, timing stages, navigation and feedback appear.
 5. Confirm unauthorized admin remains 401, authorized API is 200 under 2 seconds, `/health` is 200 and journal has no traceback/worker timeout.
 
 - [ ] **Step 9: Report rollback artifacts and final evidence**
