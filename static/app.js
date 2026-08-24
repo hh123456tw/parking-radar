@@ -606,38 +606,50 @@ function setupVoiceInput() {
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
   let isListening = false;
+  let isStarting = false;
 
-  // 監聽中切換成紅色與可見「停止」，結束後回復「語音」與 aria-pressed=false。
+  // 監聽中切換成紅色與可見「停止」，結束後回復「語音」與 aria-pressed=false；
+  // 找不到 .voice-label 時仍維持按鈕狀態切換，不中斷正常文字更新。
   function setListening(listening) {
     isListening = listening;
     voiceButton.classList.toggle("listening", listening);
     voiceButton.setAttribute("aria-pressed", String(listening));
-    voiceButton.querySelector(".voice-label").textContent = listening ? "停止" : "語音";
+    const label = voiceButton.querySelector(".voice-label");
+    if (label) label.textContent = listening ? "停止" : "語音";
   }
 
   // 只有使用者主動點擊才開始；再點一次就停止，避免背景持續收音。
+  // onstart 尚未觸發前忽略重複點擊，避免快速連點呼叫兩次 start()。
   voiceButton.addEventListener("click", () => {
     if (isListening) {
       recognition.stop();
       return;
     }
+    if (isStarting) return;
+    isStarting = true;
     try {
       recognition.start();
     } catch {
+      isStarting = false;
       showStatus("語音輸入失敗，請改用鍵盤輸入", "error");
     }
   });
 
   recognition.onstart = () => {
+    isStarting = false;
     setListening(true);
     showStatus("正在聆聽，請說出目的地", "");
   };
 
-  // 辨識結果只填入目的地欄位；由使用者確認後自己按「分析」。
+  // 辨識結果只填入目的地欄位並聚焦，由使用者確認後自己按「分析」；
+  // 空轉錄結果不算成功，不覆寫輸入也不顯示成功訊息。
   recognition.onresult = event => {
     const transcript = event.results?.[0]?.[0]?.transcript || "";
-    if (transcript) input.value = transcript;
-    showStatus("已填入語音結果，請確認後按分析", "");
+    if (transcript) {
+      input.value = transcript;
+      input.focus();
+      showStatus("已填入語音結果，請確認後按分析", "");
+    }
   };
 
   recognition.onerror = event => {
@@ -655,7 +667,10 @@ function setupVoiceInput() {
     showStatus(message, "error");
   };
 
-  recognition.onend = () => setListening(false);
+  recognition.onend = () => {
+    isStarting = false;
+    setListening(false);
+  };
 }
 
 // PWA 安裝與分析同意：註冊服務器攔截安裝事件，但只在使用者點擊按鈕後才呼叫 prompt。

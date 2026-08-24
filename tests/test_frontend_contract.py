@@ -459,6 +459,24 @@ def test_voice_input_has_plain_language_listening_and_error_messages():
     assert "語音輸入失敗，請改用鍵盤輸入" in voice
 
 
+def test_voice_result_ignores_empty_transcript_and_focuses_message():
+    """空轉錄結果不得顯示成功或覆寫輸入；非空結果要聚焦 #message 供確認。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    voice = script.split("function setupVoiceInput()", 1)[1].split(
+        'document.addEventListener("DOMContentLoaded"', 1)[0]
+    onresult = voice.split("recognition.onresult", 1)[1].split(
+        "recognition.onerror", 1)[0]
+
+    assert "if (transcript) {" in onresult
+    assert onresult.index("if (transcript) {") < onresult.index(
+        "input.value = transcript")
+    assert onresult.index("input.value = transcript") < onresult.index(
+        "input.focus()")
+    assert 'showStatus("已填入語音結果，請確認後按分析"' in onresult
+    assert "已填入語音結果，請確認後按分析" not in onresult.split(
+        "if (transcript) {", 1)[0]
+
+
 def test_admin_analytics_js_renders_empty_and_disabled_states():
     """管理儀表板必須呈現零資料、未設定與載入失敗三種誠實狀態。"""
     script = (ROOT / "static" / "admin_analytics.js").read_text(encoding="utf-8")

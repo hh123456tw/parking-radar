@@ -324,4 +324,3 @@ git commit -m "feat: add Safari voice destination input"
 ```
 
 提交後由 SDD controller 依序執行：Task spec review、Task quality review、必要 fix loop、final whole-branch review，最後由 controller 重新跑完整 QA。
-
