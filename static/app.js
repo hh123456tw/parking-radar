@@ -639,7 +639,11 @@ function setupVoiceInput() {
     isStopping = true;
     setListening(false);
     setProcessing(true);
-    showStatus("正在辨識語音，請稍候", "");
+    if (receivedResult) {
+      showStatus("已填入語音結果，請確認後按分析", "");
+    } else if (!receivedError) {
+      showStatus("正在辨識語音，請稍候", "");
+    }
     recognition.stop();
   }
 
@@ -770,8 +774,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!("serviceWorker" in navigator)) return;
   // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
-  navigator.serviceWorker.register("/static/sw.js?v=voice-v5", {scope:"/"})
-    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=voice-v5"));
+  navigator.serviceWorker.register("/static/sw.js?v=voice-v6", {scope:"/"})
+    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=voice-v6"));
 
   let deferredPrompt = null;
   const installButton = document.querySelector("#install-app");

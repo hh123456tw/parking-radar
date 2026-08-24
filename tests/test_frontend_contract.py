@@ -158,7 +158,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "voice-v5" in template
+    assert "voice-v6" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -392,20 +392,20 @@ def test_new_interaction_events_use_delegated_handlers():
     assert "history_opened" in script
 
 
-def test_pwa_asset_versions_bumped_for_voice_auto_stop():
+def test_pwa_asset_versions_bumped_for_voice_status_fix():
     """模板與服務器快取金鑰必須同步升版，避免手機沿用舊語音版畫面。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-    assert "voice-v5" in template
+    assert "voice-v6" in template
     assert "analytics-v3" not in template
-    assert "parking-radar-shell-voice-v5" in sw
-    assert "style.css?v=voice-v5" in sw
-    assert "app.js?v=voice-v5" in sw
-    assert 'register("/static/sw.js?v=voice-v5"' in script
-    assert "voice-v4" not in template
-    assert "voice-v4" not in sw
+    assert "parking-radar-shell-voice-v6" in sw
+    assert "style.css?v=voice-v6" in sw
+    assert "app.js?v=voice-v6" in sw
+    assert 'register("/static/sw.js?v=voice-v6"' in script
+    assert "voice-v5" not in template
+    assert "voice-v5" not in sw
 
 
 def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():
@@ -577,6 +577,26 @@ def test_voice_speech_end_reuses_manual_stop_to_release_microphone():
     assert "recognition.stop()" in stop_helper
     assert "requestVoiceStop()" in click_handler
     assert "requestVoiceStop()" in speech_end
+
+
+def test_voice_stop_keeps_success_status_when_interim_result_already_exists():
+    """onresult 早於 speechend 時，停止流程不得把成功提示覆寫回「正在辨識」。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    voice = script.split("function setupVoiceInput()", 1)[1].split(
+        'document.addEventListener("DOMContentLoaded"', 1)[0]
+    stop_helper = voice.split("function requestVoiceStop()", 1)[1].split(
+        'voiceButton.addEventListener("click"', 1)[0]
+    assert "} else if (!receivedError) {" in stop_helper
+    success_branch = stop_helper.split("if (receivedResult) {", 1)[1].split(
+        "} else if (!receivedError) {", 1)[0]
+    waiting_branch = stop_helper.split("} else if (!receivedError) {", 1)[1].split(
+        "}", 1)[0]
+
+    assert "if (receivedResult)" in stop_helper
+    assert "已填入語音結果，請確認後按分析" in success_branch
+    assert "正在辨識語音，請稍候" not in success_branch
+    assert "正在辨識語音，請稍候" in waiting_branch
+    assert "已填入語音結果，請確認後按分析" not in waiting_branch
 
 
 def test_voice_end_always_finishes_processing_with_result_or_clear_error():
