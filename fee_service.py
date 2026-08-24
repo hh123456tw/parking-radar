@@ -21,9 +21,22 @@ PER_HOUR_RE = re.compile(r"(\d+(?:\.\d+)?)\s*元?\s*[／/]\s*(?:每?小)?時")
 NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
 UNKNOWN_LABEL = "官方未標示"
+UNPARSED_LABEL = "請查看官方費率"
 AMBIGUITY_NOTE = "依日期、活動或現場公告"
+UNPARSED_NOTE = "官方費率格式較複雜"
 # FareInfo 沒有星期欄位；週末／假日查詢遇到這些詞時，結構化單價可能是平日價。
 HOLIDAY_FEE_TOKENS = ("週六", "週日", "假日", "放假", "例假")
+
+# 只有獨立段落開頭的「機車／重機」才切換車種；「含大型重型機車」仍屬小型車說明。
+MOTORCYCLE_SECTION_RE = re.compile(
+    r"(?:^|[，,；;。\n])\s*(?:機車|重機)\s*(?=[:：每計月\d])")
+# 依官方常見寫法切出平日、週末與假日條件；時段內若仍有多種價格就保守顯示範圍。
+DAY_MARKER_RE = re.compile(
+    r"(?:週|周|星期)一\s*(?:至|到|[-~～])\s*(?:(?:週|周|星期)?五)|平日|"
+    r"(?:週|周|星期)六\s*(?:至|到|[-~～])\s*(?:(?:週|周|星期)?日)|週末|"
+    r"國定假日|例假日|假日")
+OFFICIAL_FEE_HINT_RE = re.compile(
+    r"費率|計時|計次|每小時|半小時|免費|\d+(?:\.\d+)?\s*元")
 
 
 def _normalize_rules(fare_rules_json):
@@ -112,20 +125,18 @@ def _structured_hourly_prices(fare_rules_json, arrival_time):
 
 
 def _small_car_segment(fee_info):
-    """切出機車標題前的小型車計時費率文字段。"""
+    """切出獨立機車費率段落前的小型車文字，不誤切「大型重型機車」。"""
     if not fee_info:
         return ""
     text = str(fee_info)
-    for marker in ("機車", "重機"):
-        pos = text.find(marker)
-        if pos != -1:
-            return text[:pos]
+    match = MOTORCYCLE_SECTION_RE.search(text)
+    if match:
+        return text[:match.start()]
     return text
 
 
-def _hourly_prices_from_text(fee_info):
-    """從小型車文字段解析每小時金額（每半小時價乘以二後去重複）。"""
-    segment = _small_car_segment(fee_info)
+def _hourly_prices_from_segment(segment):
+    """從已確認的小型車文字段解析時費；每半小時價格換算成一小時。"""
     if not segment:
         return []
     prices = []
@@ -142,6 +153,55 @@ def _hourly_prices_from_text(fee_info):
         if price is not None:
             prices.append(price * 2)
     return list(dict.fromkeys(prices))
+
+
+def _hourly_prices_from_text(fee_info):
+    """從小型車文字段解析所有可能時費，供無日期條件時保守顯示範圍。"""
+    return _hourly_prices_from_segment(_small_car_segment(fee_info))
+
+
+def _day_marker_kind(marker):
+    """把官方日期標題歸類成平日、週末、泛假日或國定假日。"""
+    compact = re.sub(r"\s", "", marker)
+    if compact == "平日" or compact.startswith(("週一", "周一", "星期一")):
+        return "weekday"
+    if compact == "週末" or compact.startswith(("週六", "周六", "星期六")):
+        return "weekend"
+    if compact in {"假日", "例假日"}:
+        return "nonweekday"
+    return "holiday"
+
+
+def _day_kind_matches(marker_kind, clause, day_kind):
+    """判斷日期條件是否適用；週末條款明列放假日時也可套用國定假日。"""
+    if day_kind == "weekday":
+        return marker_kind == "weekday"
+    if day_kind == "weekend":
+        return marker_kind in {"weekend", "nonweekday"}
+    if day_kind == "holiday":
+        if marker_kind in {"holiday", "nonweekday"}:
+            return True
+        return marker_kind == "weekend" and any(
+            token in clause for token in HOLIDAY_FEE_TOKENS)
+    return False
+
+
+def _hourly_prices_for_day_from_text(fee_info, day_kind):
+    """只取符合抵達日條件的文字時費；沒有明確日期標題時回傳空清單。"""
+    segment = _small_car_segment(fee_info)
+    markers = list(DAY_MARKER_RE.finditer(segment))
+    prices = []
+    for index, marker in enumerate(markers):
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(segment)
+        clause = segment[marker.start():end]
+        if _day_kind_matches(_day_marker_kind(marker.group(0)), clause, day_kind):
+            prices.extend(_hourly_prices_from_segment(clause))
+    return list(dict.fromkeys(prices))
+
+
+def _has_official_fee_description(fee_info):
+    """官方有費率相關原文但無法安全換算時，避免誤稱官方沒有標示。"""
+    return bool(fee_info and OFFICIAL_FEE_HINT_RE.search(str(fee_info)))
 
 
 def _daily_cap_from_text(fee_info):
@@ -185,6 +245,7 @@ def build_fee_summary(fare_rules_json: str | None, fee_info: str | None,
     """
     structured = _structured_hourly_prices(fare_rules_json, arrival_time)
     text_prices = _hourly_prices_from_text(fee_info)
+    day_prices = _hourly_prices_for_day_from_text(fee_info, day_kind)
     cap = _daily_cap_from_text(fee_info)
 
     hourly_label = UNKNOWN_LABEL
@@ -193,7 +254,13 @@ def build_fee_summary(fare_rules_json: str | None, fee_info: str | None,
     selected_prices = []
     confidence = "unknown"
     note = None
-    if structured:
+    if day_prices:
+        # 文字有明確平假日條件時，依抵達日選價；多個時段仍以範圍誠實呈現。
+        hourly_label, confidence = _describe_hourly(day_prices)
+        selected_prices = day_prices
+        if confidence == "range":
+            note = AMBIGUITY_NOTE
+    elif structured:
         day_dependent = day_kind in {"weekend", "holiday"} and any(
             token in str(fee_info or "") for token in HOLIDAY_FEE_TOKENS)
         if day_dependent and len(set(text_prices)) > 1:
@@ -211,6 +278,10 @@ def build_fee_summary(fare_rules_json: str | None, fee_info: str | None,
         selected_prices = text_prices
         if confidence == "range":
             note = AMBIGUITY_NOTE
+    elif _has_official_fee_description(fee_info):
+        hourly_label = UNPARSED_LABEL
+        confidence = "unparsed"
+        note = UNPARSED_NOTE
 
     if confidence == "exact" and selected_prices:
         hourly_value = sorted(set(selected_prices))[0]

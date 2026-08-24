@@ -161,15 +161,20 @@ def test_does_not_use_motorcycle_or_monthly_numbers_as_daily_cap():
     assert result["daily_cap_label"] == "官方未標示"
 
 
-def test_ambiguous_text_prices_return_range_with_note():
-    """平日／假日（或活動）不同價時回傳區間，並附說明而非任意選一個。"""
-    result = build_fee_summary(
+def test_day_specific_text_prices_follow_arrival_day():
+    """文字明確區分平假日時，依抵達日選價格，不把已知條件降級成區間。"""
+    weekday = build_fee_summary(
         None, "平日每小時 60 元，假日每小時 80 元",
         datetime.fromisoformat("2026-08-19T18:00:00+08:00"), "weekday")
+    holiday = build_fee_summary(
+        None, "平日每小時 60 元，假日每小時 80 元",
+        datetime.fromisoformat("2026-08-19T18:00:00+08:00"), "holiday")
 
-    assert result["hourly_fee_label"] == "60～80 元／時"
-    assert result["fee_confidence"] == "range"
-    assert result["fee_note"] == "依日期、活動或現場公告"
+    assert weekday["hourly_fee_label"] == "60 元／時"
+    assert weekday["hourly_fee_value"] == 60
+    assert weekday["fee_note"] is None
+    assert holiday["hourly_fee_label"] == "80 元／時"
+    assert holiday["hourly_fee_value"] == 80
 
 
 def test_half_hour_price_normalized_to_hourly_display():
@@ -210,8 +215,8 @@ def test_per_entry_cap_word_before_phrase_is_not_a_daily_cap():
     assert result["daily_cap_label"] == "官方未標示"
 
 
-def test_structured_exact_fee_wins_with_ambiguity_note():
-    """結構化規則有效時時費以規則為準，文字歧異僅進入備註。"""
+def test_explicit_day_text_confirms_structured_weekday_price_without_ambiguity():
+    """文字已明確選中抵達日價格時，可和結構化時費交叉確認，不必標成歧異。"""
     result = build_fee_summary(
         rules({"ParkingType": "C", "RateType": "1", "ChargeableSTime": "0800",
                "ChargeableETime": "2200", "ParkingRates": "60"}),
@@ -220,7 +225,7 @@ def test_structured_exact_fee_wins_with_ambiguity_note():
 
     assert result["hourly_fee_label"] == "60 元／時"
     assert result["fee_confidence"] == "exact"
-    assert result["fee_note"] == "依日期、活動或現場公告"
+    assert result["fee_note"] is None
 
 
 def test_monthly_fee_payment_cap_words_are_not_daily_cap():
@@ -243,3 +248,60 @@ def test_rate_type_1_accepts_float_or_leading_zero_writing():
         ), "", day(), "weekday")
         assert result["hourly_fee_label"] == "60 元／時"
         assert result["fee_confidence"] == "exact"
+
+
+def test_heavy_motorcycle_parenthetical_keeps_small_car_weekday_and_weekend_rates():
+    """小型車說明內的「大型重型機車」不是機車費率段落，不能把後方汽車費率切掉。"""
+    fee_info = (
+        "計時：小型車(含大型重型機車)週一至週五30元/時，"
+        "週六至週日及政府行政機關放假之紀念日、民俗節日40元/時，"
+        "機車10元/時，停車全程以半小時計"
+    )
+
+    weekday = build_fee_summary(None, fee_info, day(), "weekday")
+    weekend = build_fee_summary(None, fee_info, day(), "weekend")
+    holiday = build_fee_summary(None, fee_info, day(), "holiday")
+
+    assert weekday["hourly_fee_label"] == "30 元／時"
+    assert weekday["hourly_fee_value"] == 30
+    assert weekend["hourly_fee_label"] == "40 元／時"
+    assert weekend["hourly_fee_value"] == 40
+    assert holiday["hourly_fee_label"] == "40 元／時"
+    assert holiday["hourly_fee_value"] == 40
+
+
+def test_independent_motorcycle_clause_never_changes_small_car_hourly_fee_or_cap():
+    """獨立的機車費率與機車上限不能混入小型車摘要。"""
+    result = build_fee_summary(
+        None,
+        "小型車每小時30元；機車每小時10元，機車當日當次上限20元",
+        day(), "weekday")
+
+    assert result["hourly_fee_label"] == "30 元／時"
+    assert result["hourly_fee_value"] == 30
+    assert result["daily_cap_label"] == "官方未標示"
+
+
+def test_unparsed_official_fee_text_is_not_mislabeled_as_missing():
+    """官方有費率說明但無法安全換算時，應引導看原文而非宣稱官方沒寫。"""
+    result = build_fee_summary(
+        None, "小型車採累進費率，實際金額依現場公告", day(), "weekday")
+
+    assert result["hourly_fee_label"] == "請查看官方費率"
+    assert result["hourly_fee_value"] is None
+    assert result["fee_confidence"] == "unparsed"
+    assert result["fee_note"] == "官方費率格式較複雜"
+
+
+def test_common_weekday_marker_variants_select_the_matching_price():
+    """週／周／星期及省略第二個週字的常見日期格式，都要依抵達日選價。"""
+    cases = (
+        "星期一至星期五50元/時，星期六至星期日70元/時",
+        "周一到周五50元/時，周六到周日70元/時",
+        "週一～五50元/時，週六～日70元/時",
+    )
+    for fee_info in cases:
+        weekday = build_fee_summary(None, fee_info, day(), "weekday")
+        weekend = build_fee_summary(None, fee_info, day(), "weekend")
+        assert weekday["hourly_fee_label"] == "50 元／時"
+        assert weekend["hourly_fee_label"] == "70 元／時"
