@@ -97,9 +97,11 @@ def test_decision_groups_are_mutually_exclusive():
     groups = analysis.split_recommendation_groups(ranked)
 
     assert [row["lot_id"] for row in groups["recommendations"]] == ["SAFE", "WARN"]
+    assert groups["other_recommended"] == []
     assert groups["warning"] == []
-    assert [row["lot_id"] for row in groups["avoid"]] == ["AVOID"]
-    ids = [row["lot_id"] for name in ("recommendations", "warning", "avoid")
+    assert groups["recommended_count"] == 1
+    assert groups["excluded_count"] == 1
+    ids = [row["lot_id"] for name in ("recommendations", "other_recommended", "warning")
            for row in groups[name]]
     assert len(ids) == len(set(ids))
 
@@ -197,8 +199,8 @@ def test_district_ranking_uses_history_and_excludes_invalid_rows():
     assert ranked[0]["distance_m"] is None
 
 
-def test_split_groups_keeps_nearest_warning_and_avoid_semantics():
-    """群組互斥：推薦只含建議前往，最近清單依距離，警告與避雷依固定門檻。"""
+def test_split_groups_prioritizes_usable_lots_and_only_counts_avoid_lots():
+    """自用結果優先列出可前往場站，避雷場站只保留排除數量。"""
     ranked = [
         {"lot_id": "safe", "total_spaces": 100, "distance_m": 800, "hell_score": 50,
          "available_spaces": 50, "recommendation_score": 80.0},
@@ -212,9 +214,10 @@ def test_split_groups_keeps_nearest_warning_and_avoid_semantics():
     groups = split_recommendation_groups(ranked)
     assert [row["lot_id"] for row in groups["recommendations"]] == [
         "safe", "district", "warning"]
-    assert [row["lot_id"] for row in groups["nearest"]] == ["warning", "avoid", "safe"]
+    assert groups["other_recommended"] == []
     assert groups["warning"] == []
-    assert [row["lot_id"] for row in groups["avoid"]] == ["avoid"]
+    assert groups["recommended_count"] == 2
+    assert groups["excluded_count"] == 1
 
 
 def test_recommendations_choose_safe_by_distance_before_backup():
@@ -234,7 +237,31 @@ def test_recommendations_choose_safe_by_distance_before_backup():
 
     assert [row["lot_id"] for row in groups["recommendations"]] == [
         "near-safe", "middle-safe", "far-safe"]
-    assert [row["lot_id"] for row in groups["warning"]] == ["nearest-backup"]
+    assert groups["warning"] == []
+
+
+def test_remaining_safe_lots_are_kept_before_risky_alternatives():
+    """首選三座以外的安全場站不能消失，也不能被備選或避雷取代。"""
+    ranked = [
+        decision_row(lot_id=f"safe-{index}", distance_m=100 + index * 100)
+        for index in range(5)
+    ]
+    ranked += [
+        decision_row(lot_id="backup", available_spaces=5, total_spaces=100,
+                     hell_score=95, distance_m=50),
+        decision_row(lot_id="avoid", available_spaces=2, total_spaces=100,
+                     hell_score=98, distance_m=40),
+    ]
+
+    groups = split_recommendation_groups(ranked)
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == [
+        "safe-0", "safe-1", "safe-2"]
+    assert [row["lot_id"] for row in groups["other_recommended"]] == [
+        "safe-3", "safe-4"]
+    assert groups["warning"] == []
+    assert groups["recommended_count"] == 5
+    assert groups["excluded_count"] == 1
 
 
 def test_recommendations_use_walking_time_after_risk_filter():
@@ -282,6 +309,21 @@ def test_walking_route_candidates_prioritize_safe_lots_and_limit_count():
 
     assert [row["lot_id"] for row in selected] == [
         f"safe-{index}" for index in range(15)]
+
+
+def test_walking_route_candidates_fill_unused_slots_with_backups_not_avoid():
+    """安全場站不足時才把剩餘 Matrix 名額交給備選，避雷不耗用路線額度。"""
+    safe = decision_row(lot_id="safe", distance_m=300)
+    warning = decision_row(
+        lot_id="warning", available_spaces=5, total_spaces=100,
+        hell_score=95, distance_m=100)
+    avoid = decision_row(
+        lot_id="avoid", available_spaces=2, total_spaces=100,
+        hell_score=98, distance_m=50)
+
+    selected = select_walking_candidates([avoid, warning, safe], limit=15)
+
+    assert [row["lot_id"] for row in selected] == ["safe", "warning"]
 
 
 def test_history_requires_three_same_day_type_and_hour_samples():

@@ -38,7 +38,7 @@ def test_cards_and_map_distinguish_walking_route_from_straight_fallback():
     assert "步行約" in script
     assert "直線約" in script
     assert script.count("formatProximity(lot)") >= 5
-    assert "同風險場站按步行時間排序" in template
+    assert "優先顯示所有可以前往的場站" in template
     assert "© openrouteservice.org by HeiGIT" in template
 
 
@@ -70,6 +70,24 @@ def test_promoted_backup_card_keeps_warning_label():
 
     assert 'const rankLabel = isBackup ? "備選" : "首選"' in script
     assert 'class="parking-card ${cardTone}"' in script
+
+
+def test_self_use_results_prioritize_all_safe_lots_and_hide_avoid_cards():
+    """自用版要保留其他安全場站，避雷只顯示排除數量而非場站卡片。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+
+    assert "data.other_recommended" in script
+    assert "data.recommended_count" in script
+    assert "data.excluded_count" in script
+    assert "data.avoid" not in script
+    assert 'lot.decision_status === "avoid"' not in script
+    assert ".compact-lot.avoid" not in (
+        ROOT / "static" / "style.css").read_text(encoding="utf-8")
+    assert 'id="excluded-summary"' in template
+    assert 'id="other-title"' in template
+    assert "其他可以前往" in script
+    assert "已排除" in script
 
 
 def test_primary_cards_offer_scrollable_official_fee_details():
@@ -134,7 +152,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "analytics-v3" in template
+    assert "self-use-v1" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -368,16 +386,16 @@ def test_new_interaction_events_use_delegated_handlers():
     assert "history_opened" in script
 
 
-def test_pwa_asset_versions_bumped_to_v3():
-    """模板與服務器快取金鑰必須同步升到 analytics-v3。"""
+def test_pwa_asset_versions_bumped_for_self_use_results():
+    """模板與服務器快取金鑰必須同步升版，避免手機沿用舊推薦畫面。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
 
-    assert "analytics-v3" in template
-    assert "analytics-v2" not in template
-    assert "parking-radar-shell-analytics-v3" in sw
-    assert "style.css?v=analytics-v3" in sw
-    assert "app.js?v=analytics-v3" in sw
+    assert "self-use-v1" in template
+    assert "analytics-v3" not in template
+    assert "parking-radar-shell-self-use-v1" in sw
+    assert "style.css?v=self-use-v1" in sw
+    assert "app.js?v=self-use-v1" in sw
 
 
 def test_admin_analytics_js_renders_empty_and_disabled_states():

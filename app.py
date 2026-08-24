@@ -558,8 +558,15 @@ def create_app(test_config=None):
                 # 只有明確詢問歷史時才載入前三座的最近 7 天資料。
                 attach_history(connection, ranked[:3], parsed["arrival_time"])
             raw_groups = split_recommendation_groups(ranked)
-            groups = {name: [public_candidate(row) for row in group]
-                      for name, group in raw_groups.items()}
+            # 清單欄位轉成公開格式；統計數字保持整數，避免混用同一種序列化流程。
+            groups = {
+                name: [public_candidate(row) for row in raw_groups[name]]
+                for name in ("recommendations", "other_recommended", "warning")
+            }
+            groups.update(
+                recommended_count=raw_groups["recommended_count"],
+                excluded_count=raw_groups["excluded_count"],
+            )
             destination_json = None if destination is None else {
                 "display_address": parsed.get("destination_label")
                 or destination["display_address"],

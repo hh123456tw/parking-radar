@@ -189,6 +189,46 @@ def test_address_query_uses_walking_routes_to_order_safe_lots(monkeypatch):
     assert body["recommendations"][0]["walking_duration_minutes"] == 6.0
 
 
+def test_address_query_returns_all_safe_lots_and_only_risk_counts(monkeypatch):
+    """API 保留首選以外的安全場站，風險場站不再作為固定展示清單。"""
+    rows = []
+    for index in range(5):
+        row = lot_row()
+        row.update(
+            lot_id=f"SAFE-{index}", lot_name=f"安全場站 {index}",
+            latitude=25.0376 + index * 0.0001,
+            available_spaces=20,
+        )
+        rows.append(row)
+    warning = lot_row()
+    warning.update(lot_id="WARNING", available_spaces=5, latitude=25.0382)
+    avoid = lot_row()
+    avoid.update(lot_id="AVOID", available_spaces=2, latitude=25.0383)
+    rows.extend([warning, avoid])
+
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
+        "display_address": "臺北市政府", "latitude": 25.0375,
+        "longitude": 121.5637,
+    })
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: rows)
+
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "address": "臺北市信義區市府路1號",
+        "arrival_time": "2026-08-04T18:00:00+08:00",
+    })
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert len(body["recommendations"]) == 3
+    assert len(body["other_recommended"]) == 2
+    assert body["warning"] == []
+    assert body["recommended_count"] == 5
+    assert body["excluded_count"] == 1
+    assert "nearest" not in body
+    assert "avoid" not in body
+
+
 def test_walking_route_failure_keeps_address_query_usable(monkeypatch):
     """步行 API 失敗時不得讓停車查詢失敗，應保留直線距離結果。"""
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)

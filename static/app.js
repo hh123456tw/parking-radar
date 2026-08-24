@@ -460,13 +460,27 @@ function compactMetaLine(lot) {
 
 function renderCards(data) {
   const recommendations = data.recommendations || [];
-  const otherLots = [...(data.warning || []), ...(data.avoid || [])];
+  const otherRecommended = data.other_recommended || [];
+  const warning = data.warning || [];
+  const otherLots = [...otherRecommended, ...warning];
   document.querySelector("#recommendations").innerHTML = recommendations.length
     ? recommendations.map(primaryCard).join("")
-    : `<p class="group-empty">目前沒有低風險首選，請查看其他附近場站。</p>`;
+    : `<p class="group-empty">附近目前沒有可以前往或可供備選的場站。</p>`;
+
+  const excludedSummary = document.querySelector("#excluded-summary");
+  const excludedCount = Number(data.excluded_count || 0);
+  excludedSummary.hidden = excludedCount === 0;
+  excludedSummary.textContent = excludedCount
+    ? `已排除 ${excludedCount} 座剩餘空位過少的高風險場站。` : "";
 
   const otherSection = document.querySelector("#other-section");
   otherSection.hidden = otherLots.length === 0;
+  const safeCount = Number(data.recommended_count || 0);
+  document.querySelector("#other-title").textContent = otherRecommended.length
+    ? "其他可以前往" : "附近備選";
+  document.querySelector("#other-note").textContent = otherRecommended.length
+    ? `附近共有 ${safeCount} 座可以前往，以下為其餘安全場站。`
+    : "附近安全場站不足，以下場站抵達前請再次確認空位。";
   document.querySelector("#other-lots").innerHTML = otherLots.map(compactLot).join("");
 }
 
@@ -502,9 +516,9 @@ function renderMap(data) {
     focusPoints.push(marker.getLatLng());
   });
 
-  [...(data.warning || []), ...(data.avoid || [])].forEach(lot => {
+  [...(data.other_recommended || []), ...(data.warning || [])].forEach(lot => {
     if (lot.latitude == null || lot.longitude == null) return;
-    const color = lot.decision_status === "avoid" ? "#ff5d66" : "#f2c94c";
+    const color = lot.decision_status === "warning" ? "#f2c94c" : "#36c98f";
     const marker = L.circleMarker([lot.latitude, lot.longitude], {
       radius:7, color, weight:2, fillColor:color, fillOpacity:.72,
     }).bindPopup(markerPopup(lot)).addTo(markerLayer);

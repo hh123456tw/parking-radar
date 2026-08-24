@@ -251,8 +251,10 @@ def test_no_ranked_candidates_records_failed_no_candidates(monkeypatch):
     assert response.status_code == 200
     UUID(body["request_id"])
     assert body["current"] == {"district_score": None, "valid_lot_count": 0}
-    for group in ("recommendations", "nearest", "warning", "avoid"):
+    for group in ("recommendations", "other_recommended", "warning"):
         assert body[group] == []
+    assert body["recommended_count"] == 0
+    assert body["excluded_count"] == 0
     assert written[0]["outcome_code"] == "failed_no_candidates"
 
 
@@ -268,8 +270,10 @@ def test_no_candidates_query_keeps_200_empty_groups_contract(monkeypatch):
     assert response.status_code == 200
     UUID(body["request_id"])
     assert body["current"] == {"district_score": None, "valid_lot_count": 0}
-    for group in ("recommendations", "nearest", "warning", "avoid"):
+    for group in ("recommendations", "other_recommended", "warning"):
         assert body[group] == []
+    assert body["recommended_count"] == 0
+    assert body["excluded_count"] == 0
     assert body["history"] == {
         "hell_score": None, "sample_count": 0, "comparison": None}
     assert body["data_status"] == "fresh"

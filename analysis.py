@@ -188,9 +188,8 @@ def explain_candidate(row, min_history_samples=3):
 
 
 def split_recommendation_groups(ranked):
-    """先依風險分級，再依步行時間排序；首選不足三個時才補備選。"""
+    """優先輸出所有安全場站；安全場站不足三座時才以備選補足。"""
     explained = [explain_candidate(row) for row in ranked]
-    with_distance = [row for row in explained if row.get("distance_m") is not None]
 
     def proximity_key(item):
         """實際步行資料優先；未知路線者才在後段依直線距離補位。"""
@@ -199,8 +198,6 @@ def split_recommendation_groups(ranked):
             return (0, float(walking))
         distance = item.get("distance_m")
         return (1, float("inf") if distance is None else float(distance))
-
-    nearest = sorted(with_distance, key=proximity_key)[:3]
 
     def distance_then_spaces(item):
         """同風險優先選步行較近場站；相同時再選剩餘格數較多者。"""
@@ -214,25 +211,30 @@ def split_recommendation_groups(ranked):
         (row for row in explained if row["decision_status"] == "warning"),
         key=distance_then_spaces,
     )
-    avoid = sorted(
-        (row for row in explained if row["decision_status"] == "avoid"),
-        key=distance_then_spaces,
-    )[:3]
+    excluded_count = sum(
+        row["decision_status"] == "avoid" for row in explained)
     recommendations = (safe + backup)[:3]
     selected_ids = {row["lot_id"] for row in recommendations}
-    warning = [row for row in backup if row["lot_id"] not in selected_ids][:3]
+    warning = (
+        [row for row in backup if row["lot_id"] not in selected_ids][:3]
+        if len(safe) < 3 else []
+    )
     return {
         "recommendations": recommendations,
-        "nearest": nearest,
+        "other_recommended": safe[3:],
         "warning": warning,
-        "avoid": avoid,
+        "recommended_count": len(safe),
+        "excluded_count": excluded_count,
     }
 
 
 def select_walking_candidates(ranked, limit=15):
-    """有限路線名額先給低風險場站，各風險內取直線最近者。"""
-    status_order = {"recommended": 0, "warning": 1, "avoid": 2}
-    explained = [explain_candidate(row) for row in ranked]
+    """有限路線名額只給可前往與備選場站，優先計算安全場站。"""
+    status_order = {"recommended": 0, "warning": 1}
+    explained = [
+        row for row in (explain_candidate(item) for item in ranked)
+        if row["decision_status"] in status_order
+    ]
     return sorted(
         explained,
         key=lambda row: (

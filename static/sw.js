@@ -1,9 +1,9 @@
 /* 服務器只快取應用程式外殼；API、地圖圖磚與外部連結一律直通網路。 */
-const CACHE_NAME = "parking-radar-shell-analytics-v3";
+const CACHE_NAME = "parking-radar-shell-self-use-v1";
 const SHELL_ASSETS = [
   "/",
-  "/static/style.css?v=analytics-v3",
-  "/static/app.js?v=analytics-v3",
+  "/static/style.css?v=self-use-v1",
+  "/static/app.js?v=self-use-v1",
   "/static/manifest.webmanifest",
   "/static/icons/icon-192.png",
   "/static/icons/icon-512.png",

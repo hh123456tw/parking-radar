@@ -130,7 +130,6 @@ summary { color:#c7d1db; cursor:pointer; }
   border-left:4px solid var(--accent); border-radius:11px; background:var(--panel-2);
 }
 .compact-lot.warning { --accent:var(--yellow); }
-.compact-lot.avoid { --accent:var(--red); }
 .compact-status { color:var(--accent); font-weight:850; }
 .compact-lot div { display:grid; }
 .compact-lot small, .muted { color:var(--muted); }
@@ -142,7 +141,6 @@ summary { color:#c7d1db; cursor:pointer; }
   color:#c8d3dd; font-size:14px; font-weight:700;
 }
 .compact-lot.warning .compact-meta span { border-color:#6b5a20; color:#ffe9a8; }
-.compact-lot.avoid .compact-meta span { border-color:#6b2430; color:#ffb9bf; }
 .compact-lot .fee-note { display:block; grid-column:1/-1; margin:0; }
 
 /* 地圖以大尺寸編號標示三個首選，其餘場站降低權重。 */
