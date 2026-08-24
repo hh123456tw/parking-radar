@@ -603,7 +603,8 @@ function setupVoiceInput() {
   const recognition = new SpeechRecognitionApi();
   recognition.lang = "zh-TW";
   recognition.continuous = false;
-  recognition.interimResults = false;
+  // iOS Safari 手動 stop() 不一定交付 final；先接收中間結果，說話時就能保存可用文字。
+  recognition.interimResults = true;
   recognition.maxAlternatives = 1;
   let isListening = false;
   let isStarting = false;
@@ -661,7 +662,13 @@ function setupVoiceInput() {
   // 辨識結果只填入目的地欄位並聚焦，由使用者確認後自己按「分析」；
   // 空轉錄結果不算成功，不覆寫輸入也不顯示成功訊息。
   recognition.onresult = event => {
-    const transcript = event.results?.[0]?.[0]?.transcript || "";
+    const results = event.results;
+    if (!results?.length) return;
+    let transcript = "";
+    for (let index = 0; index < results.length; index += 1) {
+      transcript += results[index]?.[0]?.transcript || "";
+    }
+    transcript = transcript.trim();
     if (transcript) {
       receivedResult = true;
       input.value = transcript;
@@ -749,8 +756,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!("serviceWorker" in navigator)) return;
   // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
-  navigator.serviceWorker.register("/static/sw.js", {scope:"/"})
-    .catch(() => navigator.serviceWorker.register("/static/sw.js"));
+  navigator.serviceWorker.register("/static/sw.js?v=voice-v3", {scope:"/"})
+    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=voice-v3"));
 
   let deferredPrompt = null;
   const installButton = document.querySelector("#install-app");

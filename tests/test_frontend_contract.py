@@ -158,7 +158,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "voice-v2" in template
+    assert "voice-v3" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -392,18 +392,20 @@ def test_new_interaction_events_use_delegated_handlers():
     assert "history_opened" in script
 
 
-def test_pwa_asset_versions_bumped_for_voice_stop_fix():
+def test_pwa_asset_versions_bumped_for_voice_interim_fix():
     """模板與服務器快取金鑰必須同步升版，避免手機沿用舊語音版畫面。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-    assert "voice-v2" in template
+    assert "voice-v3" in template
     assert "analytics-v3" not in template
-    assert "parking-radar-shell-voice-v2" in sw
-    assert "style.css?v=voice-v2" in sw
-    assert "app.js?v=voice-v2" in sw
-    assert "voice-v1" not in template
-    assert "voice-v1" not in sw
+    assert "parking-radar-shell-voice-v3" in sw
+    assert "style.css?v=voice-v3" in sw
+    assert "app.js?v=voice-v3" in sw
+    assert 'register("/static/sw.js?v=voice-v3"' in script
+    assert "voice-v2" not in template
+    assert "voice-v2" not in sw
 
 
 def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():
@@ -427,7 +429,7 @@ def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():
     assert "window.SpeechRecognition || window.webkitSpeechRecognition" in voice
     assert 'recognition.lang = "zh-TW"' in voice
     assert "recognition.continuous = false" in voice
-    assert "recognition.interimResults = false" in voice
+    assert "recognition.interimResults = true" in voice
     assert "recognition.maxAlternatives = 1" in voice
     assert "recognition.stop()" in voice
     assert "input.value = transcript" in voice
@@ -477,6 +479,23 @@ def test_voice_result_ignores_empty_transcript_and_focuses_message():
     assert 'showStatus("已填入語音結果，請確認後按分析"' in onresult
     assert "已填入語音結果，請確認後按分析" not in onresult.split(
         "if (transcript) {", 1)[0]
+
+
+def test_voice_result_rebuilds_all_safari_interim_results_safely():
+    """Safari 中間結果要從目前完整陣列重建，避免停頓後遺失前句或重複累加。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    voice = script.split("function setupVoiceInput()", 1)[1].split(
+        'document.addEventListener("DOMContentLoaded"', 1)[0]
+    onresult = voice.split("recognition.onresult", 1)[1].split(
+        "recognition.onerror", 1)[0]
+
+    assert "recognition.interimResults = true" in voice
+    assert "const results = event.results" in onresult
+    assert "if (!results?.length) return" in onresult
+    assert "let index = 0" in onresult
+    assert "index < results.length" in onresult
+    assert "results[index]?.[0]?.transcript" in onresult
+    assert "input.value = transcript" in onresult
 
 
 def test_voice_manual_stop_immediately_leaves_listening_state():
