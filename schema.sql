@@ -70,3 +70,57 @@ CREATE TABLE IF NOT EXISTS analytics_events (
     -- 同一 request 每個事件型態只接受第一筆，導航點擊以此去重。
     UNIQUE KEY uq_analytics_request_event (request_id, event_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 每次查詢最多一筆生命週期摘要；原始文字 14 天後清空，其餘 90 天後刪除。
+CREATE TABLE IF NOT EXISTS analytics_query_details (
+    request_id CHAR(36) PRIMARY KEY,
+    occurred_at DATETIME NOT NULL,
+    anonymous_id_hash CHAR(64) NOT NULL,
+    source VARCHAR(20) NOT NULL,
+    query_mode VARCHAR(10) NOT NULL,
+    raw_query_text VARCHAR(500) NULL,
+    parsed_query_json JSON NULL,
+    destination_label VARCHAR(255) NULL,
+    district VARCHAR(20) NULL,
+    arrival_time DATETIME NULL,
+    intent VARCHAR(20) NULL,
+    outcome_code VARCHAR(40) NOT NULL,
+    error_stage VARCHAR(32) NULL,
+    fallback_reason VARCHAR(80) NULL,
+    data_status VARCHAR(20) NULL,
+    result_count INT NOT NULL DEFAULT 0,
+    location_choice_count TINYINT NOT NULL DEFAULT 0,
+    parse_ms INT NULL, geocode_ms INT NULL, freshness_ms INT NULL,
+    database_ms INT NULL, walking_ms INT NULL, total_ms INT NOT NULL,
+    official_data_at DATETIME NULL,
+    collected_at DATETIME NULL,
+    feedback_code VARCHAR(24) NULL,
+    INDEX idx_query_details_occurred (occurred_at),
+    INDEX idx_query_details_district_occurred (district, occurred_at),
+    INDEX idx_query_details_device_occurred (anonymous_id_hash, occurred_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 每次成功查詢最多三筆當時推薦快照，不事後 JOIN 最新停車資料。
+CREATE TABLE IF NOT EXISTS analytics_recommendations (
+    request_id CHAR(36) NOT NULL,
+    rank_position TINYINT NOT NULL,
+    occurred_at DATETIME NOT NULL,
+    parking_lot_id VARCHAR(32) NOT NULL,
+    lot_name VARCHAR(100) NOT NULL,
+    recommendation_group VARCHAR(20) NOT NULL,
+    available_spaces INT NULL,
+    total_spaces INT NULL,
+    pressure_label VARCHAR(20) NULL,
+    decision_status VARCHAR(20) NULL,
+    straight_distance_m INT NULL,
+    walking_distance_m INT NULL,
+    walking_minutes DECIMAL(8,2) NULL,
+    distance_source VARCHAR(16) NOT NULL,
+    hourly_fee_label VARCHAR(100) NULL,
+    daily_cap_label VARCHAR(100) NULL,
+    facility_type_label VARCHAR(40) NULL,
+    navigation_clicked_at DATETIME NULL,
+    PRIMARY KEY (request_id, rank_position),
+    INDEX idx_recommendations_occurred (occurred_at),
+    INDEX idx_recommendations_lot_occurred (parking_lot_id, occurred_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
