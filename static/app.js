@@ -633,16 +633,21 @@ function setupVoiceInput() {
     if (label && processing) label.textContent = "辨識中";
   }
 
+  // 手動停止與自然說完共用同一條路徑，明確要求 Safari 停止收音並整理目前結果。
+  function requestVoiceStop() {
+    if (!isListening || isStopping) return;
+    isStopping = true;
+    setListening(false);
+    setProcessing(true);
+    showStatus("正在辨識語音，請稍候", "");
+    recognition.stop();
+  }
+
   // 只有使用者主動點擊才開始；再點一次就停止，避免背景持續收音。
   // onstart 尚未觸發前忽略重複點擊，避免快速連點呼叫兩次 start()。
   voiceButton.addEventListener("click", () => {
     if (isListening) {
-      // Safari 可能要等辨識服務處理完才觸發 onend；先立即還原按鈕，避免畫面假裝仍在收音。
-      isStopping = true;
-      setListening(false);
-      setProcessing(true);
-      showStatus("正在辨識語音，請稍候", "");
-      recognition.stop();
+      requestVoiceStop();
       return;
     }
     if (isStarting || isStopping) return;
@@ -661,6 +666,11 @@ function setupVoiceInput() {
     isStarting = false;
     setListening(true);
     showStatus("正在聆聽，請說出目的地", "");
+  };
+
+  // continuous=false 不代表各版 Safari 都會主動釋放麥克風；偵測到說話結束時明確 stop()。
+  recognition.onspeechend = () => {
+    requestVoiceStop();
   };
 
   // 辨識結果只填入目的地欄位並聚焦，由使用者確認後自己按「分析」；
@@ -760,8 +770,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!("serviceWorker" in navigator)) return;
   // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
-  navigator.serviceWorker.register("/static/sw.js?v=voice-v4", {scope:"/"})
-    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=voice-v4"));
+  navigator.serviceWorker.register("/static/sw.js?v=voice-v5", {scope:"/"})
+    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=voice-v5"));
 
   let deferredPrompt = null;
   const installButton = document.querySelector("#install-app");
