@@ -3,6 +3,8 @@
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
+DASHBOARD_TEMPLATE = ROOT / "templates" / "admin_analytics.html"
+DASHBOARD_SCRIPT = ROOT / "static" / "admin_analytics.js"
 
 
 def test_decision_cards_keep_required_data_and_actions():
@@ -220,6 +222,26 @@ def test_admin_dashboard_omits_place_type_diagnostic():
     assert "place_types" not in script
 
 
+def test_dashboard_has_four_plain_language_sections_and_no_charts():
+    html = DASHBOARD_TEMPLATE.read_text(encoding="utf-8")
+    script = DASHBOARD_SCRIPT.read_text(encoding="utf-8")
+    for heading in ("目前使用狀況", "使用者去哪裡", "系統哪裡需要改善", "最近查詢"):
+        assert heading in html
+    assert "canvas" not in html
+    assert "Chart(" not in script
+    assert "anonymous_id_hash" not in html + script
+    assert "parsed_query_json" not in html + script
+    assert "innerHTML" not in script
+    assert "onclick=" not in html
+
+
+def test_empty_tables_use_specific_helpful_messages():
+    script = DASHBOARD_SCRIPT.read_text(encoding="utf-8")
+    assert "尚無行政區資料，請完成一次新查詢" in script
+    assert "尚無導航點擊" in script
+    assert "尚無回饋" in script
+
+
 def test_footer_offers_privacy_note_and_change_choice():
     """頁尾要有隱私說明錨點與可重新開啟選擇的控制項。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
@@ -346,6 +368,6 @@ def test_admin_analytics_js_renders_empty_and_disabled_states():
     """管理儀表板必須呈現零資料、未設定與載入失敗三種誠實狀態。"""
     script = (ROOT / "static" / "admin_analytics.js").read_text(encoding="utf-8")
 
-    assert "本時段沒有資料" in script
+    assert "尚無任何資料，請先完成一次新查詢" in script
     assert "匿名分析未設定：缺少 HMAC 秘密，統計保持空白。" in script
     assert "指標載入失敗" in script

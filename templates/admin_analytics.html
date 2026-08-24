@@ -25,33 +25,78 @@
       <p id="status-note" class="state-note">載入中…</p>
       <div id="system-strip" class="system-strip" aria-live="polite"></div>
     </section>
-    <section class="admin-section" aria-labelledby="metrics-heading">
-      <h2 id="metrics-heading">產品指標 <span id="range-label" class="range-label"></span></h2>
+
+    <section class="admin-section" aria-labelledby="usage-heading">
+      <h2 id="usage-heading">目前使用狀況</h2>
       <p id="analytics-note" class="state-note">載入中…</p>
       <div id="kpi-cards" class="kpi-grid" aria-live="polite"></div>
-      <h3>診斷</h3>
-      <div class="diagnostic-grid">
+      <h3>查詢漏斗</h3>
+      <ol id="funnel" class="funnel" aria-live="polite"></ol>
+    </section>
+
+    <section class="admin-section" aria-labelledby="destinations-heading">
+      <h2 id="destinations-heading">使用者去哪裡</h2>
+      <div class="table-grid">
         <section>
-          <h4>導航點擊名次</h4>
+          <h3>熱門行政區</h3>
           <table class="admin-table">
-            <thead><tr><th>名次</th><th>首次點擊數</th><th>占比</th></tr></thead>
-            <tbody id="click-rank-body"></tbody>
-          </table>
-        </section>
-        <section>
-          <h4>熱門行政區（樣本下限以上）</h4>
-          <table class="admin-table">
-            <thead><tr><th>行政區</th><th>查詢裝置數</th></tr></thead>
+            <thead><tr><th>行政區</th><th>查詢數</th></tr></thead>
             <tbody id="district-body"></tbody>
           </table>
         </section>
         <section>
-          <h4>固定錯誤／降級代碼</h4>
+          <h3>熱門目的地</h3>
           <table class="admin-table">
-            <thead><tr><th>代碼</th><th>次數</th></tr></thead>
+            <thead><tr><th>目的地</th><th>查詢數</th></tr></thead>
+            <tbody id="destination-body"></tbody>
+          </table>
+        </section>
+        <section>
+          <h3>最常被導航的停車場</h3>
+          <table class="admin-table">
+            <thead><tr><th>停車場</th><th>次數</th><th>原推薦排名</th></tr></thead>
+            <tbody id="lot-body"></tbody>
+          </table>
+        </section>
+      </div>
+    </section>
+
+    <section class="admin-section" aria-labelledby="improve-heading">
+      <h2 id="improve-heading">系統哪裡需要改善</h2>
+      <section>
+        <h3>各階段耗時中位數</h3>
+        <div class="table-scroll">
+          <table class="admin-table stage-table">
+            <thead><tr><th>解析</th><th>地址解析</th><th>資料確認</th><th>MySQL</th><th>步行路線</th></tr></thead>
+            <tbody id="stage-body"></tbody>
+          </table>
+        </div>
+      </section>
+      <div class="table-grid">
+        <section>
+          <h3>失敗／降級原因</h3>
+          <table class="admin-table">
+            <thead><tr><th>原因</th><th>次數</th></tr></thead>
             <tbody id="outcome-body"></tbody>
           </table>
         </section>
+        <section>
+          <h3>模糊地點出現與選擇</h3>
+          <table class="admin-table">
+            <thead><tr><th>項目</th><th>次數</th></tr></thead>
+            <tbody id="location-choice-body"></tbody>
+          </table>
+        </section>
+      </div>
+    </section>
+
+    <section class="admin-section" aria-labelledby="recent-heading">
+      <h2 id="recent-heading">最近查詢</h2>
+      <div class="table-scroll">
+        <table class="admin-table recent-table">
+          <thead><tr><th>時間</th><th>輸入摘要</th><th>行政區</th><th>結果</th><th>總耗時</th><th>導航場站</th><th>回饋</th></tr></thead>
+          <tbody id="recent-body"></tbody>
+        </table>
       </div>
     </section>
   </main>

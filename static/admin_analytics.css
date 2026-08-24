@@ -74,18 +74,6 @@ body {
   font-size: 15px;
 }
 
-.admin-section h4 {
-  margin: 0 0 8px;
-  font-size: 13px;
-  color: var(--admin-muted);
-}
-
-.range-label {
-  color: var(--admin-muted);
-  font-weight: normal;
-  font-size: 14px;
-}
-
 .state-note {
   color: var(--admin-muted);
   font-size: 13px;
@@ -170,10 +158,54 @@ body {
   font-size: 12px;
 }
 
-.diagnostic-grid {
+.funnel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.funnel-step {
+  flex: 1 1 130px;
+  background: var(--admin-panel);
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.funnel-label {
+  display: block;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.funnel-count {
+  display: block;
+  font-size: 18px;
+  margin-top: 2px;
+}
+
+.funnel-share {
+  display: block;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.table-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 14px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.stage-table,
+.recent-table {
+  min-width: 640px;
 }
 
 .admin-table {
@@ -187,9 +219,35 @@ body {
   text-align: left;
   padding: 6px 8px;
   border-bottom: 1px solid var(--admin-border);
+  white-space: nowrap;
 }
 
 .admin-table th {
   color: var(--admin-muted);
   font-weight: normal;
+}
+
+.empty-cell {
+  color: var(--admin-muted);
+  text-align: center !important;
+}
+
+@media (max-width: 720px) {
+  .admin-header,
+  .admin-section {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .table-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .funnel {
+    flex-direction: column;
+  }
+
+  .funnel-step {
+    flex: none;
+  }
 }
