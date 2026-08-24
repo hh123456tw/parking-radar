@@ -240,7 +240,8 @@ def public_candidate(row):
         "hell_label", "history_sample_count", "decision_status",
         "decision_label", "pressure_label", "recommendation_label", "reasons",
         "arrival_day_label", "calendar_source",
-        "hourly_fee_label", "daily_cap_label", "fee_note", "fee_confidence",
+        "hourly_fee_label", "hourly_fee_value", "daily_cap_label",
+        "fee_note", "fee_confidence",
         "facility_type", "facility_type_label", "facility_source",
     )
     result = {key: row.get(key) for key in keys}

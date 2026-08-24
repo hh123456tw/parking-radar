@@ -286,7 +286,8 @@ def test_query_enriches_every_result_with_local_decision_metadata(monkeypatch):
         "is_holiday": True, "source": "taiwan_calendar",
     })
     monkeypatch.setattr(app_module, "build_fee_summary", lambda *_args: {
-        "hourly_fee_label": "60 元／時", "daily_cap_label": "230 元",
+        "hourly_fee_label": "60 元／時", "hourly_fee_value": 60,
+        "daily_cap_label": "230 元",
         "fee_note": None, "fee_confidence": "exact",
     })
     # Reuse the route's existing database, geocoder, and ranking fakes.
@@ -300,6 +301,7 @@ def test_query_enriches_every_result_with_local_decision_metadata(monkeypatch):
     lot = response.get_json()["recommendations"][0]
     assert lot["arrival_day_label"] == "國定假日｜國慶日"
     assert lot["hourly_fee_label"] == "60 元／時"
+    assert lot["hourly_fee_value"] == 60
     assert lot["daily_cap_label"] == "230 元"
     assert lot["facility_type_label"] == "地下停車場"
 

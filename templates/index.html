@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>停車地獄雷達</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='voice-v6') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='decision-ui-v1') }}">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
   <meta name="theme-color" content="#0b1118">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
@@ -83,11 +83,6 @@
         <div id="recommendations" class="card-grid"></div>
         <p id="excluded-summary" class="section-note" hidden></p>
       </section>
-      <section id="other-section" hidden>
-        <h2 id="other-title">其他可以前往</h2>
-        <p id="other-note" class="section-note">其餘安全場站依步行時間或直線距離排列。</p>
-        <div id="other-lots" class="compact-list"></div>
-      </section>
       <section class="map-layout">
         <div>
           <h2>首選位置</h2>
@@ -97,6 +92,13 @@
           <h2>地圖上的首選</h2>
           <ol id="map-priorities" class="map-priorities"></ol>
         </aside>
+      </section>
+      <section id="other-section" hidden>
+        <h2 id="other-title">其他可以前往</h2>
+        <p id="other-note" class="section-note">其餘安全場站依步行時間或直線距離排列。</p>
+        <button id="other-toggle" class="other-toggle" type="button"
+                aria-expanded="false" aria-controls="other-lots">查看其他場站</button>
+        <div id="other-lots" class="compact-list" hidden></div>
       </section>
       <section id="history-section" class="history-section" hidden>
         <h2 id="history-title">空位變化</h2>
@@ -129,7 +131,7 @@
   </footer>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='app.js', v='voice-v6') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='decision-ui-v1') }}"></script>
 </body>
 
 </html>

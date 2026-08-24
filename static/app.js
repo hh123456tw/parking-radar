@@ -127,6 +127,16 @@ document.addEventListener("click", event => {
     marker.openPopup();
     return;
   }
+  const otherToggle = event.target.closest("#other-toggle");
+  if (otherToggle) {
+    const otherLots = document.querySelector("#other-lots");
+    const willOpen = otherLots.hidden;
+    otherLots.hidden = !willOpen;
+    otherToggle.setAttribute("aria-expanded", String(willOpen));
+    otherToggle.textContent = willOpen
+      ? "收合其他場站" : otherToggle.dataset.closedLabel;
+    return;
+  }
   const feedbackButton = event.target.closest("[data-feedback]");
   if (feedbackButton) sendFeedback(feedbackButton.dataset.feedback);
 });
@@ -361,6 +371,11 @@ function googleMapsUrl(lot) {
   return `${base}${encodeURIComponent(`${lot.lot_name || ""} ${address}`.trim())}`;
 }
 
+function cheapestBadge(lot) {
+  return lot.is_cheapest_hourly
+    ? `<span class="cheapest-badge">每小時最便宜</span>` : "";
+}
+
 function primaryCard(lot, index) {
   const address = formatFullAddress(lot);
   const mapsUrl = googleMapsUrl(lot);
@@ -380,6 +395,7 @@ function primaryCard(lot, index) {
   return `<article class="parking-card ${cardTone}">
     <div class="card-top">
       <span class="rank-badge">${rankLabel} ${index + 1}</span>
+      ${cheapestBadge(lot)}
       <span class="distance-label">${escapeHtml(formatProximity(lot))}</span>
     </div>
     <h3>${escapeHtml(lot.lot_name)}</h3>
@@ -410,6 +426,29 @@ function primaryCard(lot, index) {
   </article>`;
 }
 
+// 第二、三選擇只保留比較所需資訊，避免手機畫面連續出現三張大型卡片。
+function alternativeCard(lot, index) {
+  const mapsUrl = googleMapsUrl(lot);
+  const hourly = displayValue(lot.hourly_fee_label);
+  const cap = displayValue(lot.daily_cap_label);
+  const capText = cap === "官方未標示" ? "上限未標示" : `上限 ${cap}`;
+  const facility = displayValue(lot.facility_type_label, "型態待確認");
+  const mapsLink = mapsUrl
+    ? `<a href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer" data-navigation-rank="${index + 1}" data-lot-id="${escapeHtml(lot.lot_id)}" data-walking-minutes="${lot.walking_duration_minutes ?? ""}" data-availability-bucket="${availabilityBucket(lot.available_spaces)}">導航</a>`
+    : `<span class="muted">無地圖</span>`;
+  return `<article class="alternative-card ${escapeHtml(lot.decision_status)}">
+    <div class="alternative-heading">
+      <span class="rank-badge">選擇 ${index + 1}</span>
+      ${cheapestBadge(lot)}
+    </div>
+    <strong>${escapeHtml(lot.lot_name)}</strong>
+    <span>${lot.available_spaces} / ${lot.total_spaces} 格可停</span>
+    <span>${hourly}・${capText}</span>
+    <span>${facility}・${escapeHtml(formatProximity(lot))}</span>
+    ${mapsLink}
+  </article>`;
+}
+
 // 首選卡用的決策元資料列：抵達日、時費、每日上限與場站型態，一律只顯示轉義後的值。
 function feeMetaLine(lot) {
   const arrival = displayValue(lot.arrival_day_label);
@@ -433,12 +472,24 @@ function compactLot(lot) {
     ? `<a href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer" data-navigation-rank="0" data-lot-id="${escapeHtml(lot.lot_id)}" data-walking-minutes="${lot.walking_duration_minutes ?? ""}" data-availability-bucket="${availabilityBucket(lot.available_spaces)}">導航</a>`
     : `<span class="muted">無地圖</span>`;
   return `<article class="compact-lot ${escapeHtml(lot.decision_status)}">
-    <span class="compact-status">${escapeHtml(lot.decision_label)}</span>
+    <span class="compact-status">${escapeHtml(lot.decision_label)}${cheapestBadge(lot)}</span>
     <div><strong>${escapeHtml(lot.lot_name)}</strong><small>${lot.available_spaces} / ${lot.total_spaces} 格可停</small></div>
     ${compactMetaLine(lot)}
     <span>${escapeHtml(formatProximity(lot))}</span>
     ${mapAction}
   </article>`;
+}
+
+// 只比較「可以前往」且費率精確的場站；至少有兩種價格才產生最便宜標籤。
+function cheapestHourlyFee(lots) {
+  const exactPrices = lots
+    .filter(lot => lot.decision_status === "recommended"
+      && lot.fee_confidence === "exact"
+      && lot.hourly_fee_value != null
+      && Number.isFinite(Number(lot.hourly_fee_value)))
+    .map(lot => Number(lot.hourly_fee_value));
+  const distinctPrices = new Set(exactPrices);
+  return distinctPrices.size >= 2 ? Math.min(...distinctPrices) : null;
 }
 
 // 緊湊列用的元資料行：名稱下方呈現抵達日、時費、每日上限與場站型態，值皆轉義。
@@ -459,12 +510,30 @@ function compactMetaLine(lot) {
 }
 
 function renderCards(data) {
-  const recommendations = data.recommendations || [];
-  const otherRecommended = data.other_recommended || [];
-  const warning = data.warning || [];
+  const rawRecommendations = data.recommendations || [];
+  const rawOtherRecommended = data.other_recommended || [];
+  const rawWarning = data.warning || [];
+  const cheapestFee = cheapestHourlyFee([
+    ...rawRecommendations, ...rawOtherRecommended,
+  ]);
+  const decoratePrice = lot => ({
+    ...lot,
+    is_cheapest_hourly:cheapestFee !== null
+      && lot.decision_status === "recommended"
+      && lot.fee_confidence === "exact"
+      && Number(lot.hourly_fee_value) === cheapestFee,
+  });
+  const recommendations = rawRecommendations.map(decoratePrice);
+  const otherRecommended = rawOtherRecommended.map(decoratePrice);
+  const warning = rawWarning.map(decoratePrice);
   const otherLots = [...otherRecommended, ...warning];
   document.querySelector("#recommendations").innerHTML = recommendations.length
-    ? recommendations.map(primaryCard).join("")
+    ? `${primaryCard(recommendations[0], 0)}
+       ${recommendations.length > 1 ? `<div class="alternative-choices">
+         <h3>另外 ${recommendations.length - 1} 個選擇</h3>
+         ${recommendations.slice(1).map((lot, index) =>
+           alternativeCard(lot, index + 1)).join("")}
+       </div>` : ""}`
     : `<p class="group-empty">附近目前沒有可以前往或可供備選的場站。</p>`;
 
   const excludedSummary = document.querySelector("#excluded-summary");
@@ -475,13 +544,21 @@ function renderCards(data) {
 
   const otherSection = document.querySelector("#other-section");
   otherSection.hidden = otherLots.length === 0;
+  const toggle = document.querySelector("#other-toggle");
+  const otherList = document.querySelector("#other-lots");
+  const cheapestIsHidden = otherRecommended.some(lot => lot.is_cheapest_hourly);
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.dataset.closedLabel = `查看其他 ${otherLots.length} 座場站${
+    cheapestIsHidden ? "（含每小時最便宜）" : ""}`;
+  toggle.textContent = toggle.dataset.closedLabel;
+  otherList.hidden = true;
   const safeCount = Number(data.recommended_count || 0);
   document.querySelector("#other-title").textContent = otherRecommended.length
     ? "其他可以前往" : "附近備選";
   document.querySelector("#other-note").textContent = otherRecommended.length
     ? `附近共有 ${safeCount} 座可以前往，以下為其餘安全場站。`
     : "附近安全場站不足，以下場站抵達前請再次確認空位。";
-  document.querySelector("#other-lots").innerHTML = otherLots.map(compactLot).join("");
+  otherList.innerHTML = otherLots.map(compactLot).join("");
 }
 
 function markerPopup(lot) {
@@ -774,8 +851,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!("serviceWorker" in navigator)) return;
   // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
-  navigator.serviceWorker.register("/static/sw.js?v=voice-v6", {scope:"/"})
-    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=voice-v6"));
+  navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v1", {scope:"/"})
+    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v1"));
 
   let deferredPrompt = null;
   const installButton = document.querySelector("#install-app");

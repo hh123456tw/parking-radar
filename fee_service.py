@@ -188,6 +188,9 @@ def build_fee_summary(fare_rules_json: str | None, fee_info: str | None,
     cap = _daily_cap_from_text(fee_info)
 
     hourly_label = UNKNOWN_LABEL
+    # 只有單一確定時費才提供比較值；區間與未知費率保持 None，避免誤標最便宜。
+    hourly_value = None
+    selected_prices = []
     confidence = "unknown"
     note = None
     if structured:
@@ -196,18 +199,25 @@ def build_fee_summary(fare_rules_json: str | None, fee_info: str | None,
         if day_dependent and len(set(text_prices)) > 1:
             # 官方結構化規則不含星期，改顯示官方文字中的價格範圍，避免報出錯誤單價。
             hourly_label, confidence = _describe_hourly(text_prices)
+            selected_prices = text_prices
             note = AMBIGUITY_NOTE
         else:
             hourly_label, confidence = _describe_hourly(structured)
+            selected_prices = structured
             if len(set(text_prices)) > 1:
                 note = AMBIGUITY_NOTE
     elif text_prices:
         hourly_label, confidence = _describe_hourly(text_prices)
+        selected_prices = text_prices
         if confidence == "range":
             note = AMBIGUITY_NOTE
 
+    if confidence == "exact" and selected_prices:
+        hourly_value = sorted(set(selected_prices))[0]
+
     return {
         "hourly_fee_label": hourly_label,
+        "hourly_fee_value": hourly_value,
         "daily_cap_label": f"{cap} 元" if cap is not None else UNKNOWN_LABEL,
         "fee_note": note,
         "fee_confidence": confidence,

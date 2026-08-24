@@ -96,20 +96,24 @@ summary { color:#c7d1db; cursor:pointer; }
 .location-choice-grid button:hover, .location-choice-grid button:focus-visible { border-color:var(--orange); }
 .location-choice-grid span { color:var(--muted); line-height:1.45; }
 
-/* 首選卡只呈現做決定需要的資料，移除重複原因框與抽象分數。 */
-.card-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+/* 結果採一張完整首選加兩個精簡替代，避免手機連續出現三張大型卡片。 */
+.card-grid { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(280px,1fr); gap:16px; }
 .parking-card {
   display:flex; flex-direction:column; min-width:0; min-height:350px; padding:18px;
   border:1px solid #314139; border-top:4px solid var(--green); border-radius:14px;
   background:var(--panel-2);
 }
-.card-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.card-top { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
 .rank-badge { padding:5px 10px; border-radius:999px; color:#78e0b7; background:#13271f; font-weight:850; }
 .parking-card.warning { border-color:#5a4b20; border-top-color:var(--yellow); }
 .parking-card.warning .rank-badge { color:#ffe07a; background:#2b2618; }
 .parking-card.warning .capacity-bar i { background:var(--yellow); }
 .parking-card.warning .primary-action { color:#2b2510; background:var(--yellow); }
-.distance-label { color:#d4dbe2; font-weight:700; }
+.distance-label { margin-left:auto; color:#d4dbe2; font-weight:700; }
+.cheapest-badge {
+  padding:4px 9px; border:1px solid #7a6630; border-radius:999px;
+  color:#ffe49a; background:#2b2618; font-size:.82rem; font-weight:850;
+}
 .parking-address { min-height:46px; color:#bac7d2; text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
 .capacity { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px; margin-top:18px; }
 .capacity strong { font-size:2.35rem; line-height:1; }
@@ -151,6 +155,20 @@ summary { color:#c7d1db; cursor:pointer; }
 .secondary-action { color:#e5ebf1; background:#26313d; border:1px solid #374555; }
 .primary-action.disabled { opacity:.5; }
 
+.alternative-choices { display:grid; align-content:start; gap:10px; }
+.alternative-choices h3 { margin:0 0 2px; }
+.alternative-card {
+  display:grid; grid-template-columns:minmax(0,1fr) auto; gap:5px 12px;
+  align-items:center; padding:14px; border:1px solid var(--line);
+  border-left:4px solid var(--green); border-radius:11px; background:var(--panel-2);
+}
+.alternative-card.warning { border-left-color:var(--yellow); }
+.alternative-card > strong, .alternative-card > span { min-width:0; }
+.alternative-card > a, .alternative-card > .muted {
+  grid-column:2; grid-row:2/6; align-self:center; color:#a9d5ff;
+}
+.alternative-heading { display:flex; flex-wrap:wrap; gap:7px; grid-column:1/-1; }
+
 /* 安全與必要備選改為精簡列，避免與三個首選競爭視覺焦點。 */
 .compact-list { display:grid; gap:8px; }
 .compact-lot {
@@ -160,7 +178,7 @@ summary { color:#c7d1db; cursor:pointer; }
 }
 .compact-lot.recommended { --accent:var(--green); }
 .compact-lot.warning { --accent:var(--yellow); }
-.compact-status { color:var(--accent); font-weight:850; }
+.compact-status { display:flex; flex-wrap:wrap; gap:6px; color:var(--accent); font-weight:850; }
 .compact-lot div { display:grid; }
 .compact-lot small, .muted { color:var(--muted); }
 .compact-lot a { color:#a9d5ff; text-align:right; }
@@ -172,6 +190,8 @@ summary { color:#c7d1db; cursor:pointer; }
 }
 .compact-lot.warning .compact-meta span { border-color:#6b5a20; color:#ffe9a8; }
 .compact-lot .fee-note { display:block; grid-column:1/-1; margin:0; }
+.other-toggle { width:100%; color:#e5ebf1; background:#26313d; border:1px solid #374555; }
+#other-lots { margin-top:12px; }
 
 /* 地圖以大尺寸編號標示三個首選，其餘場站降低權重。 */
 .map-layout { display:grid; grid-template-columns:minmax(0,2.2fr) minmax(260px,1fr); gap:22px; }
@@ -242,4 +262,5 @@ footer { padding:8px 0 40px; color:var(--muted); font-size:.88rem; }
   .compact-lot a { text-align:left; }
   #map { height:350px; }
   .card-actions { grid-template-columns:1fr; }
+  .alternative-card { grid-template-columns:1fr auto; }
 }

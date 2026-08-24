@@ -17,6 +17,7 @@ def day(iso="2026-08-19T18:00:00+08:00"):
 def averaged_result(**overrides):
     expected = {
         "hourly_fee_label": "官方未標示",
+        "hourly_fee_value": None,
         "daily_cap_label": "官方未標示",
         "fee_note": None,
         "fee_confidence": "unknown",
@@ -35,6 +36,7 @@ def test_selects_small_car_hourly_rule_for_arrival_time():
 
     assert result == {
         "hourly_fee_label": "60 元／時",
+        "hourly_fee_value": 60,
         "daily_cap_label": "官方未標示",
         "fee_note": None,
         "fee_confidence": "exact",
@@ -60,7 +62,8 @@ def test_matches_cross_midnight_rule_at_night():
     ), "", datetime.fromisoformat("2026-08-19T02:00:00+08:00"), "weekday")
 
     assert result == averaged_result(
-        hourly_fee_label="40 元／時", fee_confidence="exact")
+        hourly_fee_label="40 元／時", hourly_fee_value=40,
+        fee_confidence="exact")
 
 
 def test_cross_midnight_rule_ignored_outside_window():
@@ -108,6 +111,7 @@ def test_returns_range_for_multiple_applicable_prices():
     ), "", day(), "weekday")
 
     assert result["hourly_fee_label"] == "40～60 元／時"
+    assert result["hourly_fee_value"] is None
     assert result["fee_confidence"] == "range"
 
 
@@ -121,7 +125,8 @@ def test_deduplicates_identical_prices():
     ), "", day(), "weekday")
 
     assert result == averaged_result(
-        hourly_fee_label="60 元／時", fee_confidence="exact")
+        hourly_fee_label="60 元／時", hourly_fee_value=60,
+        fee_confidence="exact")
 
 
 def test_malformed_json_returns_unknown_never_raises():
@@ -145,6 +150,7 @@ def test_extracts_small_car_hourly_fee_and_cap_from_text():
         None, "小型車每小時 40 元，當日最高 240 元；機車每次 20 元",
         datetime.fromisoformat("2026-08-19T18:00:00+08:00"), "weekday")
     assert result["hourly_fee_label"] == "40 元／時"
+    assert result["hourly_fee_value"] == 40
     assert result["daily_cap_label"] == "240 元"
 
 

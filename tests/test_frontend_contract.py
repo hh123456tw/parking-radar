@@ -96,6 +96,64 @@ def test_compact_lot_recommended_uses_green_accent():
     assert ".compact-lot.recommended { --accent:var(--green); }" in style
 
 
+def test_results_prioritize_one_full_card_and_collapse_remaining_lots():
+    """手機結果只保留一張完整首選，其餘首選精簡，其他場站預設收合。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+
+    assert "recommendations.slice(1).map((lot, index) =>" in script
+    assert "alternativeCard(lot, index + 1)" in script
+    assert 'id="other-toggle"' in template
+    assert 'aria-controls="other-lots"' in template
+    assert 'id="other-lots" class="compact-list" hidden' in template
+    assert 'toggle.setAttribute("aria-expanded", "false")' in script
+
+
+def test_exact_hourly_prices_can_show_a_cheapest_badge_without_resorting():
+    """最便宜只由精確時費產生標籤，不得改變既有安全與距離排序。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "function cheapestHourlyFee" in script
+    assert 'lot.fee_confidence === "exact"' in script
+    assert "lot.hourly_fee_value != null" in script
+    assert "lot.hourly_fee_value" in script
+    assert "每小時最便宜" in script
+    assert ".sort(" not in script.split("function cheapestHourlyFee", 1)[1].split(
+        "function", 1)[0]
+    assert "otherRecommended.some(lot => lot.is_cheapest_hourly)" in script
+    assert "（含每小時最便宜）" in script
+    assert 'lot.decision_status === "recommended"' in script.split(
+        "const decoratePrice", 1)[1].split("};", 1)[0]
+
+
+def test_alternative_choices_keep_hourly_fee_daily_cap_and_facility_type():
+    """第二、三選擇雖然精簡，仍保留使用者會比較的價格上限與場站型態。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    alternative = script.split("function alternativeCard", 1)[1].split(
+        "function feeMetaLine", 1)[0]
+
+    assert "lot.hourly_fee_label" in alternative
+    assert "lot.daily_cap_label" in alternative
+    assert "lot.facility_type_label" in alternative
+
+
+def test_alternative_heading_and_no_map_state_match_actual_content():
+    """替代數量文案要依資料變化，無地圖狀態也要維持右側動作欄對齊。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    style = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+
+    assert "另外 ${recommendations.length - 1} 個選擇" in script
+    assert ".alternative-card > .muted" in style
+
+
+def test_map_appears_before_collapsed_inventory():
+    """前三名地圖要在大量場站清單之前，手機使用者不必先滑過完整庫存。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+
+    assert template.index('class="map-layout"') < template.index(
+        'id="other-section"')
+
+
 def test_primary_cards_offer_scrollable_official_fee_details():
     """首選卡保留完整官方文字，缺值有提示，長內容不無限撐高卡片。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
@@ -158,7 +216,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "voice-v6" in template
+    assert "decision-ui-v1" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -392,20 +450,20 @@ def test_new_interaction_events_use_delegated_handlers():
     assert "history_opened" in script
 
 
-def test_pwa_asset_versions_bumped_for_voice_status_fix():
-    """模板與服務器快取金鑰必須同步升版，避免手機沿用舊語音版畫面。"""
+def test_pwa_asset_versions_bumped_for_decision_ui():
+    """模板與服務器快取金鑰必須同步升版，避免手機沿用舊決策卡畫面。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-    assert "voice-v6" in template
+    assert "decision-ui-v1" in template
     assert "analytics-v3" not in template
-    assert "parking-radar-shell-voice-v6" in sw
-    assert "style.css?v=voice-v6" in sw
-    assert "app.js?v=voice-v6" in sw
-    assert 'register("/static/sw.js?v=voice-v6"' in script
-    assert "voice-v5" not in template
-    assert "voice-v5" not in sw
+    assert "parking-radar-shell-decision-ui-v1" in sw
+    assert "style.css?v=decision-ui-v1" in sw
+    assert "app.js?v=decision-ui-v1" in sw
+    assert 'register("/static/sw.js?v=decision-ui-v1"' in script
+    assert "voice-v6" not in template
+    assert "voice-v6" not in sw
 
 
 def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():
