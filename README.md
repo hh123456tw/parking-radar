@@ -91,7 +91,7 @@ Register-ScheduledTask `
 | `NOMINATIM_USER_AGENT` | 必須包含可辨識的專題名稱與聯絡資訊 |
 | `OPENROUTESERVICE_API_KEY` | 免費步行路線 Matrix API 金鑰；留空時沿用直線距離 |
 | `ANALYTICS_ENABLED` | 匿名分析總開關；`1`（預設）啟用、`0` 停用。停用時事件端點一律 204 且不寫入，無需重啟即可套用 |
-| `ANALYTICS_REQUIRE_CONSENT` | `1`（預設）顯示允許／拒絕介面；封閉團隊測試可設 `0`，分析預設啟用但仍保留頁尾隱私說明 |
+| `ANALYTICS_REQUIRE_CONSENT` | `1`（預設）顯示允許／拒絕介面與頁尾隱私說明；封閉團隊測試可設 `0`，分析預設啟用且不顯示上述介面與說明 |
 | `ANALYTICS_HMAC_SECRET` | 匿名分析 HMAC 簽章秘密；部署時以 `openssl rand -hex 32` 產生，只放在 VM |
 | `ANALYTICS_SEGMENT_MIN_DEVICES` | 管理儀表板匿名區段樣本下限；程式預設 `5`，封閉團隊 VM 設 `1` 以便看到單一測試裝置的資料 |
 | `DEPLOY_VERSION` | 管理儀表板顯示的部署版本識別（例如 Git commit 短碼） |

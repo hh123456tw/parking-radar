@@ -69,8 +69,8 @@ def test_index_route_renders_single_page():
     assert "停車地獄雷達" in response.get_data(as_text=True)
 
 
-def test_team_analytics_mode_hides_choice_but_keeps_privacy_notice():
-    """團隊模式預設分析，不顯示選擇介面，但仍揭露資料用途。"""
+def test_team_analytics_mode_hides_choice_and_privacy_notice():
+    """團隊模式預設分析，不顯示選擇介面或頁尾隱私說明。"""
     response = make_client(ANALYTICS_REQUIRE_CONSENT=False).get("/")
     body = response.get_data(as_text=True)
 
@@ -78,9 +78,8 @@ def test_team_analytics_mode_hides_choice_but_keeps_privacy_notice():
     assert 'data-analytics-require-consent="0"' in body
     assert 'id="analytics-consent"' not in body
     assert 'id="analytics-choice"' not in body
-    assert "團隊測試期間分析預設啟用" in body
-    assert "不保存 IP 或手機位置" in body
-    assert "14 天後清空" in body
+    assert 'id="privacy-note"' not in body
+    assert "團隊測試期間分析預設啟用" not in body
 
 
 def test_public_analytics_mode_keeps_original_opt_in_controls():
