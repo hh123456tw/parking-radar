@@ -24,6 +24,17 @@ def classify_data_age(minutes):
     return {"tone": "red"}
 
 
+def classify_metadata_age(minutes):
+    """月度後設資料：35 天內綠、45 天內黃、再久紅、未知灰。"""
+    if minutes is None:
+        return {"tone": "gray"}
+    if minutes <= 35 * 24 * 60:
+        return {"tone": "green"}
+    if minutes <= 45 * 24 * 60:
+        return {"tone": "yellow"}
+    return {"tone": "red"}
+
+
 def classify_mysql_latency(milliseconds):
     """MySQL 延遲：<100 綠、<=500 黃、>500 或失敗紅、未知灰。"""
     if milliseconds is None:
@@ -139,8 +150,7 @@ def build_status(connection, now_utc=None, deploy_version="unknown",
             "official_data_at", "官方資料", times, now_utc),
         "collector": _data_age_component(
             "collector_at", "Collector", times, now_utc),
-        "metadata": _data_age_component(
-            "metadata_at", "後設資料", times, now_utc),
+        "metadata": _metadata_age_component(times, now_utc),
         "load": _load_component(system),
         "memory": _memory_component(system),
         "disk": _disk_component(system),
@@ -193,6 +203,18 @@ def _data_age_component(key, label, times, now_utc):
     value_text = f"{minutes} 分鐘前" if minutes is not None else "未知"
     return component(
         label, value_text, classify_data_age(minutes)["tone"], detail)
+
+
+def _metadata_age_component(times, now_utc):
+    """後設資料依每月排程顯示天數，避免套用即時資料門檻造成誤報。"""
+    value = times.get("metadata_at")
+    minutes = _age_minutes(value, now_utc)
+    detail = "最近時間：" + (_taipei_iso(value) if value is not None
+                             else "無資料") + "；排程：每月更新"
+    value_text = f"{minutes // (24 * 60)} 天前" \
+        if minutes is not None else "未知"
+    return component(
+        "後設資料", value_text, classify_metadata_age(minutes)["tone"], detail)
 
 
 def _age_minutes(value, now_utc):

@@ -1,7 +1,7 @@
 """狀態服務測試：固定門檻、本機資源讀取與各元件獨立降級。"""
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import status_service
 from status_service import (
@@ -45,6 +45,17 @@ def test_classify_threshold_boundaries():
     assert classify_mysql_latency(500)["tone"] == "yellow"
     assert classify_mysql_latency(500.1)["tone"] == "red"
     assert classify_mysql_latency(None)["tone"] == "gray"
+
+
+def test_metadata_health_thresholds_match_monthly_timer():
+    """月度同步保留四天緩衝，逾期先黃燈，超過 45 天才紅燈。"""
+    classifier = getattr(status_service, "classify_metadata_age", None)
+    assert classifier is not None
+    assert classifier(35 * 24 * 60)["tone"] == "green"
+    assert classifier(35 * 24 * 60 + 1)["tone"] == "yellow"
+    assert classifier(45 * 24 * 60)["tone"] == "yellow"
+    assert classifier(45 * 24 * 60 + 1)["tone"] == "red"
+    assert classifier(None)["tone"] == "gray"
 
 
 def test_linux_status_parses_memory_and_uses_five_minute_load(
@@ -186,6 +197,24 @@ def test_build_status_reports_all_components(monkeypatch):
     }
     assert status["analytics"]["tone"] == "green"
     assert set(status["application"]) == {"label", "value", "tone", "detail"}
+
+
+def test_build_status_reports_recent_monthly_metadata_as_green(monkeypatch):
+    """三天前完成的月度後設同步應顯示綠色與天數，不得誤報紅燈。"""
+    monkeypatch.setattr(
+        status_service, "read_linux_status", lambda **_: dict(FIXED_SYSTEM))
+    times_row = [{
+        "official_data_at": NOW_UTC - timedelta(minutes=15),
+        "collector_at": NOW_UTC - timedelta(minutes=10),
+        "metadata_at": NOW_UTC - timedelta(days=3),
+    }]
+
+    status = status_service.build_status(
+        FakeConnection([times_row, [{"1": 1}]]), now_utc=NOW_UTC)
+
+    assert status["metadata"]["tone"] == "green"
+    assert status["metadata"]["value"] == "3 天前"
+    assert "每月更新" in status["metadata"]["detail"]
 
 
 def test_build_status_degrades_database_and_data_independently(monkeypatch):
