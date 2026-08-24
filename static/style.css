@@ -122,13 +122,14 @@ summary { color:#c7d1db; cursor:pointer; }
 .secondary-action { color:#e5ebf1; background:#26313d; border:1px solid #374555; }
 .primary-action.disabled { opacity:.5; }
 
-/* 警示與避雷改為列表，避免與三個首選競爭視覺焦點。 */
+/* 安全與必要備選改為精簡列，避免與三個首選競爭視覺焦點。 */
 .compact-list { display:grid; gap:8px; }
 .compact-lot {
   display:grid; grid-template-columns:130px minmax(220px,1fr) 90px 110px;
   gap:14px; align-items:center; padding:12px 14px; border:1px solid var(--line);
   border-left:4px solid var(--accent); border-radius:11px; background:var(--panel-2);
 }
+.compact-lot.recommended { --accent:var(--green); }
 .compact-lot.warning { --accent:var(--yellow); }
 .compact-status { color:var(--accent); font-weight:850; }
 .compact-lot div { display:grid; }

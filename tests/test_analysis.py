@@ -264,6 +264,32 @@ def test_remaining_safe_lots_are_kept_before_risky_alternatives():
     assert groups["excluded_count"] == 1
 
 
+def test_scarce_safe_lots_keep_remaining_backups_in_warning_list():
+    """安全場站少於三座時，首選補滿最近的兩個備選，其餘留在警示清單且不重複。"""
+    ranked = [
+        decision_row(lot_id="safe", distance_m=300),
+        decision_row(lot_id="backup-far", available_spaces=8, total_spaces=100,
+                     hell_score=92, distance_m=900),
+        decision_row(lot_id="backup-mid", available_spaces=8, total_spaces=100,
+                     hell_score=92, distance_m=500),
+        decision_row(lot_id="backup-near", available_spaces=8, total_spaces=100,
+                     hell_score=92, distance_m=100),
+        decision_row(lot_id="backup-closer", available_spaces=8, total_spaces=100,
+                     hell_score=92, distance_m=50),
+    ]
+
+    groups = split_recommendation_groups(ranked)
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == [
+        "safe", "backup-closer", "backup-near"]
+    assert [row["lot_id"] for row in groups["warning"]] == [
+        "backup-mid", "backup-far"]
+    assert groups["other_recommended"] == []
+    assert groups["recommended_count"] == 1
+    assert {row["lot_id"] for row in groups["recommendations"]}.isdisjoint(
+        {row["lot_id"] for row in groups["warning"]})
+
+
 def test_recommendations_use_walking_time_after_risk_filter():
     """同為安全場站時改按實際步行時間，不再只看直線距離。"""
     ranked = [

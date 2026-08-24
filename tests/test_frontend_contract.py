@@ -90,6 +90,12 @@ def test_self_use_results_prioritize_all_safe_lots_and_hide_avoid_cards():
     assert "已排除" in script
 
 
+def test_compact_lot_recommended_uses_green_accent():
+    """安全場站的精簡列沿用綠色 --accent，避免未定義變數落到近似白色。"""
+    style = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+    assert ".compact-lot.recommended { --accent:var(--green); }" in style
+
+
 def test_primary_cards_offer_scrollable_official_fee_details():
     """首選卡保留完整官方文字，缺值有提示，長內容不無限撐高卡片。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
