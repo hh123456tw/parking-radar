@@ -167,6 +167,15 @@ def test_admin_pages_are_read_only_and_no_store(monkeypatch):
     assert client.post("/admin/api/status").status_code == 405
 
 
+def test_admin_page_versions_static_assets_to_bypass_pwa_cache(monkeypatch):
+    """管理頁改版後必須換資源網址，避免 PWA 繼續執行舊版腳本。"""
+    body = make_admin_client(monkeypatch).get(
+        "/admin/analytics").get_data(as_text=True)
+
+    assert "/static/admin_analytics.css?v=admin-v2" in body
+    assert "/static/admin_analytics.js?v=admin-v2" in body
+
+
 def test_status_api_degrades_each_component_independently(monkeypatch):
     body = make_admin_client(monkeypatch, database_error=True).get(
         "/admin/api/status").get_json()
