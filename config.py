@@ -35,6 +35,9 @@ class Config:
     HISTORY_LOOKBACK_DAYS = 7
     # 匿名分析：開關、HMAC 秘密、保留天數與樣本下限。
     ANALYTICS_ENABLED = os.getenv("ANALYTICS_ENABLED", "1") == "1"
+    # 團隊測試可設為 0 自動啟用；正式公開時保留原本的明確同意介面。
+    ANALYTICS_REQUIRE_CONSENT = \
+        os.getenv("ANALYTICS_REQUIRE_CONSENT", "1") == "1"
     ANALYTICS_HMAC_SECRET = os.getenv("ANALYTICS_HMAC_SECRET", "")
     ANALYTICS_RETENTION_DAYS = 90
     ANALYTICS_SEGMENT_MIN_DEVICES = 5

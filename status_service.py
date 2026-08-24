@@ -265,7 +265,7 @@ def _deploy_component(deploy_version):
 def _analytics_component(enabled):
     if enabled:
         return component(
-            "匿名分析", "已啟用", "green", "僅統計同意匿名分析的使用者")
+            "匿名分析", "已啟用", "green", "去識別事件保留 90 天")
     return component(
         "匿名分析", "未設定", "gray", "缺少 ANALYTICS_HMAC_SECRET 或已停用")
 

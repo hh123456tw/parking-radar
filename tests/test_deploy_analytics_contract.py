@@ -57,6 +57,7 @@ def test_example_env_has_names_but_no_real_secrets():
     text = ENV_EXAMPLE.read_text(encoding="utf-8")
     assert "ANALYTICS_HMAC_SECRET=" in text
     assert "ANALYTICS_ENABLED=1" in text
+    assert "ANALYTICS_REQUIRE_CONSENT=1" in text
     assert "DEPLOY_VERSION=" in text
     assert "dev-only-change-me" not in text
 
