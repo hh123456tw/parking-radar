@@ -196,6 +196,7 @@ def test_build_status_reports_all_components(monkeypatch):
         "detail": "DEPLOY_VERSION 注入的 Git commit",
     }
     assert status["analytics"]["tone"] == "green"
+    assert "去識別" in status["analytics"]["detail"]
     assert set(status["application"]) == {"label", "value", "tone", "detail"}
 
 

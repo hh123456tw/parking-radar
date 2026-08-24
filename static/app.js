@@ -4,6 +4,8 @@ const MIN_HISTORY_POINTS = 8;
 const CLIENT_VERSION = "2";
 const ANALYTICS_CONSENT_KEY = "parking_analytics_consent";
 const ANALYTICS_ID_KEY = "parking_analytics_id";
+const ANALYTICS_REQUIRE_CONSENT =
+  document.body.dataset.analyticsRequireConsent === "1";
 const districts = ["松山區","信義區","大安區","中山區","中正區","大同區","萬華區","文山區","南港區","內湖區","士林區","北投區"];
 
 const map = L.map("map").setView([25.0478, 121.5319], 12);
@@ -32,6 +34,13 @@ function analyticsSource() {
 
 function analyticsConsented() {
   return localStorage.getItem(ANALYTICS_CONSENT_KEY) === "accepted";
+}
+
+function ensureAnalyticsIdentity() {
+  localStorage.setItem(ANALYTICS_CONSENT_KEY, "accepted");
+  if (!localStorage.getItem(ANALYTICS_ID_KEY)) {
+    localStorage.setItem(ANALYTICS_ID_KEY, crypto.randomUUID());
+  }
 }
 
 // 查詢端點仍以標頭表示同意；未同意時回傳空物件，不帶任何分析資訊。
@@ -515,6 +524,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const changeButton = document.querySelector("#analytics-choice");
   let pwaOpenedRecorded = false;
 
+  // 團隊測試模式不顯示選擇介面，但沿用同一套去識別 UUID 與事件格式。
+  if (!ANALYTICS_REQUIRE_CONSENT) {
+    ensureAnalyticsIdentity();
+  }
+
   // 同意後每次頁面載入最多記錄一次；pwa_opened 只帶來源與本機 UUID，不含 request_id 或網址。
   function recordPwaOpenedOnce() {
     if (pwaOpenedRecorded || !analyticsConsented()) return;
@@ -532,11 +546,8 @@ document.addEventListener("DOMContentLoaded", () => {
       consentSection.hidden = false;
     }
     acceptButton.addEventListener("click", () => {
-      localStorage.setItem(ANALYTICS_CONSENT_KEY, "accepted");
       // 同一台裝置只建立一次 UUID；之後重開選擇不會更換身份。
-      if (!localStorage.getItem(ANALYTICS_ID_KEY)) {
-        localStorage.setItem(ANALYTICS_ID_KEY, crypto.randomUUID());
-      }
+      ensureAnalyticsIdentity();
       consentSection.hidden = true;
       recordPwaOpenedOnce();
     });

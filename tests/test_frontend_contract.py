@@ -132,7 +132,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "analytics-v1" in template
+    assert "analytics-v2" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -168,6 +168,16 @@ def test_consent_banner_shows_only_when_no_choice_exists():
     assert "localStorage.getItem(ANALYTICS_CONSENT_KEY) === null" in banner
     assert "analyticsConsented()" not in banner.split(
         "if (changeButton && consentSection)", 1)[0]
+
+
+def test_team_mode_auto_enables_existing_anonymous_identity():
+    """免選擇模式仍建立原有 UUID，才能保留重複使用率與導航關聯。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'document.body.dataset.analyticsRequireConsent === "1"' in script
+    assert "if (!ANALYTICS_REQUIRE_CONSENT)" in script
+    assert 'localStorage.setItem(ANALYTICS_CONSENT_KEY, "accepted")' in script
+    assert "localStorage.setItem(ANALYTICS_ID_KEY, crypto.randomUUID())" in script
 
 
 def test_compact_navigation_links_use_rank_zero():

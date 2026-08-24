@@ -69,6 +69,31 @@ def test_index_route_renders_single_page():
     assert "停車地獄雷達" in response.get_data(as_text=True)
 
 
+def test_team_analytics_mode_hides_choice_but_keeps_privacy_notice():
+    """團隊模式預設分析，不顯示選擇介面，但仍揭露資料用途。"""
+    response = make_client(ANALYTICS_REQUIRE_CONSENT=False).get("/")
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'data-analytics-require-consent="0"' in body
+    assert 'id="analytics-consent"' not in body
+    assert 'id="analytics-choice"' not in body
+    assert "團隊測試期間分析預設啟用" in body
+    assert "不保存完整地址、對話、IP 或手機位置" in body
+
+
+def test_public_analytics_mode_keeps_original_opt_in_controls():
+    """恢復公開模式時，原本的允許、拒絕與更改選擇功能必須完整保留。"""
+    response = make_client(ANALYTICS_REQUIRE_CONSENT=True).get("/")
+    body = response.get_data(as_text=True)
+
+    assert 'data-analytics-require-consent="1"' in body
+    assert 'id="analytics-consent"' in body
+    assert 'id="analytics-accept"' in body
+    assert 'id="analytics-decline"' in body
+    assert 'id="analytics-choice"' in body
+
+
 def test_history_route_returns_real_series_and_closes_connection(monkeypatch):
     """歷史端點成功時應使用真實時區轉換並關閉連線。"""
     connection = CloseTrackingConnection()

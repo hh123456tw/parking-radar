@@ -337,7 +337,11 @@ def create_app(test_config=None):
     @app.get("/")
     def index():
         """顯示唯一主頁，資料由前端呼叫 JSON API 載入。"""
-        return render_template("index.html")
+        return render_template(
+            "index.html",
+            analytics_require_consent=app.config.get(
+                "ANALYTICS_REQUIRE_CONSENT", True),
+        )
 
     @app.post("/api/query")
     def query_parking():
