@@ -1,9 +1,10 @@
 """固定、可測試的分析建構器：行政區推導、查詢 trace、明細與推薦快照。"""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 
 from ai_service import TAIPEI_DISTRICTS
+from analytics_service import _as_utc
 
 RAW_TEXT_LIMIT = 500
 ANONYMOUS_HASH_LENGTH = 64
@@ -69,7 +70,8 @@ def build_query_detail(trace, request_id, anonymous_id_hash, outcome_code, total
             ensure_ascii=False, sort_keys=True, default=str),
         "destination_label": parsed.get("destination_label"),
         "district": trace.get("district") or parsed.get("district"),
-        "arrival_time": _as_utc(parsed.get("arrival_time")),
+        "arrival_time": _as_utc(parsed["arrival_time"])
+            if parsed.get("arrival_time") else None,
         "intent": parsed.get("intent"),
         "outcome_code": outcome_code,
         "error_stage": trace.get("error_stage"),
@@ -143,15 +145,6 @@ def _iso_value(value):
     if isinstance(value, datetime):
         return value.isoformat()
     return value
-
-
-def _as_utc(value):
-    """無時區視為 UTC；有時區轉成 UTC；非 datetime 原樣保留。"""
-    if not isinstance(value, datetime):
-        return value
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
 
 
 def _meters(value):

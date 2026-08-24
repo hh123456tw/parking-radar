@@ -79,7 +79,8 @@ def test_team_analytics_mode_hides_choice_but_keeps_privacy_notice():
     assert 'id="analytics-consent"' not in body
     assert 'id="analytics-choice"' not in body
     assert "團隊測試期間分析預設啟用" in body
-    assert "不保存完整地址、對話、IP 或手機位置" in body
+    assert "不保存 IP 或手機位置" in body
+    assert "14 天後清空" in body
 
 
 def test_public_analytics_mode_keeps_original_opt_in_controls():

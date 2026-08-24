@@ -12,7 +12,10 @@ EVENT_TYPES = frozenset({
     "query_completed", "query_failed", "navigation_clicked", "pwa_opened",
 })
 QUERY_EVENT_TYPES = frozenset({"query_completed", "query_failed"})
-BROWSER_EVENT_TYPES = frozenset({"navigation_clicked", "pwa_opened"})
+BROWSER_EVENT_TYPES = frozenset({
+    "navigation_clicked", "pwa_opened", "location_choice_shown",
+    "location_choice_selected", "map_marker_clicked", "history_opened",
+})
 QUERY_MODES = frozenset({"manual", "chat"})
 SOURCES = frozenset({"direct", "shared", "installed_pwa", "unknown"})
 OUTCOME_CODES = frozenset({
@@ -90,7 +93,7 @@ def build_browser_event(
     walking_minutes=None,
     availability_bucket=None,
 ):
-    """建構 pwa_opened/navigation_clicked 事件，只接受固定純量欄位。"""
+    """建構固定白名單的瀏覽事件，只接受固定純量欄位。"""
     if event_type not in BROWSER_EVENT_TYPES:
         raise ValueError(f"invalid event_type: {event_type}")
     if source not in SOURCES:

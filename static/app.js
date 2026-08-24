@@ -69,6 +69,16 @@ function sendAnalyticsEvent(payload) {
   }).catch(() => {});
 }
 
+// 同意下才送事件；未同意時直接略過，不發任何分析請求。
+function track(payload) {
+  if (!analyticsConsented()) return;
+  sendAnalyticsEvent({
+    ...payload,
+    analytics_id:localStorage.getItem(ANALYTICS_ID_KEY),
+    source:analyticsSource(),
+  });
+}
+
 // 空位分群與後端一致，避免事件記錄精確空位數。
 function availabilityBucket(spaces) {
   spaces = Math.max(0, Number(spaces) || 0);
@@ -78,27 +88,85 @@ function availabilityBucket(spaces) {
   return "11_plus";
 }
 
-// 單一委派處理導航分析；不取消、不延遲點擊，只補充記錄白名單純量欄位。
+// 單一委派處理導航、地圖優先、歷史與回饋；不取消、不延遲預設行為。
 document.addEventListener("click", event => {
   const link = event.target.closest("a[data-navigation-rank]");
-  if (!link || !analyticsConsented()) return;
-  const rawMinutes = link.dataset.walkingMinutes;
-  sendAnalyticsEvent({
-    event_type:"navigation_clicked",
-    analytics_id:localStorage.getItem(ANALYTICS_ID_KEY),
-    request_id:activeRequestId,
-    clicked_rank:Number(link.dataset.navigationRank),
-    parking_lot_id:link.dataset.lotId || "",
-    walking_minutes:rawMinutes === "" ? null : Number(rawMinutes),
-    availability_bucket:link.dataset.availabilityBucket,
-    source:analyticsSource(),
-  });
+  if (link) {
+    const rawMinutes = link.dataset.walkingMinutes;
+    track({
+      event_type:"navigation_clicked",
+      request_id:activeRequestId,
+      clicked_rank:Number(link.dataset.navigationRank),
+      parking_lot_id:link.dataset.lotId || "",
+      walking_minutes:rawMinutes === "" ? null : Number(rawMinutes),
+      availability_bucket:link.dataset.availabilityBucket,
+    });
+    return;
+  }
+  const historyButton = event.target.closest("[data-history-lot]");
+  if (historyButton) {
+    track({
+      event_type:"history_opened",
+      request_id:activeRequestId,
+      parking_lot_id:historyButton.dataset.historyLot,
+    });
+    loadHistory(historyButton.dataset.historyLot, historyButton.dataset.lotName);
+    return;
+  }
+  const mapButton = event.target.closest("[data-map-lot]");
+  if (mapButton) {
+    const marker = markerByLot.get(String(mapButton.dataset.mapLot));
+    if (!marker) return;
+    track({
+      event_type:"map_marker_clicked",
+      request_id:activeRequestId,
+      parking_lot_id:mapButton.dataset.mapLot,
+      clicked_rank:Number(mapButton.dataset.mapRank || 0),
+    });
+    map.setView(marker.getLatLng(), 16);
+    marker.openPopup();
+    return;
+  }
+  const feedbackButton = event.target.closest("[data-feedback]");
+  if (feedbackButton) sendFeedback(feedbackButton.dataset.feedback);
 });
+
+function resetFeedback() {
+  const section = document.querySelector("#parking-feedback");
+  section.hidden = true;
+  section.querySelectorAll("[data-feedback]").forEach(
+    button => { button.disabled = false; });
+  document.querySelector("#feedback-status").textContent = "";
+}
+
+async function sendFeedback(code) {
+  const status = document.querySelector("#feedback-status");
+  if (!analyticsConsented() || !activeRequestId) return;
+  const buttons = [...document.querySelectorAll("[data-feedback]")];
+  if (buttons.some(button => button.disabled)) return;
+  try {
+    const response = await fetch("/api/analytics/feedback", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({analytics_id:localStorage.getItem(ANALYTICS_ID_KEY),
+                           request_id:activeRequestId, feedback_code:code}),
+    });
+    if (response.status !== 204) {
+      const data = await response.json().catch(() => ({}));
+      status.textContent = data.error || "回饋記錄失敗";
+      return;
+    }
+    buttons.forEach(button => { button.disabled = true; });
+    status.textContent = "已記錄你的回饋，感謝！";
+  } catch {
+    status.textContent = "回饋記錄失敗";
+  }
+}
 
 async function submitQuery(payload) {
   // 每次新查詢先清空 request_id，避免失敗或等待期間的點擊連到上一筆成功查詢。
   activeRequestId = null;
   hideLocationChoices();
+  resetFeedback();
   showStatus("正在分析並確認官方停車資料…", "");
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), QUERY_TIMEOUT_MS);
@@ -131,6 +199,8 @@ async function submitQuery(payload) {
     resetHistory();
     // 只有終端成功回應才更新 request_id，供後續導航事件對應同一筆查詢。
     activeRequestId = data.request_id || null;
+    document.querySelector("#parking-feedback").hidden =
+      !(data.recommendations || []).length;
     showStatus(data.data_status === "stale"
       ? "分析完成；目前使用最後一次可取得的停車資料。"
       : "分析完成；資料來自臺北市官方即時資訊。", "success");
@@ -184,6 +254,7 @@ function renderLocationChoices(data) {
   const section = document.querySelector("#location-choice-section");
   const choices = data.location_choices || [];
   section.hidden = false;
+  track({event_type:"location_choice_shown", request_id:data.request_id});
   document.querySelector("#location-choices").innerHTML = choices.map(
     (choice, index) => `<button type="button" data-location-choice="${index}">
       <strong>${escapeHtml(choice.name)}</strong>
@@ -194,6 +265,8 @@ function renderLocationChoices(data) {
     button.addEventListener("click", async () => {
       const choice = choices[Number(button.dataset.locationChoice)];
       try {
+        track({event_type:"location_choice_selected",
+               request_id:data.request_id});
         await submitQuery({
           mode:"manual",
           address:choice.address,
@@ -392,11 +465,6 @@ function renderCards(data) {
   const otherSection = document.querySelector("#other-section");
   otherSection.hidden = otherLots.length === 0;
   document.querySelector("#other-lots").innerHTML = otherLots.map(compactLot).join("");
-
-  document.querySelectorAll("[data-history-lot]").forEach(button => {
-    button.addEventListener("click", () => loadHistory(
-      button.dataset.historyLot, button.dataset.lotName));
-  });
 }
 
 function markerPopup(lot) {
@@ -447,17 +515,8 @@ function renderMap(data) {
 
   const priorities = data.recommendations || [];
   document.querySelector("#map-priorities").innerHTML = priorities.length
-    ? priorities.map((lot, index) => `<li><button type="button" data-map-lot="${escapeHtml(lot.lot_id)}"><span>${index + 1}</span><strong>${escapeHtml(lot.lot_name)}</strong><small>${lot.available_spaces} 格可停・${escapeHtml(formatProximity(lot))}</small></button></li>`).join("")
+    ? priorities.map((lot, index) => `<li><button type="button" data-map-lot="${escapeHtml(lot.lot_id)}" data-map-rank="${index + 1}"><span>${index + 1}</span><strong>${escapeHtml(lot.lot_name)}</strong><small>${lot.available_spaces} 格可停・${escapeHtml(formatProximity(lot))}</small></button></li>`).join("")
     : `<li class="map-empty">目前沒有首選位置</li>`;
-
-  document.querySelectorAll("[data-map-lot]").forEach(button => {
-    button.addEventListener("click", () => {
-      const marker = markerByLot.get(String(button.dataset.mapLot));
-      if (!marker) return;
-      map.setView(marker.getLatLng(), 16);
-      marker.openPopup();
-    });
-  });
 }
 
 function resetHistory() {

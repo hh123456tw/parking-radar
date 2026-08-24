@@ -924,3 +924,167 @@ def test_production_snapshot_writer_rolls_back_and_closes_on_error(monkeypatch):
 
     assert connection.rolled_back is True
     assert connection.closed is True
+
+
+@pytest.mark.parametrize("event_type", [
+    "location_choice_shown", "location_choice_selected",
+    "map_marker_clicked", "history_opened",
+])
+def test_new_browser_events_are_accepted(monkeypatch, event_type):
+    app = make_analytics_app(monkeypatch)
+    app.extensions["analytics_writer"] = lambda _event: None
+    response = app.test_client().post("/api/analytics/events", json={
+        "event_type": event_type, "analytics_id": VALID_UUID,
+        "request_id": VALID_REQUEST_ID, "source": "direct",
+        "clicked_rank": 1, "parking_lot_id": "TPE1",
+    })
+    assert response.status_code == 204
+
+
+def test_new_browser_event_writes_hashed_id_and_scalars(monkeypatch):
+    """新事件同樣以 body UUID 計算 HMAC，並保留純量欄位。"""
+    app = make_analytics_app(monkeypatch)
+    written = []
+    app.extensions["analytics_writer"] = written.append
+    response = app.test_client().post("/api/analytics/events", json={
+        "event_type": "history_opened", "analytics_id": VALID_UUID,
+        "request_id": VALID_REQUEST_ID, "source": "direct",
+        "parking_lot_id": "TPE1",
+    })
+    assert response.status_code == 204
+    event = written[0]
+    assert event["event_type"] == "history_opened"
+    assert event["request_id"] == VALID_REQUEST_ID
+    assert event["parking_lot_id"] == "TPE1"
+    assert len(event["anonymous_id_hash"]) == 64
+
+
+def test_event_endpoint_rejects_unknown_event_type(monkeypatch):
+    """事件端點只能接受固定白名單，其他類型一律 400。"""
+    app = make_analytics_app(monkeypatch)
+    response = app.test_client().post(
+        "/api/analytics/events",
+        json=valid_navigation_payload(event_type="screen_view"),
+    )
+    assert response.status_code == 400
+
+
+def test_feedback_updates_only_matching_request_and_uuid(monkeypatch):
+    app = make_analytics_app(monkeypatch)
+    captured = []
+    app.extensions["analytics_feedback_writer"] = \
+        lambda *args: captured.append(args) or 1
+    response = app.test_client().post("/api/analytics/feedback", json={
+        "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+        "feedback_code": "found_space",
+    })
+    assert response.status_code == 204
+    assert captured[0][1:] == (VALID_REQUEST_ID, "found_space")
+
+
+def test_feedback_rejects_unknown_codes_and_fields(monkeypatch):
+    app = make_analytics_app(monkeypatch)
+    app.extensions["analytics_feedback_writer"] = lambda *args: 1
+    client = app.test_client()
+    payload = {
+        "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+        "feedback_code": "found_space",
+    }
+    for overrides in ({"feedback_code": "loved_it"},
+                      {"client_hint": "secret"}):
+        response = client.post(
+            "/api/analytics/feedback", json={**payload, **overrides})
+        assert response.status_code == 400
+    assert client.post(
+        "/api/analytics/feedback", json=payload).status_code == 204
+
+
+def test_feedback_returns_404_when_no_matching_detail(monkeypatch):
+    """沒有對應 request＋裝置的明細時，回饋必須回 404 而非靜默成功。"""
+    app = make_analytics_app(monkeypatch)
+    app.extensions["analytics_feedback_writer"] = lambda *args: 0
+    response = app.test_client().post("/api/analytics/feedback", json={
+        "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+        "feedback_code": "full_on_arrival",
+    })
+    assert response.status_code == 404
+
+
+def test_feedback_survives_writer_exception(monkeypatch, caplog):
+    app = make_analytics_app(monkeypatch)
+    app.extensions["analytics_feedback_writer"] = (
+        lambda *args: (_ for _ in ()).throw(RuntimeError("db down")))
+    with caplog.at_level("WARNING"):
+        response = app.test_client().post("/api/analytics/feedback", json={
+            "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+            "feedback_code": "did_not_go",
+        })
+    assert response.status_code == 204
+    assert "analytics_feedback_write_failed" in caplog.text
+
+
+def test_feedback_disabled_analytics_returns_204(monkeypatch):
+    app = make_analytics_app(
+        monkeypatch, ANALYTICS_HMAC_SECRET="", ANALYTICS_ENABLED=False)
+    written = []
+    app.extensions["analytics_feedback_writer"] = written.append
+    response = app.test_client().post("/api/analytics/feedback", json={
+        "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+        "feedback_code": "found_space",
+    })
+    assert response.status_code == 204
+    assert written == []
+
+
+def test_production_feedback_writer_commits_and_closes_fresh_connection(
+        monkeypatch):
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    called = []
+
+    def update_query_feedback(_connection, request_id, anonymous_id_hash,
+                              feedback_code):
+        called.append((request_id, anonymous_id_hash, feedback_code))
+        return 1
+
+    monkeypatch.setattr(app_module, "update_query_feedback",
+                        update_query_feedback)
+    app = make_analytics_app(monkeypatch)
+    writer = app.extensions["analytics_feedback_writer"]
+
+    result = writer("b" * 64, VALID_REQUEST_ID, "found_space")
+
+    assert result == 1
+    assert called == [(VALID_REQUEST_ID, "b" * 64, "found_space")]
+    assert connection.committed is True
+    assert connection.closed is True
+
+
+def test_production_feedback_writer_rolls_back_and_closes_on_error(monkeypatch):
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+
+    def update_query_feedback(_connection, _request_id, _hash, _code):
+        raise RuntimeError("update failed")
+
+    monkeypatch.setattr(app_module, "update_query_feedback",
+                        update_query_feedback)
+    app = make_analytics_app(monkeypatch)
+    writer = app.extensions["analytics_feedback_writer"]
+
+    with pytest.raises(RuntimeError, match="update failed"):
+        writer("b" * 64, VALID_REQUEST_ID, "found_space")
+
+    assert connection.rolled_back is True
+    assert connection.closed is True
+
+
+def test_run_analytics_write_preserves_connection_failure(monkeypatch):
+    """get_connection 失敗時必須拋出根因，不能用 NameError 蓋掉。"""
+    def raise_connection():
+        raise RuntimeError("connection down")
+
+    monkeypatch.setattr(app_module, "get_connection", raise_connection)
+    app = make_analytics_app(monkeypatch)
+    with pytest.raises(RuntimeError, match="connection down"):
+        app.extensions["analytics_detail_writer"]({})

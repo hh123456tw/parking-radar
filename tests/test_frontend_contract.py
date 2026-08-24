@@ -132,7 +132,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "analytics-v2" in template
+    assert "analytics-v3" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -194,16 +194,17 @@ def test_compact_navigation_links_use_rank_zero():
 
 
 def test_consent_banner_copy_is_exact():
-    """同意橫幅文案必須逐字保留，不能淡化隱私承諾。"""
+    """同意橫幅文案必須如實說明 14 天文字保留與 90 天刪除。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
-    copy = "是否允許匿名使用分析？只記錄查詢是否成功、速度、導航點擊、行政區與約 1 公里的粗略區域；不保存完整地址、對話、IP 或手機位置，90 天後刪除。"
+    copy = "是否允許匿名使用分析？記錄查詢文字與完整目的地 14 天、其餘分析資料 90 天；只保存行政區、約 1 公里的粗略區域、成功／速度／導航點擊與不可逆裝置雜湊，不保存 IP 或手機位置。"
     assert copy in template
     assert "允許匿名分析" in template
     assert "不要分析" in template
     assert "查看隱私說明" in template
     assert "行政區" in template
     assert "約 1 公里的粗略區域" in template
-    assert "完整地址" in template
+    assert "14 天" in template
+    assert "不保存完整地址、對話" not in template
 
 
 def test_admin_dashboard_omits_place_type_diagnostic():
@@ -224,8 +225,9 @@ def test_footer_offers_privacy_note_and_change_choice():
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     assert 'id="privacy-note"' in template
     assert 'id="analytics-choice"' in template
-    assert "不保存完整地址、對話、IP 或手機位置" in template
-    assert "行政區與約 1 公里見方的粗略區域" in template
+    assert "不保存 IP 或手機位置" in template
+    assert "行政區" in template
+    assert "14 天後清空" in template
 
 
 def test_navigation_uses_beacon_with_keepalive_fallback():
@@ -287,6 +289,57 @@ def test_pwa_open_and_navigation_event_types_exist():
 
     assert '"pwa_opened"' in script
     assert '"navigation_clicked"' in script
+
+
+def test_feedback_block_renders_three_buttons_and_status():
+    """結果區要有固定三種回饋按鈕與狀態列，預設隱藏。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="parking-feedback"' in template
+    assert "這次推薦有幫助嗎？" in template
+    assert 'data-feedback="found_space"' in template
+    assert 'data-feedback="full_on_arrival"' in template
+    assert 'data-feedback="did_not_go"' in template
+    assert 'id="feedback-status"' in template
+    assert "有，找到車位" in template
+    assert "到場已滿" in template
+    assert "沒有前往" in template
+
+
+def test_feedback_uses_delegated_handler_and_disables_after_204():
+    """回饋按鈕以單一委派處理，204 後停用並顯示狀態。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'closest("[data-feedback]")' in script
+    assert '"/api/analytics/feedback"' in script
+    assert "disabled = true" in script
+    assert "feedback_code" in script
+
+
+def test_new_interaction_events_use_delegated_handlers():
+    """地圖、歷史與導航各以委派處理，新事件型態都出現在前端。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'closest("[data-map-lot]")' in script
+    assert 'closest("[data-history-lot]")' in script
+    assert "onclick=" not in template
+    assert "location_choice_shown" in script
+    assert "location_choice_selected" in script
+    assert "map_marker_clicked" in script
+    assert "history_opened" in script
+
+
+def test_pwa_asset_versions_bumped_to_v3():
+    """模板與服務器快取金鑰必須同步升到 analytics-v3。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
+
+    assert "analytics-v3" in template
+    assert "analytics-v2" not in template
+    assert "parking-radar-shell-analytics-v3" in sw
+    assert "style.css?v=analytics-v3" in sw
+    assert "app.js?v=analytics-v3" in sw
 
 
 def test_admin_analytics_js_renders_empty_and_disabled_states():

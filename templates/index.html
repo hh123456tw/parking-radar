@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>停車地獄雷達</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='analytics-v2') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='analytics-v3') }}">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
   <meta name="theme-color" content="#0b1118">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
@@ -90,11 +90,18 @@
         <p id="history-note">選擇停車場後載入歷史參考。</p>
         <div id="history-chart-shell" class="history-chart-shell" hidden><canvas id="history-chart"></canvas></div>
       </section>
+      <section id="parking-feedback" class="parking-feedback" hidden>
+        <h2>這次推薦有幫助嗎？</h2>
+        <button data-feedback="found_space">有，找到車位</button>
+        <button data-feedback="full_on_arrival">到場已滿</button>
+        <button data-feedback="did_not_go">沒有前往</button>
+        <p id="feedback-status" role="status"></p>
+      </section>
     </div>
   </main>
   {% if analytics_require_consent %}
   <section id="analytics-consent" class="analytics-consent" hidden>
-    <p>是否允許匿名使用分析？只記錄查詢是否成功、速度、導航點擊、行政區與約 1 公里的粗略區域；不保存完整地址、對話、IP 或手機位置，90 天後刪除。</p>
+    <p>是否允許匿名使用分析？記錄查詢文字與完整目的地 14 天、其餘分析資料 90 天；只保存行政區、約 1 公里的粗略區域、成功／速度／導航點擊與不可逆裝置雜湊，不保存 IP 或手機位置。</p>
     <button id="analytics-accept" type="button">允許匿名分析</button>
     <button id="analytics-decline" type="button">不要分析</button>
     <a href="#privacy-note">查看隱私說明</a>
@@ -102,16 +109,16 @@
   {% endif %}
   <footer>
     {% if analytics_require_consent %}
-    <p id="privacy-note">隱私說明：分析只在您明確同意後啟動；本機 UUID 僅存於瀏覽器，伺服器只保存不可逆的 HMAC 雜湊。儲存的匿名資料包含行政區與約 1 公里見方的粗略區域，不保存完整地址、對話、IP 或手機位置，90 天後刪除。</p>
+    <p id="privacy-note">隱私說明：分析只在您明確同意後啟動；本機 UUID 僅存於瀏覽器，伺服器只保存不可逆的 HMAC 雜湊。儲存的匿名資料包含行政區、約 1 公里見方的粗略區域、查詢文字與完整目的地（14 天後清空），不保存 IP 或手機位置；其餘分析資料 90 天後刪除。</p>
     <button id="analytics-choice" type="button">更改分析選擇</button>
     {% else %}
-    <p id="privacy-note">隱私說明：團隊測試期間分析預設啟用；本機 UUID 僅存於瀏覽器，伺服器只保存不可逆的 HMAC 雜湊。儲存的去識別資料包含行政區與約 1 公里見方的粗略區域，不保存完整地址、對話、IP 或手機位置，90 天後刪除。</p>
+    <p id="privacy-note">隱私說明：團隊測試期間分析預設啟用；本機 UUID 僅存於瀏覽器，伺服器只保存不可逆的 HMAC 雜湊。儲存的去識別資料包含行政區、約 1 公里見方的粗略區域、查詢文字與完整目的地（14 天後清空），不保存 IP 或手機位置；其餘分析資料 90 天後刪除。</p>
     {% endif %}
     <p>資料來源：臺北市資料大平臺｜步行路線 © openrouteservice.org by HeiGIT｜地圖資料 © OpenStreetMap contributors｜歷史資料僅供參考，非空位預測。</p>
   </footer>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='app.js', v='analytics-v2') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='analytics-v3') }}"></script>
 </body>
 
 </html>
