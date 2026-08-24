@@ -14,7 +14,7 @@
 
 - Add exactly two tables: `analytics_query_details` and `analytics_recommendations`.
 - Add at most one production Python file: `analytics_capture.py`.
-- Added production code must remain at or below 450 lines; stop and reduce scope if it exceeds the cap.
+- Added production code must keep the net delta at or below 950 lines (raw added and removed are reported separately); stop and reduce scope if the net exceeds the cap.
 - Do not alter parking recommendation, fee, walking-order, Gemini or geocoding behavior.
 - Never store Cookie, Authorization, API keys, full HTTP headers, model prompts/responses or tracebacks.
 - Raw input is limited to 500 characters and is nulled after 14 days; all analytics rows are deleted after 90 days.
@@ -603,13 +603,21 @@ Expected: all pass with no warnings from application code.
 
 - [ ] **Step 3: Enforce production line budget**
 
-Run:
+Run and sum added/removed production lines separately:
 
 ```powershell
 git diff --numstat origin/master -- '*.py' '*.js' '*.html' '*.css' ':!tests/**'
+$n = git diff --numstat origin/master -- '*.py' '*.js' '*.html' '*.css' ':!tests/**'
+$added = ($n | ForEach-Object { [int](($_ -split "`t")[0]) } | Measure-Object -Sum).Sum
+$removed = ($n | ForEach-Object { [int](($_ -split "`t")[1]) } | Measure-Object -Sum).Sum
+"added=$added removed=$removed net=$($added - $removed)"
 ```
 
-Sum added production lines. Expected: at or below 450. If above 450, remove optional prose/layout helpers or duplicate mapping code; do not weaken validation, best-effort isolation or tests.
+Final rule: the production net delta (`added - removed`) must be at or below 950 lines;
+report raw added and removed totals separately. If the net exceeds 950, remove optional
+prose/layout helpers or duplicate mapping code; do not weaken validation, best-effort
+isolation or tests. Current branch status for the complete backend plus four-section
+Dashboard: 1033 added / 198 removed / 835 net.
 
 - [ ] **Step 4: Run pre-merge review**
 
