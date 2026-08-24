@@ -97,7 +97,10 @@ summary { color:#c7d1db; cursor:pointer; }
 .location-choice-grid span { color:var(--muted); line-height:1.45; }
 
 /* 前三個選擇使用同尺寸比較卡，排名只靠文字表達，不用額外首選底色。 */
-.card-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:stretch; gap:14px; }
+.card-grid {
+  display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); grid-auto-rows:1fr;
+  align-items:stretch; gap:14px;
+}
 .parking-card {
   display:flex; flex-direction:column; min-width:0; min-height:390px; height:100%; padding:18px;
   border:1px solid #314139; border-top:4px solid var(--green); border-radius:14px;

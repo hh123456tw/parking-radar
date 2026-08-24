@@ -105,6 +105,7 @@ def test_top_three_use_equal_cards_and_collapse_remaining_lots():
     assert "recommendations.map((lot, index) => primaryCard(lot, index)).join" in script
     assert "function alternativeCard" not in script
     assert "grid-template-columns:repeat(3,minmax(0,1fr))" in style
+    assert "grid-auto-rows:1fr" in style
     assert "height:100%" in style.split(".parking-card", 1)[1].split("}", 1)[0]
     assert ".parking-card:first-child" not in style
     assert ".parking-card:nth-child" not in style
@@ -217,7 +218,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "decision-ui-v2" in template
+    assert "decision-ui-v3" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -457,14 +458,14 @@ def test_pwa_asset_versions_bumped_for_decision_ui():
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-    assert "decision-ui-v2" in template
+    assert "decision-ui-v3" in template
     assert "analytics-v3" not in template
-    assert "parking-radar-shell-decision-ui-v2" in sw
-    assert "style.css?v=decision-ui-v2" in sw
-    assert "app.js?v=decision-ui-v2" in sw
-    assert 'register("/static/sw.js?v=decision-ui-v2"' in script
-    assert "decision-ui-v1" not in template
-    assert "decision-ui-v1" not in sw
+    assert "parking-radar-shell-decision-ui-v3" in sw
+    assert "style.css?v=decision-ui-v3" in sw
+    assert "app.js?v=decision-ui-v3" in sw
+    assert 'register("/static/sw.js?v=decision-ui-v3"' in script
+    assert "decision-ui-v2" not in template
+    assert "decision-ui-v2" not in sw
 
 
 def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():

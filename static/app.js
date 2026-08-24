@@ -823,8 +823,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!("serviceWorker" in navigator)) return;
   // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
-  navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v2", {scope:"/"})
-    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v2"));
+  navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v3", {scope:"/"})
+    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v3"));
 
   let deferredPrompt = null;
   const installButton = document.querySelector("#install-app");
