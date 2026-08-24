@@ -13,6 +13,7 @@
 - 臺北市路外停車場、地址 1.5 公里搜尋、三名首選、其他安全場站及平日／週末歷史參考。
 - 地址模式可使用 OpenRouteService 顯示停好車後的實際步行時間；服務失敗時退回直線距離。
 - 模糊地標可產生並驗證最多三個候選，使用者能在前端直接選擇。
+- iPhone Safari／主畫面 PWA 可用一次性繁體中文語音輸入；辨識結果只填入目的地欄位，確認後才送出。
 - 單頁 Leaflet 地圖與一張最近七天折線圖。
 - 結果圖卡可直接開啟 Google Maps 汽車導航；不含 AI 空位預測、路邊格位、會員及個別民營業者爬蟲。
 
@@ -248,6 +249,8 @@ location /static/ {
 `server_name` 改為你的網域，再用 `certbot --nginx` 取得並自動套用 Let's Encrypt 憑證，或手動將
 `deploy/nginx-parking-radar.conf` 改為 `listen 443 ssl` 並設定 `ssl_certificate` 與
 `ssl_certificate_key`）。本機自用時，`http://localhost` 本身即為安全來源，可直接啟用安裝功能而不需 HTTPS。
+
+語音輸入使用 Safari 的 Web Speech API；按鈕未出現時仍可使用 iPhone 鍵盤聽寫。首次使用需允許麥克風，切到背景時 Safari 會停止辨識。本專案不保存音訊，但 Safari 的辨識服務是否使用網路由瀏覽器與系統決定。
 
 ### 資料來源與授權
 

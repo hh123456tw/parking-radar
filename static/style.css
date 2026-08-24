@@ -29,6 +29,14 @@ h2 { margin:0 0 4px; font-size:1.45rem; }
 h3 { margin:18px 0 8px; font-size:1.2rem; line-height:1.35; }
 .section-note { margin:0 0 18px; color:var(--muted); }
 .input-row, .manual-grid { display:grid; grid-template-columns:1fr auto; gap:12px; }
+/* 語音與分析按鈕並排；輸入框仍獨立一列，按鈕不換行。 */
+.query-actions { display:flex; gap:8px; }
+.query-actions button { white-space:nowrap; }
+.voice-input {
+  display:inline-flex; align-items:center; gap:6px;
+  color:#e5ebf1; background:#26313d; border:1px solid #374555;
+}
+.voice-input.listening { color:#fff; background:var(--red); border-color:#ff9298; }
 input, select, button { min-height:46px; padding:0 14px; border:1px solid var(--line); border-radius:10px; font:inherit; }
 input, select { color:var(--text); background:#0e141b; }
 button { border:0; color:#1e1108; background:var(--orange); font-weight:800; cursor:pointer; }
@@ -207,6 +215,7 @@ footer { padding:8px 0 40px; color:var(--muted); font-size:.88rem; }
   .hero { padding-top:32px; }
   section { padding:16px; }
   .input-row, .manual-grid, .summary-metrics { grid-template-columns:1fr; }
+  .query-actions { display:grid; grid-template-columns:1fr 1fr; }
   .compact-lot { grid-template-columns:1fr auto; gap:5px 12px; }
   .compact-lot div { grid-column:1/-1; }
   .compact-lot a { text-align:left; }

@@ -158,7 +158,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "self-use-v2" in template
+    assert "voice-v1" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -392,16 +392,71 @@ def test_new_interaction_events_use_delegated_handlers():
     assert "history_opened" in script
 
 
-def test_pwa_asset_versions_bumped_for_self_use_results():
-    """模板與服務器快取金鑰必須同步升版，避免手機沿用舊推薦畫面。"""
+def test_pwa_asset_versions_bumped_for_voice_input():
+    """模板與服務器快取金鑰必須同步升版，避免手機沿用舊語音版畫面。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
 
-    assert "self-use-v2" in template
+    assert "voice-v1" in template
     assert "analytics-v3" not in template
-    assert "parking-radar-shell-self-use-v2" in sw
-    assert "style.css?v=self-use-v2" in sw
-    assert "app.js?v=self-use-v2" in sw
+    assert "parking-radar-shell-voice-v1" in sw
+    assert "style.css?v=voice-v1" in sw
+    assert "app.js?v=voice-v1" in sw
+
+
+def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():
+    """語音輸入是選擇性按鈕：預設隱藏、無障礙標籤齊全，結果只填目的地且絕不自動送出。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    voice_button = template.split('<button id="voice-input"', 1)[1].split(
+        "</button>", 1)[0]
+    assert "hidden" in voice_button
+    assert 'type="button"' in voice_button
+    assert 'aria-label="使用語音輸入目的地"' in voice_button
+    assert 'aria-pressed="false"' in voice_button
+    assert 'class="voice-label"' in voice_button
+    assert "語音" in voice_button
+    assert "分析" in template.split('id="voice-input"', 1)[1].split(
+        "</div>", 1)[0]
+
+    voice = script.split("const SpeechRecognitionApi", 1)[1].split(
+        'document.addEventListener("DOMContentLoaded"', 1)[0]
+    assert "window.SpeechRecognition || window.webkitSpeechRecognition" in voice
+    assert 'recognition.lang = "zh-TW"' in voice
+    assert "recognition.continuous = false" in voice
+    assert "recognition.interimResults = false" in voice
+    assert "recognition.maxAlternatives = 1" in voice
+    assert "recognition.stop()" in voice
+    assert "input.value = transcript" in voice
+    assert "voiceButton.hidden = false" in voice
+    for forbidden in ("submitQuery", ".submit(", ".requestSubmit(", '"/api/query"'):
+        assert forbidden not in voice
+
+    assert "setupVoiceInput();" in script.split(
+        'document.addEventListener("DOMContentLoaded"', 1)[1]
+    assert script.count("setupVoiceInput();") == 1
+
+
+def test_voice_input_has_plain_language_listening_and_error_messages():
+    """聆聽與錯誤訊息必須白話：狀態切換、權限、靜音、網路與未知錯誤各有精確文案。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    voice = script.split("function setupVoiceInput()", 1)[1].split(
+        'document.addEventListener("DOMContentLoaded"', 1)[0]
+
+    assert '"停止"' in voice
+    assert '"語音"' in voice
+    assert "classList.toggle" in voice
+    assert 'setAttribute("aria-pressed", String(listening))' in voice
+    assert 'textContent = listening ? "停止" : "語音"' in voice
+    assert "setListening(false)" in voice
+    assert "正在聆聽，請說出目的地" in voice
+    assert "已填入語音結果，請確認後按分析" in voice
+    assert "請允許 Safari 使用麥克風" in voice
+    assert 'code === "not-allowed" || code === "service-not-allowed"' in voice
+    assert "沒有聽到語音，請再試一次" in voice
+    assert "語音服務暫時無法連線" in voice
+    assert "語音輸入失敗，請改用鍵盤輸入" in voice
 
 
 def test_admin_analytics_js_renders_empty_and_disabled_states():

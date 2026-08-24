@@ -592,8 +592,75 @@ async function loadHistory(lotId, lotName) {
   }
 }
 
+// 語音輸入：同時偵測 Safari 的兩種 Web Speech API 前綴，結果只填入 #message，絕不自動送出。
+const SpeechRecognitionApi = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+function setupVoiceInput() {
+  const voiceButton = document.querySelector("#voice-input");
+  const input = document.querySelector("#message");
+  if (!voiceButton || !input || !SpeechRecognitionApi) return;
+  voiceButton.hidden = false;
+  const recognition = new SpeechRecognitionApi();
+  recognition.lang = "zh-TW";
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  let isListening = false;
+
+  // 監聽中切換成紅色與可見「停止」，結束後回復「語音」與 aria-pressed=false。
+  function setListening(listening) {
+    isListening = listening;
+    voiceButton.classList.toggle("listening", listening);
+    voiceButton.setAttribute("aria-pressed", String(listening));
+    voiceButton.querySelector(".voice-label").textContent = listening ? "停止" : "語音";
+  }
+
+  // 只有使用者主動點擊才開始；再點一次就停止，避免背景持續收音。
+  voiceButton.addEventListener("click", () => {
+    if (isListening) {
+      recognition.stop();
+      return;
+    }
+    try {
+      recognition.start();
+    } catch {
+      showStatus("語音輸入失敗，請改用鍵盤輸入", "error");
+    }
+  });
+
+  recognition.onstart = () => {
+    setListening(true);
+    showStatus("正在聆聽，請說出目的地", "");
+  };
+
+  // 辨識結果只填入目的地欄位；由使用者確認後自己按「分析」。
+  recognition.onresult = event => {
+    const transcript = event.results?.[0]?.[0]?.transcript || "";
+    if (transcript) input.value = transcript;
+    showStatus("已填入語音結果，請確認後按分析", "");
+  };
+
+  recognition.onerror = event => {
+    const code = event.error;
+    let message;
+    if (code === "not-allowed" || code === "service-not-allowed") {
+      message = "請允許 Safari 使用麥克風";
+    } else if (code === "no-speech") {
+      message = "沒有聽到語音，請再試一次";
+    } else if (code === "network") {
+      message = "語音服務暫時無法連線";
+    } else {
+      message = "語音輸入失敗，請改用鍵盤輸入";
+    }
+    showStatus(message, "error");
+  };
+
+  recognition.onend = () => setListening(false);
+}
+
 // PWA 安裝與分析同意：註冊服務器攔截安裝事件，但只在使用者點擊按鈕後才呼叫 prompt。
 document.addEventListener("DOMContentLoaded", () => {
+  setupVoiceInput();
   const consentSection = document.querySelector("#analytics-consent");
   const acceptButton = document.querySelector("#analytics-accept");
   const declineButton = document.querySelector("#analytics-decline");
