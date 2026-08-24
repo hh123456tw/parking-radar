@@ -158,7 +158,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "self-use-v1" in template
+    assert "self-use-v2" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -397,11 +397,11 @@ def test_pwa_asset_versions_bumped_for_self_use_results():
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
 
-    assert "self-use-v1" in template
+    assert "self-use-v2" in template
     assert "analytics-v3" not in template
-    assert "parking-radar-shell-self-use-v1" in sw
-    assert "style.css?v=self-use-v1" in sw
-    assert "app.js?v=self-use-v1" in sw
+    assert "parking-radar-shell-self-use-v2" in sw
+    assert "style.css?v=self-use-v2" in sw
+    assert "app.js?v=self-use-v2" in sw
 
 
 def test_admin_analytics_js_renders_empty_and_disabled_states():

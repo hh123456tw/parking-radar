@@ -61,10 +61,10 @@ def test_service_worker_excludes_network_only_targets_before_cache():
 
 def test_service_worker_precaches_application_shell():
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
-    assert "parking-radar-shell-self-use-v1" in sw
+    assert "parking-radar-shell-self-use-v2" in sw
     assert '"/"' in sw
-    assert "style.css?v=self-use-v1" in sw
-    assert "app.js?v=self-use-v1" in sw
+    assert "style.css?v=self-use-v2" in sw
+    assert "app.js?v=self-use-v2" in sw
     assert "manifest.webmanifest" in sw
     assert "icon-192.png" in sw
     assert "icon-512.png" in sw
