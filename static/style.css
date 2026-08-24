@@ -174,6 +174,28 @@ summary { color:#c7d1db; cursor:pointer; }
 .history-chart-shell canvas { width:100% !important; height:100% !important; }
 footer { padding:8px 0 40px; color:var(--muted); font-size:.88rem; }
 
+/* 分析同意橫幅：固定在底部且不遮擋查詢，未選擇前保持低調。 */
+.analytics-consent {
+  position:fixed; left:16px; right:16px; bottom:16px; z-index:1000;
+  display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px;
+  max-width:min(880px,calc(100% - 32px)); margin:0 auto;
+  padding:14px 16px; border:1px solid #3b4653; border-radius:14px;
+  background:#1b2430; box-shadow:0 12px 34px #00000066;
+}
+.analytics-consent p { margin:0; flex:1 1 340px; color:#dbe3ea; font-size:.9rem; }
+.analytics-consent button { min-height:36px; padding:0 12px; }
+#analytics-decline {
+  color:#e5ebf1; background:#26313d; border:1px solid #374555;
+}
+.analytics-consent a { color:#a9d5ff; }
+
+/* 頁尾隱私說明與更改選擇控制：錨點跳轉後保有留白。 */
+#privacy-note { scroll-margin-top:20px; max-width:640px; }
+#analytics-choice {
+  min-height:36px; margin:4px 0 12px; padding:0 12px;
+  color:#e5ebf1; background:#26313d; border:1px solid #374555;
+}
+
 @media (max-width:900px) {
   .manual-grid { grid-template-columns:1fr 1fr; }
   .summary-panel, .map-layout { grid-template-columns:1fr; }

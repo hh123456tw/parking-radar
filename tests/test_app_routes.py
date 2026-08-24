@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 import pytest
 import requests
@@ -513,7 +514,9 @@ def test_geocode_miss_returns_district_fallback_before_parking_query(monkeypatch
     })
 
     assert response.status_code == 422
-    assert response.get_json()["fallback"] == "district"
+    body = response.get_json()
+    UUID(body["request_id"])
+    assert body["fallback"] == "district"
     assert connection.closed is True
 
 
@@ -660,4 +663,7 @@ def test_chat_service_failure_returns_manual_fallback(monkeypatch):
         "/api/query", json={"mode": "chat", "message": "我要去市政府"})
 
     assert response.status_code == 503
-    assert response.get_json() == {"error": "失敗", "fallback": "manual"}
+    body = response.get_json()
+    UUID(body["request_id"])
+    assert body["error"] == "失敗"
+    assert body["fallback"] == "manual"

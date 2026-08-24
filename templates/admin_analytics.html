@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-Hant">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>維運儀表板｜停車地獄雷達</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin_analytics.css') }}">
+</head>
+
+<body>
+  <header class="admin-header">
+    <h1>維運儀表板</h1>
+    <p class="admin-subtitle">唯讀管理頁面；所有行為統計僅包含同意匿名分析的使用者。</p>
+    <nav class="range-nav" aria-label="日期範圍">
+      <button type="button" class="range-button" data-range="today">今日</button>
+      <button type="button" class="range-button" data-range="7d">7 天</button>
+      <button type="button" class="range-button" data-range="30d">30 天</button>
+    </nav>
+  </header>
+  <main>
+    <section class="admin-section" aria-labelledby="system-heading">
+      <h2 id="system-heading">系統狀態</h2>
+      <p id="status-note" class="state-note">載入中…</p>
+      <div id="system-strip" class="system-strip" aria-live="polite"></div>
+    </section>
+    <section class="admin-section" aria-labelledby="metrics-heading">
+      <h2 id="metrics-heading">產品指標 <span id="range-label" class="range-label"></span></h2>
+      <p id="analytics-note" class="state-note">載入中…</p>
+      <div id="kpi-cards" class="kpi-grid" aria-live="polite"></div>
+      <h3>診斷</h3>
+      <div class="diagnostic-grid">
+        <section>
+          <h4>導航點擊名次</h4>
+          <table class="admin-table">
+            <thead><tr><th>名次</th><th>首次點擊數</th><th>占比</th></tr></thead>
+            <tbody id="click-rank-body"></tbody>
+          </table>
+        </section>
+        <section>
+          <h4>熱門行政區（樣本下限以上）</h4>
+          <table class="admin-table">
+            <thead><tr><th>行政區</th><th>查詢裝置數</th></tr></thead>
+            <tbody id="district-body"></tbody>
+          </table>
+        </section>
+        <section>
+          <h4>固定錯誤／降級代碼</h4>
+          <table class="admin-table">
+            <thead><tr><th>代碼</th><th>次數</th></tr></thead>
+            <tbody id="outcome-body"></tbody>
+          </table>
+        </section>
+      </div>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='admin_analytics.js') }}"></script>
+</body>
+
+</html>

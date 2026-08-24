@@ -1,6 +1,7 @@
 """Flask 邊界錯誤測試：確認不合法輸入與資料庫故障仍回傳 JSON。"""
 
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 import app as app_module
 import pytest
@@ -34,7 +35,9 @@ def test_query_database_connection_failure_returns_json_503(monkeypatch):
 
     assert response.status_code == 503
     assert response.is_json
-    assert response.get_json() == {"error": "服務暫時無法使用，請稍後再試"}
+    body = response.get_json()
+    UUID(body["request_id"])
+    assert body["error"] == "服務暫時無法使用，請稍後再試"
 
 
 def test_history_database_connection_failure_returns_json_503(monkeypatch):
@@ -54,7 +57,9 @@ def test_query_rejects_non_object_json_with_400():
 
     assert response.status_code == 400
     assert response.is_json
-    assert response.get_json() == {"error": "JSON 內容必須是物件"}
+    body = response.get_json()
+    UUID(body["request_id"])
+    assert body["error"] == "JSON 內容必須是物件"
 
 
 @pytest.mark.parametrize(("payload", "message"), [
@@ -73,7 +78,9 @@ def test_manual_query_validation_returns_json_400(payload, message):
 
     assert response.status_code == 400
     assert response.is_json
-    assert response.get_json() == {"error": message}
+    body = response.get_json()
+    UUID(body["request_id"])
+    assert body["error"] == message
 
 
 @pytest.mark.parametrize(("parsed", "message"), [

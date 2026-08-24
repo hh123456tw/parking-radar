@@ -132,5 +132,157 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "navigation-v1" in template
+    assert "analytics-v1" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
+
+
+def test_opt_in_controls_and_privacy_link_exist():
+    """同意橫幅、隱私說明與本機 UUID 是分析的最小入口。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="analytics-consent"' in template
+    assert 'id="analytics-accept"' in template
+    assert 'id="analytics-decline"' in template
+    assert "parking_analytics_consent" in script
+    assert "crypto.randomUUID()" in script
+
+
+def test_decline_persists_choice_and_removes_uuid_without_sending_events():
+    """拒絕選擇要固定寫入 declined、刪除本機 UUID，且不送出任何分析請求。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    decline = script.split(
+        'declineButton.addEventListener("click"', 1)[1]
+    assert 'localStorage.setItem(ANALYTICS_CONSENT_KEY, "declined")' in decline
+    assert "localStorage.removeItem(ANALYTICS_ID_KEY)" in decline
+    assert "localStorage.removeItem(ANALYTICS_CONSENT_KEY)" not in decline
+    assert "sendAnalyticsEvent" not in decline
+
+
+def test_consent_banner_shows_only_when_no_choice_exists():
+    """橫幅只在完全沒有選擇紀錄時顯示；已同意或已拒絕都不再打擾。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    banner = script.split(
+        "if (consentSection && acceptButton && declineButton)", 1)[1]
+
+    assert "localStorage.getItem(ANALYTICS_CONSENT_KEY) === null" in banner
+    assert "analyticsConsented()" not in banner.split(
+        "if (changeButton && consentSection)", 1)[0]
+
+
+def test_compact_navigation_links_use_rank_zero():
+    """其他場站的精簡導航不得偽裝成首選名次 1-3。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    primary = script.split("function primaryCard", 1)[1].split(
+        "function compactLot", 1)[0]
+    compact = script.split("function compactLot", 1)[1].split(
+        "function renderCards", 1)[0]
+
+    assert 'data-navigation-rank="${index + 1}"' in primary
+    assert 'data-navigation-rank="0"' in compact
+    assert "${index + 1}" not in compact
+
+
+def test_consent_banner_copy_is_exact():
+    """同意橫幅文案必須逐字保留，不能淡化隱私承諾。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    copy = "是否允許匿名使用分析？只記錄查詢是否成功、速度、導航點擊、行政區與約 1 公里的粗略區域；不保存完整地址、對話、IP 或手機位置，90 天後刪除。"
+    assert copy in template
+    assert "允許匿名分析" in template
+    assert "不要分析" in template
+    assert "查看隱私說明" in template
+    assert "行政區" in template
+    assert "約 1 公里的粗略區域" in template
+    assert "完整地址" in template
+
+
+def test_admin_dashboard_omits_place_type_diagnostic():
+    """地點類型欄位永遠沒有資料來源，儀表板不得再顯示空診斷表。"""
+    template = (ROOT / "templates" / "admin_analytics.html").read_text(
+        encoding="utf-8")
+    script = (ROOT / "static" / "admin_analytics.js").read_text(
+        encoding="utf-8")
+
+    assert "熱門地點類型" not in template
+    assert "place-type-body" not in template
+    assert "place-type-body" not in script
+    assert "place_types" not in script
+
+
+def test_footer_offers_privacy_note_and_change_choice():
+    """頁尾要有隱私說明錨點與可重新開啟選擇的控制項。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    assert 'id="privacy-note"' in template
+    assert 'id="analytics-choice"' in template
+    assert "不保存完整地址、對話、IP 或手機位置" in template
+    assert "行政區與約 1 公里見方的粗略區域" in template
+
+
+def test_navigation_uses_beacon_with_keepalive_fallback():
+    """導航點擊先送 sendBeacon；失敗退回 keepalive fetch，且不得阻擋點擊。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "navigator.sendBeacon" in script
+    assert "keepalive:true" in script.replace(" ", "")
+    assert "data-navigation-rank" in script
+    click_handler = script.split(
+        'document.addEventListener("click"', 1)[1].split(
+            "async function submitQuery", 1)[0]
+    assert "preventDefault" not in click_handler
+    assert ".catch(() => {})" in script
+
+
+def test_navigation_capture_uses_single_delegated_handler():
+    """導航分析只靠一個委派的 document 點擊處理器，連結不得內嵌 JS。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'document.addEventListener("click"' in script
+    assert 'closest("a[data-navigation-rank]")' in script
+    assert "onclick=" not in template
+
+
+def test_navigation_payload_is_allowlisted_scalars_from_attributes():
+    """導航事件只能由 data-* 屬性組成白名單純量，帶最新 request_id。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'event_type:"navigation_clicked"' in script
+    assert "analytics_id:" in script
+    assert "request_id:activeRequestId" in script
+    assert "parking_lot_id:" in script
+    assert "availability_bucket:" in script
+
+
+def test_active_request_id_updates_only_from_terminal_result():
+    """只有終端查詢結果成功時才更新 activeRequestId，供導航事件使用。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "let activeRequestId" in script
+    assert "activeRequestId = data.request_id" in script
+
+
+def test_active_request_id_resets_before_each_query():
+    """新查詢開始要先清空 activeRequestId，失敗或進行中點擊不能連到上一筆。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    submit = script.split("async function submitQuery(payload)", 1)[1].split(
+        'document.querySelector("#chat-form")', 1)[0]
+
+    assert "activeRequestId = null" in submit
+    assert submit.index("activeRequestId = null") < submit.index('fetch("/api/query"')
+
+
+def test_pwa_open_and_navigation_event_types_exist():
+    """同意後每頁載入記錄一次 pwa_opened，導航點擊記錄 navigation_clicked。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert '"pwa_opened"' in script
+    assert '"navigation_clicked"' in script
+
+
+def test_admin_analytics_js_renders_empty_and_disabled_states():
+    """管理儀表板必須呈現零資料、未設定與載入失敗三種誠實狀態。"""
+    script = (ROOT / "static" / "admin_analytics.js").read_text(encoding="utf-8")
+
+    assert "本時段沒有資料" in script
+    assert "匿名分析未設定：缺少 HMAC 秘密，統計保持空白。" in script
+    assert "指標載入失敗" in script

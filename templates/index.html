@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>停車地獄雷達</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='navigation-v1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='analytics-v1') }}">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
   <meta name="theme-color" content="#0b1118">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
@@ -92,10 +92,20 @@
       </section>
     </div>
   </main>
-  <footer>資料來源：臺北市資料大平臺｜步行路線 © openrouteservice.org by HeiGIT｜地圖資料 © OpenStreetMap contributors｜歷史資料僅供參考，非空位預測。</footer>
+  <section id="analytics-consent" class="analytics-consent" hidden>
+    <p>是否允許匿名使用分析？只記錄查詢是否成功、速度、導航點擊、行政區與約 1 公里的粗略區域；不保存完整地址、對話、IP 或手機位置，90 天後刪除。</p>
+    <button id="analytics-accept" type="button">允許匿名分析</button>
+    <button id="analytics-decline" type="button">不要分析</button>
+    <a href="#privacy-note">查看隱私說明</a>
+  </section>
+  <footer>
+    <p id="privacy-note">隱私說明：分析只在您明確同意後啟動；本機 UUID 僅存於瀏覽器，伺服器只保存不可逆的 HMAC 雜湊。儲存的匿名資料包含行政區與約 1 公里見方的粗略區域，不保存完整地址、對話、IP 或手機位置，90 天後刪除。</p>
+    <button id="analytics-choice" type="button">更改分析選擇</button>
+    <p>資料來源：臺北市資料大平臺｜步行路線 © openrouteservice.org by HeiGIT｜地圖資料 © OpenStreetMap contributors｜歷史資料僅供參考，非空位預測。</p>
+  </footer>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='app.js', v='navigation-v1') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='analytics-v1') }}"></script>
 </body>
 
 </html>

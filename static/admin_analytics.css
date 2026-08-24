@@ -1,0 +1,195 @@
+/* 唯讀管理儀表板的獨立樣式，不影響公開首頁。 */
+:root {
+  --admin-bg: #0b1118;
+  --admin-panel: #141c26;
+  --admin-border: #22303f;
+  --admin-text: #e8eef5;
+  --admin-muted: #93a4b8;
+  --tone-green: #36c98f;
+  --tone-yellow: #f2c94c;
+  --tone-red: #eb5757;
+  --tone-gray: #7a8b9f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--admin-bg);
+  color: var(--admin-text);
+  font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  line-height: 1.5;
+}
+
+.admin-header {
+  padding: 24px 28px 16px;
+  border-bottom: 1px solid var(--admin-border);
+}
+
+.admin-header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.admin-subtitle {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 13px;
+}
+
+.range-nav {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.range-button {
+  background: #1c2836;
+  color: var(--admin-text);
+  border: 1px solid #2d3d4f;
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.range-button.active {
+  background: #2f6f4f;
+  border-color: var(--tone-green);
+}
+
+.admin-section {
+  padding: 20px 28px;
+}
+
+.admin-section h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+
+.admin-section h3 {
+  margin: 20px 0 10px;
+  font-size: 15px;
+}
+
+.admin-section h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--admin-muted);
+}
+
+.range-label {
+  color: var(--admin-muted);
+  font-weight: normal;
+  font-size: 14px;
+}
+
+.state-note {
+  color: var(--admin-muted);
+  font-size: 13px;
+  margin: 0 0 10px;
+}
+
+.state-note.error {
+  color: var(--tone-red);
+}
+
+.system-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.status-pill {
+  background: var(--admin-panel);
+  border: 1px solid var(--admin-border);
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 10px 14px;
+  min-width: 130px;
+}
+
+.status-label {
+  display: block;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.status-value {
+  display: block;
+  font-size: 15px;
+  margin-top: 2px;
+}
+
+.tone-green {
+  border-left-color: var(--tone-green);
+}
+
+.tone-yellow {
+  border-left-color: var(--tone-yellow);
+}
+
+.tone-red {
+  border-left-color: var(--tone-red);
+}
+
+.tone-gray {
+  border-left-color: var(--tone-gray);
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.kpi-card {
+  background: var(--admin-panel);
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.kpi-label {
+  display: block;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.kpi-value {
+  display: block;
+  font-size: 20px;
+  margin-top: 2px;
+}
+
+.kpi-detail {
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-table th,
+.admin-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--admin-border);
+}
+
+.admin-table th {
+  color: var(--admin-muted);
+  font-weight: normal;
+}
