@@ -15,13 +15,15 @@ from analytics_capture import (build_query_detail,
                                build_recommendation_snapshots,
                                infer_destination_district, new_query_trace)
 from analytics_database import (fetch_dashboard_events, fetch_events,
+                                fetch_insight_details,
+                                fetch_insight_recommendations,
                                 insert_event, insert_navigation_event,
                                 replace_recommendation_snapshots,
                                 update_query_feedback, upsert_query_detail)
 from analytics_service import (BROWSER_EVENT_TYPES, DASHBOARD_RANGES, SOURCES,
                                analytics_identity, build_browser_event,
                                build_query_event, parse_dashboard_range,
-                               summarize_events)
+                               summarize_events, summarize_insights)
 from analysis import (build_history_series, district_hell_score,
                       rank_candidates, rank_district_candidates,
                       select_walking_candidates, split_recommendation_groups,
@@ -796,6 +798,7 @@ def create_app(test_config=None):
         enabled = bool(app.config.get("ANALYTICS_ENABLED")
                        and app.config.get("ANALYTICS_HMAC_SECRET"))
         rows, rolling_rows = [], []
+        details, recommendations = [], []
         if enabled:
             connection = get_connection()
             try:
@@ -803,18 +806,25 @@ def create_app(test_config=None):
                 rows = fetch_dashboard_events(connection, start, end)
                 rolling_start = parse_dashboard_range("30d", now_utc)[0]
                 rolling_rows = fetch_events(connection, rolling_start, now_utc)
+                details = fetch_insight_details(
+                    connection, start, end, recent_limit=None)
+                recommendations = fetch_insight_recommendations(
+                    connection, start, end)
             except Exception:
                 app.logger.exception("管理儀表板分析讀取失敗")
                 return jsonify(error="暫時無法取得分析資料"), 503
             finally:
                 connection.close()
+        min_devices = app.config.get("ANALYTICS_SEGMENT_MIN_DEVICES", 5)
         summary = summarize_events(
             rows, now_utc,
-            min_devices=app.config.get("ANALYTICS_SEGMENT_MIN_DEVICES", 5),
+            min_devices=min_devices,
             rolling_30d_rows=rolling_rows,
         )
+        insights = summarize_insights(
+            details, recommendations, rows, min_devices=min_devices)
         return jsonify(range=range_value, analytics_enabled=enabled,
-                       summary=summary)
+                       summary=summary, insights=insights)
 
     @app.get("/admin/api/status")
     def admin_status_api():
