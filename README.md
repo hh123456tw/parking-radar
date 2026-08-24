@@ -41,11 +41,12 @@ flowchart TD
 - 官方資料中的負數狀態值是特殊狀態（例如 `-9`、`-11`），不是負車位，不進入數值計算。
 - 地址轉座標以 MySQL 快取優先，降低延遲並減少對外部地址服務的依賴。
 - 資料過期時仍顯示最近一次有效快照並標示警告，不因暫時抓不到資料而阻斷查詢。
-- 查詢紀錄只包含各階段耗時，不記錄目的地或座標。
+- 同意匿名分析時，查詢紀錄包含各階段耗時，並在 14 天內保留解析輸入與目的地名稱；
+  不保存座標、Cookie、Authorization、API 金鑰或模型原始回應，其餘分析資料 90 天後刪除。
 
 ## 自動測試與 CI
 
-截至 2026-08-24 共 **298 項自動測試**（`pytest` 全數通過），涵蓋分析、路由、收集器、費用、行事曆、PWA、管理儀表板與 CI 合約；GitHub Actions 於每次 push／pull request 執行完整離線測試（見 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
+截至 2026-08-24 共 **373 項自動測試**（`pytest` 全數通過），涵蓋分析、路由、收集器、費用、行事曆、PWA、管理儀表板與 CI 合約；GitHub Actions 於每次 push／pull request 執行完整離線測試（見 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
 
 ## Windows 本機啟動
 
@@ -92,6 +93,7 @@ Register-ScheduledTask `
 | `ANALYTICS_ENABLED` | 匿名分析總開關；`1`（預設）啟用、`0` 停用。停用時事件端點一律 204 且不寫入，無需重啟即可套用 |
 | `ANALYTICS_REQUIRE_CONSENT` | `1`（預設）顯示允許／拒絕介面；封閉團隊測試可設 `0`，分析預設啟用但仍保留頁尾隱私說明 |
 | `ANALYTICS_HMAC_SECRET` | 匿名分析 HMAC 簽章秘密；部署時以 `openssl rand -hex 32` 產生，只放在 VM |
+| `ANALYTICS_SEGMENT_MIN_DEVICES` | 管理儀表板匿名區段樣本下限；程式預設 `5`，封閉團隊 VM 設 `1` 以便看到單一測試裝置的資料 |
 | `DEPLOY_VERSION` | 管理儀表板顯示的部署版本識別（例如 Git commit 短碼） |
 
 對話只說目的地而未指定抵達時間時，系統會自動使用 `Asia/Taipei` 的目前時間。
@@ -163,6 +165,9 @@ Flask 不新增任何帳號機制。密碼雜湊與 `ANALYTICS_HMAC_SECRET` 只�
 最後才重載 Nginx 對外暴露 `/admin/`。htpasswd 與 Nginx 設定檔可先準備，
 但不要在資料表存在前啟動分析程式碼或重載 Nginx。
 
+團隊測試環境預設使用 `admin/admin` 作為示範帳密；此帳密只能用於封閉團隊測試，
+正式對外前必須以 `sudo htpasswd /etc/nginx/.htpasswd-parking-radar admin` 更換密碼。
+
 1. 產生 HMAC 秘密並寫入 `.env`（只在 VM 上執行）：
    `openssl rand -hex 32`
    把輸出貼到 `/opt/parking-hell/.env` 的 `ANALYTICS_HMAC_SECRET=` 之後。
@@ -190,6 +195,41 @@ Flask 不新增任何帳號機制。密碼雜湊與 `ANALYTICS_HMAC_SECRET` 只�
 - Cron：只移除 analytics cleanup 那一行，其餘（collector 等）全部保留。
 - 應用程式：切回前一個部署 commit 後以 `sudo systemctl restart parking-radar` 重啟。
 - 資料：保留 `analytics_events` 表與既有事件；除非擁有者明確決定刪除，否則不執行 DROP。
+
+### 部署補充：分析洞察（查詢明細、推薦快照與回饋）
+
+在既有分析事件之上，本版新增 `analytics_query_details`（每筆查詢一列）與
+`analytics_recommendations`（每筆成功查詢最多三列快照）兩張表，並在
+`/admin/analytics` 顯示四區儀表板。部署順序與既有分析儀表板相同：先套用遷移，
+再重啟 Gunicorn 載入新程式碼，最後才重載 Nginx；`/admin/analytics` 與既有
+`/admin/` 路徑一樣由 Nginx Basic Auth 保護，未授權存取回傳 401。
+
+1. 套用洞察遷移（重複執行安全，與 `schema.sql` 定義一致）：
+   `mysql -u parking -p parking_hell < migrations/20260824_add_analytics_insights.sql`
+2. 在 `/opt/parking-hell/.env` 設定 `ANALYTICS_SEGMENT_MIN_DEVICES=1`（程式預設仍為
+   `5`；未來公開時移除 VM 覆寫即可恢復預設）。
+3. 重啟 Gunicorn 並確認健康檢查：
+   `sudo systemctl restart parking-radar && curl -fsS http://127.0.0.1:8000/health`
+4. 確認每日清理 cron 沿用既有 `analytics_cleanup.py` 那一行，無需新增第二條。
+
+#### 保留與清理
+
+- 原始輸入（`raw_query_text`）、解析 JSON 與目的地名稱在查詢滿 14 天後清成 `NULL`；
+  每日清理會先清字，再刪除 90 天前的推薦快照、查詢明細與事件，全部在同一交易提交。
+- 行政區只在分析時推導，不會回寫查詢的 `district`，也不會縮小停車場搜尋範圍；
+  既有 `district IS NULL` 的舊事件不會回填。
+- 回饋碼固定三種：`found_space`（有，找到車位）、`full_on_arrival`（到場已滿）、
+  `did_not_go`（沒有前往），由 `POST /api/analytics/feedback` 接受；重複點擊採最後
+  一次選擇，回饋 API 失敗不影響公開查詢。
+
+#### 分析洞察回滾
+
+- 應用程式：切回前一個部署 commit 後 `sudo systemctl restart parking-radar` 重啟；
+  兩張新表可保留，舊版程式不會讀取它們。
+- 環境：從 `/opt/parking-hell/.env` 移除 `ANALYTICS_SEGMENT_MIN_DEVICES=1`（恢復預設
+  `5`）或設 `ANALYTICS_ENABLED=0` 停用分析。
+- 資料：保留兩張新表與既有事件，不執行 DROP；如需完整回復，使用部署前的 MySQL 備份
+  還原。
 
 PWA 離線外殼需要 nginx 對 `sw.js` 回應 `Service-Worker-Allowed: /`。前端以 `scope: "/"` 註冊（見 `static/app.js`），若 nginx 未在 `location /static/` 傳回該標頭，瀏覽器會拒絕超出
 `/static/` 的範圍，服務工人便無法控制並離線快取整站。`deploy/nginx-parking-radar.conf` 對應區塊需為：

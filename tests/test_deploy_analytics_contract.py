@@ -13,6 +13,10 @@ README = Path("README.md")
 FIXED_NOW = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
 # 90 天前：2026-05-25T12:00Z（手算字面值，不經由被測程式推導）。
 EXPECTED_CUTOFF = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
+# 14 天前：2026-08-09T12:00Z（手算字面值，不經由被測程式推導）。
+EXPECTED_SCRUB_CUTOFF = datetime(2026, 8, 9, 12, 0, tzinfo=timezone.utc)
+SCHEMA = Path("schema.sql")
+MIGRATION = Path("migrations/20260824_add_analytics_insights.sql")
 
 
 def test_nginx_protects_admin_and_does_not_log_ip():
@@ -89,6 +93,16 @@ def test_readme_applies_analytics_migration_before_restart_and_reload():
         flow.index("sudo nginx -t && sudo systemctl reload nginx")
 
 
+def table_block(text, table):
+    """切出 CREATE TABLE 表頭到 ENGINE 收尾句之間的定義區塊。"""
+    header = "CREATE TABLE IF NOT EXISTS {} (".format(table)
+    start = text.index(header)
+    rest = text[start + len(header):]
+    end_marker = ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;"
+    end = rest.index(end_marker)
+    return rest[:end + len(end_marker)].rstrip()
+
+
 class FakeConnection:
     """記錄 commit / rollback / close 的假連線。"""
 
@@ -107,41 +121,84 @@ class FakeConnection:
         self.closed = True
 
 
-def test_cleanup_main_commits_cutoff_and_closes(monkeypatch):
+def test_analytics_insights_migration_matches_schema_contract():
+    """兩張新表的 schema 與 migration 定義必須逐字一致且只有兩張。"""
+    schema = SCHEMA.read_text(encoding="utf-8")
+    migration = MIGRATION.read_text(encoding="utf-8")
+    for table in ("analytics_query_details", "analytics_recommendations"):
+        assert table_block(schema, table) == table_block(migration, table)
+        assert "CREATE TABLE IF NOT EXISTS {} (".format(table) in schema
+        assert "CREATE TABLE IF NOT EXISTS {} (".format(table) in migration
+    assert "request_id CHAR(36) PRIMARY KEY" in migration
+    assert "PRIMARY KEY (request_id, rank_position)" in migration
+    assert "idx_query_details_occurred (occurred_at)" in migration
+    assert "idx_recommendations_occurred (occurred_at)" in migration
+    assert "raw_query_text VARCHAR(500) NULL" in migration
+    # 只允許既有 events 加新兩張，不增加第三張 analytics 表。
+    assert migration.count("CREATE TABLE IF NOT EXISTS analytics_") == 2
+    assert schema.count("CREATE TABLE IF NOT EXISTS analytics_") == 3
+
+
+def test_cleanup_run_cleanup_commits_cutoffs_and_closes(monkeypatch):
     connection = FakeConnection()
     calls = {}
 
-    def fake_delete(conn, cutoff):
+    def fake_scrub(conn, cutoff):
         calls["conn"] = conn
-        calls["cutoff"] = cutoff
+        calls["scrub_cutoff"] = cutoff
+        return 3
+
+    def fake_delete_insights(conn, cutoff):
+        calls["insights_cutoff"] = cutoff
+        return {"recommendations": 4, "query_details": 6}
+
+    def fake_delete(conn, cutoff):
+        calls["events_cutoff"] = cutoff
         return 12
 
     monkeypatch.setattr(analytics_cleanup, "get_connection", lambda: connection)
+    monkeypatch.setattr(analytics_cleanup, "scrub_expired_query_text",
+                        fake_scrub)
+    monkeypatch.setattr(analytics_cleanup, "delete_expired_insights",
+                        fake_delete_insights)
     monkeypatch.setattr(analytics_cleanup, "delete_expired_events", fake_delete)
 
-    removed = analytics_cleanup.main(now=FIXED_NOW)
+    removed = analytics_cleanup.run_cleanup(now=FIXED_NOW)
 
-    assert removed == 12
+    assert removed == {
+        "scrubbed_query_text": 3,
+        "recommendations": 4,
+        "query_details": 6,
+        "events": 12,
+    }
     assert calls["conn"] is connection
-    assert calls["cutoff"] == EXPECTED_CUTOFF
+    assert calls["scrub_cutoff"] == EXPECTED_SCRUB_CUTOFF
+    assert calls["insights_cutoff"] == EXPECTED_CUTOFF
+    assert calls["events_cutoff"] == EXPECTED_CUTOFF
     assert connection.committed is True
     assert connection.rolled_back is False
     assert connection.closed is True
 
 
-def test_cleanup_main_rolls_back_and_re_raises(monkeypatch):
+def test_cleanup_run_cleanup_rolls_back_and_re_raises(monkeypatch):
     connection = FakeConnection()
+
+    monkeypatch.setattr(analytics_cleanup, "get_connection", lambda: connection)
+    monkeypatch.setattr(analytics_cleanup, "scrub_expired_query_text",
+                        lambda _conn, _cutoff: 0)
+    monkeypatch.setattr(analytics_cleanup, "delete_expired_insights",
+                        lambda _conn, _cutoff: {"recommendations": 0,
+                                                "query_details": 0})
 
     def failing_delete(_conn, _cutoff):
         raise RuntimeError("db down")
 
-    monkeypatch.setattr(analytics_cleanup, "get_connection", lambda: connection)
     monkeypatch.setattr(analytics_cleanup, "delete_expired_events",
                         failing_delete)
 
     try:
-        analytics_cleanup.main(now=FIXED_NOW)
-        raise AssertionError("main 必須重新拋出資料庫例外")
+        analytics_cleanup.run_cleanup(now=FIXED_NOW)
+        raise AssertionError("run_cleanup 必須重新拋出資料庫例外")
     except RuntimeError as exc:
         assert str(exc) == "db down"
 
@@ -150,7 +207,7 @@ def test_cleanup_main_rolls_back_and_re_raises(monkeypatch):
     assert connection.closed is True
 
 
-def test_cleanup_main_defaults_to_utc_now(monkeypatch):
+def test_cleanup_run_cleanup_defaults_to_utc_now(monkeypatch):
     connection = FakeConnection()
     calls = {}
 
@@ -159,15 +216,31 @@ def test_cleanup_main_defaults_to_utc_now(monkeypatch):
         def now(cls, tz=None):
             return FIXED_NOW
 
+    def fake_scrub(conn, cutoff):
+        calls["scrub_cutoff"] = cutoff
+        return 0
+
+    def fake_delete_insights(conn, cutoff):
+        calls["insights_cutoff"] = cutoff
+        return {"recommendations": 0, "query_details": 0}
+
     def fake_delete(conn, cutoff):
-        calls["cutoff"] = cutoff
+        calls["events_cutoff"] = cutoff
         return 0
 
     monkeypatch.setattr(analytics_cleanup, "get_connection", lambda: connection)
+    monkeypatch.setattr(analytics_cleanup, "scrub_expired_query_text",
+                        fake_scrub)
+    monkeypatch.setattr(analytics_cleanup, "delete_expired_insights",
+                        fake_delete_insights)
     monkeypatch.setattr(analytics_cleanup, "delete_expired_events", fake_delete)
     monkeypatch.setattr(analytics_cleanup, "datetime", FixedUtcNow)
 
-    analytics_cleanup.main()
+    analytics_cleanup.run_cleanup()
 
-    assert calls["cutoff"] == EXPECTED_CUTOFF
-    assert calls["cutoff"].tzinfo is timezone.utc
+    assert calls["scrub_cutoff"] == EXPECTED_SCRUB_CUTOFF
+    assert calls["scrub_cutoff"].tzinfo is timezone.utc
+    assert calls["insights_cutoff"] == EXPECTED_CUTOFF
+    assert calls["insights_cutoff"].tzinfo is timezone.utc
+    assert calls["events_cutoff"] == EXPECTED_CUTOFF
+    assert calls["events_cutoff"].tzinfo is timezone.utc

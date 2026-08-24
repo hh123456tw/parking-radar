@@ -11,11 +11,19 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, render_template, request, session
 from ai_service import IntentServiceError, TAIPEI_DISTRICTS, parse_parking_query
+from analytics_capture import (build_query_detail,
+                               build_recommendation_snapshots,
+                               infer_destination_district, new_query_trace)
 from analytics_database import (fetch_dashboard_events, fetch_events,
-                                insert_event, insert_navigation_event)
-from analytics_service import (DASHBOARD_RANGES, SOURCES, analytics_identity,
-                               build_browser_event, build_query_event,
-                               parse_dashboard_range, summarize_events)
+                                fetch_insight_details,
+                                fetch_insight_recommendations,
+                                insert_event, insert_navigation_event,
+                                replace_recommendation_snapshots,
+                                update_query_feedback, upsert_query_detail)
+from analytics_service import (BROWSER_EVENT_TYPES, DASHBOARD_RANGES, SOURCES,
+                               analytics_identity, build_browser_event,
+                               build_query_event, parse_dashboard_range,
+                               summarize_events, summarize_insights)
 from analysis import (build_history_series, district_hell_score,
                       rank_candidates, rank_district_candidates,
                       select_walking_candidates, split_recommendation_groups,
@@ -251,22 +259,54 @@ def create_app(test_config=None):
     if test_config:
         app.config.update(test_config)
 
-    def analytics_writer(event):
-        """開啟新連線寫入事件，成功才提交；任何錯誤都回復後關閉。"""
-        connection = get_connection()
+    def run_analytics_write(operation, *args):
+        """共用短交易：成功提交並回傳列數，失敗回滾並重拋，最後關閉連線。"""
+        connection = None
         try:
+            connection = get_connection()
+            result = operation(connection, *args)
+            connection.commit()
+            return result
+        except Exception:
+            if connection is not None:
+                connection.rollback()
+            raise
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def analytics_writer(event):
+        """以短交易寫入單一事件，成功才提交。"""
+        def write_event(connection, event):
             if event["event_type"] == "navigation_clicked":
                 insert_navigation_event(connection, event)
             else:
                 insert_event(connection, event)
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        run_analytics_write(write_event, event)
 
     app.extensions["analytics_writer"] = analytics_writer
+
+    def analytics_detail_writer(detail):
+        run_analytics_write(upsert_query_detail, detail)
+
+    def analytics_recommendation_writer(rows):
+        """獨立短交易替換最多三筆推薦快照，成功才提交。"""
+        if rows:
+            run_analytics_write(
+                replace_recommendation_snapshots,
+                rows[0]["request_id"], rows)
+
+    def analytics_feedback_writer(anonymous_id_hash, request_id,
+                                  feedback_code):
+        """短交易更新同 request 同裝置的回饋碼，回傳受影響列數。"""
+        return run_analytics_write(
+            update_query_feedback, request_id, anonymous_id_hash,
+            feedback_code)
+
+    app.extensions["analytics_detail_writer"] = analytics_detail_writer
+    app.extensions["analytics_recommendation_writer"] = \
+        analytics_recommendation_writer
+    app.extensions["analytics_feedback_writer"] = analytics_feedback_writer
 
     def write_analytics_safely(event):
         """分析寫入失敗只能留下不含目的地的警告，不得影響查詢。"""
@@ -308,15 +348,36 @@ def create_app(test_config=None):
             return
         write_analytics_safely(event)
 
+    def capture_analytics(request_id, stage, label, builder, *args):
+        """最佳努力寫入分析列；失敗只留 request_id 與 stage 警告。"""
+        try:
+            rows = builder(*args)
+            if rows:
+                app.extensions[f"analytics_{label}_writer"](rows)
+        except Exception:
+            app.logger.warning(
+                "analytics_%s_write_failed request_id=%s stage=%s",
+                label, request_id, stage)
+
     def terminal(payload, status_code, outcome_code, query_mode, request_id,
                  anonymous_hash, query_source, duration_ms, result_count=0,
-                 district=None, latitude=None, longitude=None):
-        """加上 request_id 回傳終端 JSON，並記錄同意下的對應事件。"""
+                 district=None, latitude=None, longitude=None, trace=None,
+                 recommendation_groups=None):
+        """加上 request_id 回傳終端 JSON，並最佳努力記錄事件、明細與快照。"""
         payload["request_id"] = request_id
         record_query_event(
             outcome_code, query_mode, request_id, anonymous_hash,
             query_source, duration_ms, result_count, district, latitude,
             longitude)
+        if trace is not None and anonymous_hash:
+            capture_analytics(
+                request_id, "terminal", "detail", build_query_detail,
+                trace, request_id, anonymous_hash, outcome_code, duration_ms)
+            if recommendation_groups is not None:
+                capture_analytics(
+                    request_id, "terminal", "recommendation",
+                    build_recommendation_snapshots, request_id,
+                    trace["occurred_at"], recommendation_groups or {})
         return jsonify(payload), status_code
 
     @app.after_request
@@ -351,7 +412,6 @@ def create_app(test_config=None):
         anonymous_hash = analytics_identity(
             request.headers, app.config.get("ANALYTICS_HMAC_SECRET", ""))
         query_source = request.headers.get("X-Analytics-Source", "unknown")
-        timings = {"walking_ms": 0}
         payload = request.get_json(silent=True) or {}
         query_mode = "chat" if isinstance(payload, dict) and \
             payload.get("mode") == "chat" else "manual"
@@ -360,19 +420,25 @@ def create_app(test_config=None):
                             "failed_validation", query_mode, request_id,
                             anonymous_hash, query_source,
                             elapsed_ms(query_started))
+        trace = new_query_trace(
+            payload, query_mode, query_source, datetime.now(timezone.utc))
         try:
             if payload.get("mode") == "chat":
                 parsed = parse_parking_query(payload.get("message", ""), dict(session)).model_dump()
             else:
                 parsed = parse_manual_payload(payload)
             parsed = validate_parsed_query(parsed)
-            timings["parse_ms"] = round((time.perf_counter() - query_started) * 1000)
+            trace["parse_ms"] = round(
+                (time.perf_counter() - query_started) * 1000)
+            trace["parsed"] = parsed
         except IntentServiceError as exc:
+            trace["error_stage"] = "parse"
             return terminal({"error": str(exc), "fallback": "manual"}, 503,
                             "failed_internal", query_mode, request_id,
                             anonymous_hash, query_source,
                             elapsed_ms(query_started))
         except (KeyError, TypeError, ValueError) as exc:
+            trace["error_stage"] = "parse"
             return terminal({"error": str(exc)}, 400, "failed_validation",
                             query_mode, request_id, anonymous_hash,
                             query_source, elapsed_ms(query_started))
@@ -388,13 +454,20 @@ def create_app(test_config=None):
             needs_choice = len(verified_choices) > 1 or (
                 verified_choices and requires_location_confirmation(parsed))
             if needs_choice:
+                trace["geocode_ms"] = round(
+                    (time.perf_counter() - geocode_started) * 1000)
                 if request.headers.get("X-Client-Version") != \
                         LOCATION_CHOICE_CLIENT_VERSION:
                     return terminal(
                         {"error": "畫面已更新，請重新整理頁面後再查詢"},
                         409, "failed_validation", query_mode, request_id,
                         anonymous_hash, query_source,
-                        elapsed_ms(query_started))
+                        elapsed_ms(query_started), trace=trace)
+                trace["location_choice_count"] = len(verified_choices)
+                capture_analytics(
+                    request_id, "location_choice", "detail",
+                    build_query_detail, trace, request_id, anonymous_hash,
+                    "location_choice_required", elapsed_ms(query_started))
                 return jsonify(
                     needs_location_choice=True,
                     location_choices=verified_choices,
@@ -418,14 +491,20 @@ def create_app(test_config=None):
                 destination = geocode_address(
                     parsed.get("address"), connection) if parsed.get("address") else None
             if parsed.get("address") and destination is None:
+                trace["error_stage"] = "geocode"
+                trace["geocode_ms"] = round(
+                    (time.perf_counter() - geocode_started) * 1000)
                 return terminal(
                     {"error": "找不到地址，請修正或改選行政區",
                      "fallback": "district"},
                     422, "failed_geocode", query_mode, request_id,
                     anonymous_hash, query_source,
-                    elapsed_ms(query_started))
-            timings["geocode_ms"] = round(
+                    elapsed_ms(query_started), trace=trace)
+            trace["geocode_ms"] = round(
                 (time.perf_counter() - geocode_started) * 1000)
+            trace["district"] = infer_destination_district(
+                parsed.get("district"), parsed.get("address"),
+                destination.get("display_address") if destination else None)
 
             # 地理快取查詢可能已建立 MySQL 交易快照；先關閉，避免補抓後仍讀到舊資料。
             connection.close()
@@ -435,8 +514,9 @@ def create_app(test_config=None):
                 data_status, data_notice = ensure_fresh_parking_data()
             else:
                 data_status, data_notice = "fresh", None
-            timings["freshness_ms"] = round(
+            trace["freshness_ms"] = round(
                 (time.perf_counter() - freshness_started) * 1000)
+            trace["data_status"] = data_status
             database_started = time.perf_counter()
             connection = get_connection()
             freshness = Config.FRESHNESS_MINUTES if data_status == "fresh" else None
@@ -464,7 +544,7 @@ def create_app(test_config=None):
                     except WalkingRouteError as exc:
                         app.logger.warning("%s，改用直線距離", exc)
                     finally:
-                        timings["walking_ms"] = round(
+                        trace["walking_ms"] = round(
                             (time.perf_counter() - walking_started) * 1000)
                 score_rows = ranked
             else:
@@ -490,26 +570,28 @@ def create_app(test_config=None):
             session.update(destination=parsed.get("address"), district=parsed.get("district"),
                            arrival_time=parsed["arrival_time"].isoformat(),
                            lot_id=ranked[0]["lot_id"] if ranked else None)
-            collected_at = taipei_iso(max(
-                (row["captured_at"] for row in rows), default=None))
-            official_updated_at = taipei_iso(max(
+            trace["collected_at"] = max(
+                (row["captured_at"] for row in rows), default=None)
+            trace["official_data_at"] = max(
                 (row.get("snapshot_updated_at") for row in rows
                  if row.get("snapshot_updated_at") is not None),
                 default=None,
-            ))
+            )
+            collected_at = taipei_iso(trace["collected_at"])
+            official_updated_at = taipei_iso(trace["official_data_at"])
             total_ms = round((time.perf_counter() - query_started) * 1000)
-            timings["database_ms"] = max(
+            trace["database_ms"] = max(
                 0,
                 round((time.perf_counter() - database_started) * 1000)
-                - timings["walking_ms"],
+                - (trace["walking_ms"] or 0),
             )
+            trace["result_count"] = len(ranked)
             app.logger.info(
                 "query_complete mode=%s parse_ms=%s geocode_ms=%s "
                 "freshness_ms=%s database_ms=%s walking_ms=%s total_ms=%s",
                 "chat" if payload.get("mode") == "chat" else "manual",
-                timings["parse_ms"],
-                timings["geocode_ms"], timings["freshness_ms"],
-                timings["database_ms"], timings["walking_ms"], total_ms,
+                trace["parse_ms"], trace["geocode_ms"], trace["freshness_ms"],
+                trace["database_ms"], trace["walking_ms"], total_ms,
             )
             payload = {
                 "destination": destination_json,
@@ -544,27 +626,32 @@ def create_app(test_config=None):
                 district=parsed.get("district"),
                 latitude=destination_coords.get("latitude"),
                 longitude=destination_coords.get("longitude"),
+                trace=trace,
+                recommendation_groups=groups,
             )
         except ParkingDataUnavailable as exc:
+            trace["error_stage"] = "database"
             return terminal({"error": str(exc)}, 503, "failed_database",
                             query_mode, request_id, anonymous_hash,
-                            query_source, elapsed_ms(query_started))
+                            query_source, elapsed_ms(query_started),
+                            trace=trace)
         except Exception:
             app.logger.exception("停車查詢失敗")
+            trace["error_stage"] = "internal"
             return terminal(
                 {"error": "服務暫時無法使用，請稍後再試"},
                 503, "failed_internal", query_mode, request_id,
-                anonymous_hash, query_source, elapsed_ms(query_started))
+                anonymous_hash, query_source, elapsed_ms(query_started),
+                trace=trace)
         finally:
             if connection is not None:
                 connection.close()
 
     @app.post("/api/analytics/events")
     def analytics_events():
-        """接受固定白名單的 pwa_opened/navigation_clicked，失敗不影響前端。"""
-        if not app.config.get("ANALYTICS_ENABLED", True):
-            return "", 204
-        if not app.config.get("ANALYTICS_HMAC_SECRET", ""):
+        """接受固定六種瀏覽事件與純量欄位，失敗不影響前端。"""
+        if not (app.config.get("ANALYTICS_ENABLED", True)
+                and app.config.get("ANALYTICS_HMAC_SECRET", "")):
             return "", 204
         payload = request.get_json(silent=True) or {}
         if not isinstance(payload, dict):
@@ -577,19 +664,15 @@ def create_app(test_config=None):
         if not allowed_keys.issuperset(payload):
             return jsonify(error="不接受未知欄位"), 400
         event_type = payload.get("event_type")
-        if event_type not in {"pwa_opened", "navigation_clicked"}:
+        if event_type not in BROWSER_EVENT_TYPES:
             return jsonify(error="不接受的事件類型"), 400
         source = payload.get("source")
         if source not in SOURCES:
             return jsonify(error="不接受的事件來源"), 400
-        raw_id = payload.get("analytics_id")
-        try:
-            UUID(raw_id)
-        except (TypeError, ValueError, AttributeError):
-            return jsonify(error="analytics_id 必須是 UUID"), 400
         # sendBeacon 無法帶自訂標頭；前端只在明確同意後才送出 body UUID，故以此計算 HMAC。
         anonymous_hash = analytics_identity(
-            {"X-Analytics-Consent": "1", "X-Analytics-Id": raw_id},
+            {"X-Analytics-Consent": "1",
+             "X-Analytics-Id": payload.get("analytics_id")},
             app.config.get("ANALYTICS_HMAC_SECRET", ""))
         if anonymous_hash is None:
             return jsonify(error="需要明確同意與合法 UUID"), 400
@@ -598,40 +681,90 @@ def create_app(test_config=None):
             "anonymous_id_hash": anonymous_hash,
             "source": source,
         }
-        if event_type == "navigation_clicked":
-            request_id = payload.get("request_id")
+        # 導航維持既有必填欄位；其餘事件只接受提供的合法純量。
+        required = {
+            "navigation_clicked": ("request_id", "clicked_rank",
+                                   "parking_lot_id", "availability_bucket"),
+        }
+        for field in required.get(event_type, ()):
+            if payload.get(field) is None:
+                return jsonify(error=f"{field} 不能為空"), 400
+        request_id = payload.get("request_id")
+        if request_id is not None:
             try:
                 UUID(request_id)
             except (TypeError, ValueError, AttributeError):
                 return jsonify(error="request_id 必須是 UUID"), 400
-            clicked_rank = payload.get("clicked_rank")
-            walking_minutes = payload.get("walking_minutes")
-            availability_bucket = payload.get("availability_bucket")
-            if not isinstance(clicked_rank, int) or isinstance(
-                    clicked_rank, bool) or not 0 <= clicked_rank <= 99:
-                return jsonify(error="clicked_rank 必須是 0-99 的整數"), 400
-            if not isinstance(payload.get("parking_lot_id"), str) or not \
-                    payload["parking_lot_id"].strip():
+            event_kwargs["request_id"] = request_id
+        clicked_rank = payload.get("clicked_rank")
+        if clicked_rank is not None and (
+                not isinstance(clicked_rank, int)
+                or isinstance(clicked_rank, bool)
+                or not 0 <= clicked_rank <= 99):
+            return jsonify(error="clicked_rank 必須是 0-99 的整數"), 400
+        if clicked_rank is not None:
+            event_kwargs["clicked_rank"] = clicked_rank
+        parking_lot_id = payload.get("parking_lot_id")
+        if parking_lot_id is not None:
+            if not isinstance(parking_lot_id, str) or not parking_lot_id.strip():
                 return jsonify(error="parking_lot_id 不能為空"), 400
-            if len(payload["parking_lot_id"].strip()) > 32:
+            if len(parking_lot_id.strip()) > 32:
                 return jsonify(error="parking_lot_id 不能超過 32 字元"), 400
-            if walking_minutes is not None and (
-                    isinstance(walking_minutes, bool)
-                    or not isinstance(walking_minutes, (int, float))
-                    or not 0 <= walking_minutes <= 999):
-                return jsonify(error="walking_minutes 必須是非負數字"), 400
+            event_kwargs["parking_lot_id"] = parking_lot_id.strip()
+        walking_minutes = payload.get("walking_minutes")
+        if walking_minutes is not None and (
+                isinstance(walking_minutes, bool)
+                or not isinstance(walking_minutes, (int, float))
+                or not 0 <= walking_minutes <= 999):
+            return jsonify(error="walking_minutes 必須是非負數字"), 400
+        if walking_minutes is not None:
+            event_kwargs["walking_minutes"] = walking_minutes
+        availability_bucket = payload.get("availability_bucket")
+        if availability_bucket is not None:
             if availability_bucket not in {"0", "1_3", "4_10", "11_plus"}:
                 return jsonify(error="availability_bucket 不在允許清單"), 400
-            event_kwargs.update({
-                "request_id": request_id,
-                "clicked_rank": clicked_rank,
-                "parking_lot_id": payload["parking_lot_id"].strip(),
-                "walking_minutes": walking_minutes,
-                "availability_bucket": availability_bucket,
-            })
+            event_kwargs["availability_bucket"] = availability_bucket
         event = build_browser_event(**event_kwargs)
         write_analytics_safely(event)
         return "", 204
+
+    @app.post("/api/analytics/feedback")
+    def analytics_feedback():
+        """只更新同 request 同裝置的回饋碼；無匹配明細回 404，失敗不影響前端。"""
+        if not (app.config.get("ANALYTICS_ENABLED", True)
+                and app.config.get("ANALYTICS_HMAC_SECRET", "")):
+            return "", 204
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify(error="JSON 內容必須是物件"), 400
+        allowed_keys = {"analytics_id", "request_id", "feedback_code"}
+        if not allowed_keys.issuperset(payload):
+            return jsonify(error="不接受未知欄位"), 400
+        feedback_code = payload.get("feedback_code")
+        if feedback_code not in {"found_space", "full_on_arrival",
+                                 "did_not_go"}:
+            return jsonify(error="feedback_code 不在允許清單"), 400
+        request_id = payload.get("request_id")
+        try:
+            UUID(request_id)
+        except (TypeError, ValueError, AttributeError):
+            return jsonify(error="request_id 必須是 UUID"), 400
+        anonymous_hash = analytics_identity(
+            {"X-Analytics-Consent": "1",
+             "X-Analytics-Id": payload.get("analytics_id")},
+            app.config.get("ANALYTICS_HMAC_SECRET", ""))
+        if anonymous_hash is None:
+            return jsonify(error="需要明確同意與合法 UUID"), 400
+        try:
+            updated = app.extensions["analytics_feedback_writer"](
+                anonymous_hash, request_id, feedback_code)
+        except Exception:
+            app.logger.warning(
+                "analytics_feedback_write_failed request_id=%s", request_id)
+            return "", 204
+        if updated:
+            return "", 204
+        return jsonify(error="找不到對應查詢"), 404
 
     @app.get("/api/parking/<lot_id>/history")
     def parking_history(lot_id):
@@ -665,6 +798,7 @@ def create_app(test_config=None):
         enabled = bool(app.config.get("ANALYTICS_ENABLED")
                        and app.config.get("ANALYTICS_HMAC_SECRET"))
         rows, rolling_rows = [], []
+        details, recommendations = [], []
         if enabled:
             connection = get_connection()
             try:
@@ -672,18 +806,25 @@ def create_app(test_config=None):
                 rows = fetch_dashboard_events(connection, start, end)
                 rolling_start = parse_dashboard_range("30d", now_utc)[0]
                 rolling_rows = fetch_events(connection, rolling_start, now_utc)
+                details = fetch_insight_details(
+                    connection, start, end, recent_limit=None)
+                recommendations = fetch_insight_recommendations(
+                    connection, start, end)
             except Exception:
                 app.logger.exception("管理儀表板分析讀取失敗")
                 return jsonify(error="暫時無法取得分析資料"), 503
             finally:
                 connection.close()
+        min_devices = app.config.get("ANALYTICS_SEGMENT_MIN_DEVICES", 5)
         summary = summarize_events(
             rows, now_utc,
-            min_devices=app.config.get("ANALYTICS_SEGMENT_MIN_DEVICES", 5),
+            min_devices=min_devices,
             rolling_30d_rows=rolling_rows,
         )
+        insights = summarize_insights(
+            details, recommendations, rows, min_devices=min_devices)
         return jsonify(range=range_value, analytics_enabled=enabled,
-                       summary=summary)
+                       summary=summary, insights=insights)
 
     @app.get("/admin/api/status")
     def admin_status_api():

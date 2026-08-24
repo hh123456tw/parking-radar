@@ -1,5 +1,6 @@
 """隱私安全的匿名分析領域輔助：同意、HMAC、粗略區域與固定事件結構。"""
 
+from collections import Counter
 import hashlib
 import hmac
 import statistics
@@ -12,7 +13,10 @@ EVENT_TYPES = frozenset({
     "query_completed", "query_failed", "navigation_clicked", "pwa_opened",
 })
 QUERY_EVENT_TYPES = frozenset({"query_completed", "query_failed"})
-BROWSER_EVENT_TYPES = frozenset({"navigation_clicked", "pwa_opened"})
+BROWSER_EVENT_TYPES = frozenset({
+    "navigation_clicked", "pwa_opened", "location_choice_shown",
+    "location_choice_selected", "map_marker_clicked", "history_opened",
+})
 QUERY_MODES = frozenset({"manual", "chat"})
 SOURCES = frozenset({"direct", "shared", "installed_pwa", "unknown"})
 OUTCOME_CODES = frozenset({
@@ -23,6 +27,10 @@ OUTCOME_CODES = frozenset({
 NAVIGATION_OBSERVATION_HOURS = 24
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 DASHBOARD_RANGES = frozenset({"today", "7d", "30d"})
+FEEDBACK_CODES = frozenset({"found_space", "full_on_arrival", "did_not_go"})
+STAGE_TIMING_KEYS = (
+    "parse_ms", "geocode_ms", "freshness_ms", "database_ms", "walking_ms",
+)
 
 
 def analytics_identity(headers, secret):
@@ -90,7 +98,7 @@ def build_browser_event(
     walking_minutes=None,
     availability_bucket=None,
 ):
-    """建構 pwa_opened/navigation_clicked 事件，只接受固定純量欄位。"""
+    """建構固定白名單的瀏覽事件，只接受固定純量欄位。"""
     if event_type not in BROWSER_EVENT_TYPES:
         raise ValueError(f"invalid event_type: {event_type}")
     if source not in SOURCES:
@@ -306,19 +314,129 @@ def _as_utc(value):
     return value.astimezone(timezone.utc)
 
 
-def _segment_rows(query_events, key, min_devices):
-    """依欄位值統計查詢裝置數，未達樣本下限的切片不列出。"""
-    devices_by_value = {}
-    for row in query_events:
+def _segment_rows(rows, key, min_devices, count_key="devices"):
+    """依欄位值統計查詢裝置數或查詢數，未達樣本下限的切片不列出。"""
+    buckets = {}
+    for row in rows:
         value = row.get(key)
         if value is None:
             continue
-        devices_by_value.setdefault(value, set()).add(
-            row["anonymous_id_hash"]
-        )
-    segments = [
-        {key: value, "devices": len(devices)}
-        for value, devices in devices_by_value.items()
-        if len(devices) >= min_devices
+        bucket = buckets.setdefault(
+            value, {"devices": set(), "queries": 0})
+        bucket["devices"].add(row["anonymous_id_hash"])
+        bucket["queries"] += 1
+    return sorted(
+        [{
+            key: value,
+            count_key: (len(bucket["devices"])
+                        if count_key == "devices" else bucket["queries"]),
+        } for value, bucket in buckets.items()
+          if len(bucket["devices"]) >= min_devices],
+        key=lambda item: (-item[count_key], item[key]))
+
+
+def summarize_insights(details, recommendations, events, min_devices=1):
+    """彙整有界 insights；純函式預設樣本下限 1，管理路由傳入設定值。"""
+    districts = _segment_rows(
+        details, "district", min_devices, count_key="queries")
+    dest_counts = Counter(
+        row["destination_label"] for row in details
+        if row.get("destination_label"))
+    destinations = [
+        {"destination": label, "queries": count}
+        for label, count in dest_counts.most_common(10)]
+    lot_names = {}
+    for row in recommendations:
+        lot_id = row.get("parking_lot_id")
+        if lot_id and lot_id not in lot_names and row.get("lot_name"):
+            lot_names[lot_id] = row["lot_name"]
+    event_counts = Counter(row["event_type"] for row in events)
+    location_choice_counts = {
+        "shown": event_counts["location_choice_shown"],
+        "selected": event_counts["location_choice_selected"],
+    }
+    # 與 summarize_events 相同的資格語意：導航只屬於「有結果的完成查詢」，
+    # 同 request、同裝置雜湊且在查詢後 24 小時觀察窗內才計入。
+    eligible = {
+        row["request_id"]: row for row in events
+        if row["event_type"] == "query_completed"
+        and (row.get("result_count") or 0) >= 1
+    }
+
+    def _navigation_is_eligible(row):
+        query = eligible.get(row.get("request_id"))
+        if query is None:
+            return False
+        if row.get("anonymous_id_hash") != query.get("anonymous_id_hash"):
+            return False
+        click_at = _as_utc(row["occurred_at"])
+        query_at = _as_utc(query["occurred_at"])
+        return query_at <= click_at < query_at + timedelta(
+            hours=NAVIGATION_OBSERVATION_HOURS)
+
+    eligible_navigations = [
+        row for row in events
+        if row["event_type"] == "navigation_clicked"
+        and _navigation_is_eligible(row)
     ]
-    return sorted(segments, key=lambda item: (-item["devices"], item[key]))
+    funnel = {
+        "completed": event_counts["query_completed"],
+        "location_choices": location_choice_counts["selected"],
+        "navigations": len(eligible_navigations),
+        "feedback": 0,
+    }
+    nav_counts = {}
+    nav_ranks = {}
+    navigated_lot_ids = {}
+    for row in eligible_navigations:
+        lot_id = row.get("parking_lot_id")
+        if not lot_id:
+            continue
+        nav_counts[lot_id] = nav_counts.get(lot_id, 0) + 1
+        rank = row.get("clicked_rank")
+        if rank is not None and (
+                lot_id not in nav_ranks or rank < nav_ranks[lot_id]):
+            nav_ranks[lot_id] = rank
+        if row.get("request_id"):
+            navigated_lot_ids.setdefault(row["request_id"], lot_id)
+    feedback_counts = {code: 0 for code in FEEDBACK_CODES}
+    for row in details:
+        code = row.get("feedback_code")
+        if code in feedback_counts:
+            feedback_counts[code] += 1
+            funnel["feedback"] += 1
+    stage_timings = {}
+    for key in STAGE_TIMING_KEYS:
+        values = [row.get(key) for row in details if row.get(key) is not None]
+        stage_timings[key] = round(statistics.median(values)) if values else None
+    lots = sorted(
+        [{"lot_name": lot_names.get(lot_id),
+          "navigations": nav_counts[lot_id],
+          "rank": nav_ranks.get(lot_id)}
+         for lot_id in nav_counts],
+        key=lambda item: (-item["navigations"], item["lot_name"] or ""),
+    )[:10]
+    recent_queries = [{
+        "occurred_at": _as_utc(row["occurred_at"])
+            .astimezone(TAIPEI_TZ).isoformat(),
+        "query": row.get("raw_query_text"),
+        "district": row.get("district"),
+        "outcome_code": row.get("outcome_code"),
+        "total_ms": row.get("total_ms"),
+        "lot_name": lot_names.get(
+            navigated_lot_ids.get(row["request_id"])),
+        "feedback_code": row.get("feedback_code"),
+    } for row in sorted(
+        details, key=lambda row: _as_utc(row["occurred_at"]),
+        reverse=True)[:20]]
+
+    return {
+        "districts": districts,
+        "funnel": funnel,
+        "feedback": feedback_counts,
+        "destinations": destinations,
+        "lots": lots,
+        "stage_timings": stage_timings,
+        "location_choice_counts": location_choice_counts,
+        "recent_queries": recent_queries,
+    }

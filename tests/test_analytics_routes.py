@@ -678,3 +678,429 @@ def test_production_writer_routes_navigation_events(monkeypatch):
     assert called == [True]
     assert connection.committed is True
     assert connection.closed is True
+
+
+def test_address_query_records_inferred_district_timings_and_three_snapshots(monkeypatch):
+    """地址查詢要記錄推導行政區、分段耗時與最多三筆推薦快照。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    captured = {"details": [], "recommendations": []}
+    app.extensions["analytics_detail_writer"] = captured["details"].append
+    app.extensions["analytics_recommendation_writer"] = \
+        captured["recommendations"].append
+
+    response = app.test_client().post(
+        "/api/query", json=manual_payload("台北車站"), headers=analytics_headers())
+
+    assert response.status_code == 200
+    detail = captured["details"][0]
+    assert detail["district"] == "中正區"
+    assert detail["total_ms"] >= 0
+    assert detail["parse_ms"] is not None
+    assert detail["geocode_ms"] is not None
+    assert len(captured["recommendations"][0]) <= 3
+
+
+def test_analytics_detail_failure_never_changes_success_response(monkeypatch, caplog):
+    """查詢明細寫入失敗時，公開查詢仍要回傳 200 與完整推薦。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    captured = {"recommendations": []}
+    app.extensions["analytics_detail_writer"] = (
+        lambda _row: (_ for _ in ()).throw(RuntimeError("down")))
+    app.extensions["analytics_recommendation_writer"] = \
+        captured["recommendations"].append
+
+    with caplog.at_level("WARNING"):
+        response = app.test_client().post(
+            "/api/query", json=manual_payload(), headers=analytics_headers())
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["recommendations"]
+    assert len(captured["recommendations"][0]) <= 3
+    assert "analytics_detail_write_failed request_id=" in caplog.text
+
+
+def test_analytics_snapshot_failure_never_changes_success_response(monkeypatch, caplog):
+    """推薦快照寫入失敗時，公開查詢仍要回傳 200 與完整推薦。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    captured = {"details": []}
+    app.extensions["analytics_detail_writer"] = captured["details"].append
+    app.extensions["analytics_recommendation_writer"] = (
+        lambda _rows: (_ for _ in ()).throw(RuntimeError("down")))
+
+    with caplog.at_level("WARNING"):
+        response = app.test_client().post(
+            "/api/query", json=manual_payload(), headers=analytics_headers())
+
+    assert response.status_code == 200
+    assert response.get_json()["recommendations"]
+    assert captured["details"][0]["outcome_code"] == "success"
+    assert "analytics_recommendation_write_failed request_id=" in caplog.text
+
+
+def test_query_without_consent_records_no_details_or_snapshots(monkeypatch):
+    """未同意時，查詢明細與推薦快照都不能寫入。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    captured = {"details": [], "recommendations": []}
+    app.extensions["analytics_detail_writer"] = captured["details"].append
+    app.extensions["analytics_recommendation_writer"] = \
+        captured["recommendations"].append
+
+    response = app.test_client().post("/api/query", json=manual_payload())
+
+    assert response.status_code == 200
+    assert captured["details"] == []
+    assert captured["recommendations"] == []
+
+
+def test_geocode_failure_records_detail_error_stage(monkeypatch):
+    """地理編碼失敗時，明細要記錄 error_stage=geocode。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: None)
+    captured = {"details": []}
+    app.extensions["analytics_detail_writer"] = captured["details"].append
+
+    response = app.test_client().post(
+        "/api/query", json=manual_payload(address="不存在的地址"),
+        headers=analytics_headers())
+
+    assert response.status_code == 422
+    detail = captured["details"][0]
+    assert detail["error_stage"] == "geocode"
+    assert detail["outcome_code"] == "failed_geocode"
+
+
+def test_location_choice_records_detail_without_query_event(monkeypatch):
+    """選址回應維持 200，只寫 location_choice_required 明細，不寫查詢事件。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    captured = {"details": [], "events": []}
+    app.extensions["analytics_detail_writer"] = captured["details"].append
+    app.extensions["analytics_writer"] = captured["events"].append
+    monkeypatch.setattr(app_module, "parse_parking_query", lambda *_args: ParkingIntent(
+        intent="recommend", original_destination="資策會", address="資策會",
+        district="松山區",
+        arrival_time=datetime(2026, 8, 23, 10, tzinfo=timezone.utc),
+        missing_fields=[],
+        location_candidates=[
+            LocationCandidate(name="A", address="臺北市大安區信義路三段153號"),
+            LocationCandidate(name="B", address="臺北市松山區民生東路四段133號"),
+        ],
+    ))
+    monkeypatch.setattr(app_module, "geocode_candidates", lambda *_args: [
+        {"name": "A", "address": "臺北市大安區信義路三段153號",
+         "district": "大安區", "display_address": "信義路三段153號",
+         "latitude": 25.03, "longitude": 121.54},
+        {"name": "B", "address": "臺北市松山區民生東路四段133號",
+         "district": "松山區", "display_address": "民生東路四段133號",
+         "latitude": 25.06, "longitude": 121.55},
+    ])
+
+    response = app.test_client().post(
+        "/api/query", json={"mode": "chat", "message": "我要去資策會"},
+        headers={**analytics_headers(), "X-Client-Version": "2"})
+
+    assert response.status_code == 200
+    assert captured["events"] == []
+    detail = captured["details"][0]
+    assert detail["outcome_code"] == "location_choice_required"
+    assert detail["location_choice_count"] == 2
+
+
+def test_location_choice_survives_detail_writer_failure(monkeypatch, caplog):
+    """選址明細寫入失敗時，選址回應仍必須維持 HTTP 200。"""
+    app = make_analytics_app(monkeypatch)
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    app.extensions["analytics_detail_writer"] = (
+        lambda _row: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(app_module, "parse_parking_query", lambda *_args: ParkingIntent(
+        intent="recommend", original_destination="資策會", address="資策會",
+        district="松山區",
+        arrival_time=datetime(2026, 8, 23, 10, tzinfo=timezone.utc),
+        missing_fields=[],
+        location_candidates=[
+            LocationCandidate(name="A", address="臺北市大安區信義路三段153號"),
+            LocationCandidate(name="B", address="臺北市松山區民生東路四段133號"),
+        ],
+    ))
+    monkeypatch.setattr(app_module, "geocode_candidates", lambda *_args: [
+        {"name": "A", "address": "臺北市大安區信義路三段153號",
+         "district": "大安區", "display_address": "信義路三段153號",
+         "latitude": 25.03, "longitude": 121.54},
+        {"name": "B", "address": "臺北市松山區民生東路四段133號",
+         "district": "松山區", "display_address": "民生東路四段133號",
+         "latitude": 25.06, "longitude": 121.55},
+    ])
+
+    with caplog.at_level("WARNING"):
+        response = app.test_client().post(
+            "/api/query", json={"mode": "chat", "message": "我要去資策會"},
+            headers={**analytics_headers(), "X-Client-Version": "2"})
+
+    assert response.status_code == 200
+    assert response.get_json()["needs_location_choice"] is True
+    assert "analytics_detail_write_failed request_id=" in caplog.text
+
+
+def test_production_detail_writer_commits_and_closes_fresh_connection(monkeypatch):
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    called = []
+
+    def upsert_query_detail(_connection, detail):
+        called.append(detail)
+        return 1
+
+    monkeypatch.setattr(app_module, "upsert_query_detail", upsert_query_detail)
+    app = make_analytics_app(monkeypatch)
+    writer = app.extensions["analytics_detail_writer"]
+
+    writer({"request_id": VALID_REQUEST_ID})
+
+    assert called == [{"request_id": VALID_REQUEST_ID}]
+    assert connection.committed is True
+    assert connection.closed is True
+
+
+def test_production_detail_writer_rolls_back_and_closes_on_error(monkeypatch):
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+
+    def upsert_query_detail(_connection, _detail):
+        raise RuntimeError("upsert failed")
+
+    monkeypatch.setattr(app_module, "upsert_query_detail", upsert_query_detail)
+    app = make_analytics_app(monkeypatch)
+    writer = app.extensions["analytics_detail_writer"]
+
+    with pytest.raises(RuntimeError, match="upsert failed"):
+        writer({"request_id": VALID_REQUEST_ID})
+
+    assert connection.rolled_back is True
+    assert connection.closed is True
+
+
+def test_production_snapshot_writer_replaces_commits_and_closes(monkeypatch):
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    called = []
+
+    def replace_recommendation_snapshots(_connection, request_id, rows):
+        called.append((request_id, rows))
+        return 3
+
+    monkeypatch.setattr(app_module, "replace_recommendation_snapshots",
+                        replace_recommendation_snapshots)
+    app = make_analytics_app(monkeypatch)
+    writer = app.extensions["analytics_recommendation_writer"]
+    rows = [{"request_id": VALID_REQUEST_ID, "rank_position": 1}]
+
+    writer(rows)
+
+    assert called == [(VALID_REQUEST_ID, rows)]
+    assert connection.committed is True
+    assert connection.closed is True
+
+
+def test_production_snapshot_writer_rolls_back_and_closes_on_error(monkeypatch):
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+
+    def replace_recommendation_snapshots(_connection, _request_id, _rows):
+        raise RuntimeError("replace failed")
+
+    monkeypatch.setattr(app_module, "replace_recommendation_snapshots",
+                        replace_recommendation_snapshots)
+    app = make_analytics_app(monkeypatch)
+    writer = app.extensions["analytics_recommendation_writer"]
+
+    with pytest.raises(RuntimeError, match="replace failed"):
+        writer([{"request_id": VALID_REQUEST_ID, "rank_position": 1}])
+
+    assert connection.rolled_back is True
+    assert connection.closed is True
+
+
+@pytest.mark.parametrize("event_type", [
+    "location_choice_shown", "location_choice_selected",
+    "map_marker_clicked", "history_opened",
+])
+def test_new_browser_events_are_accepted(monkeypatch, event_type):
+    app = make_analytics_app(monkeypatch)
+    app.extensions["analytics_writer"] = lambda _event: None
+    response = app.test_client().post("/api/analytics/events", json={
+        "event_type": event_type, "analytics_id": VALID_UUID,
+        "request_id": VALID_REQUEST_ID, "source": "direct",
+        "clicked_rank": 1, "parking_lot_id": "TPE1",
+    })
+    assert response.status_code == 204
+
+
+def test_new_browser_event_writes_hashed_id_and_scalars(monkeypatch):
+    """新事件同樣以 body UUID 計算 HMAC，並保留純量欄位。"""
+    app = make_analytics_app(monkeypatch)
+    written = []
+    app.extensions["analytics_writer"] = written.append
+    response = app.test_client().post("/api/analytics/events", json={
+        "event_type": "history_opened", "analytics_id": VALID_UUID,
+        "request_id": VALID_REQUEST_ID, "source": "direct",
+        "parking_lot_id": "TPE1",
+    })
+    assert response.status_code == 204
+    event = written[0]
+    assert event["event_type"] == "history_opened"
+    assert event["request_id"] == VALID_REQUEST_ID
+    assert event["parking_lot_id"] == "TPE1"
+    assert len(event["anonymous_id_hash"]) == 64
+
+
+def test_event_endpoint_rejects_unknown_event_type(monkeypatch):
+    """事件端點只能接受固定白名單，其他類型一律 400。"""
+    app = make_analytics_app(monkeypatch)
+    response = app.test_client().post(
+        "/api/analytics/events",
+        json=valid_navigation_payload(event_type="screen_view"),
+    )
+    assert response.status_code == 400
+
+
+def test_feedback_updates_only_matching_request_and_uuid(monkeypatch):
+    app = make_analytics_app(monkeypatch)
+    captured = []
+    app.extensions["analytics_feedback_writer"] = \
+        lambda *args: captured.append(args) or 1
+    response = app.test_client().post("/api/analytics/feedback", json={
+        "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+        "feedback_code": "found_space",
+    })
+    assert response.status_code == 204
+    assert captured[0][1:] == (VALID_REQUEST_ID, "found_space")
+
+
+def test_feedback_rejects_unknown_codes_and_fields(monkeypatch):
+    app = make_analytics_app(monkeypatch)
+    app.extensions["analytics_feedback_writer"] = lambda *args: 1
+    client = app.test_client()
+    payload = {
+        "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+        "feedback_code": "found_space",
+    }
+    for overrides in ({"feedback_code": "loved_it"},
+                      {"client_hint": "secret"}):
+        response = client.post(
+            "/api/analytics/feedback", json={**payload, **overrides})
+        assert response.status_code == 400
+    assert client.post(
+        "/api/analytics/feedback", json=payload).status_code == 204
+
+
+def test_feedback_returns_404_when_no_matching_detail(monkeypatch):
+    """沒有對應 request＋裝置的明細時，回饋必須回 404 而非靜默成功。"""
+    app = make_analytics_app(monkeypatch)
+    app.extensions["analytics_feedback_writer"] = lambda *args: 0
+    response = app.test_client().post("/api/analytics/feedback", json={
+        "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+        "feedback_code": "full_on_arrival",
+    })
+    assert response.status_code == 404
+
+
+def test_feedback_identical_repeat_returns_204_when_detail_exists(monkeypatch):
+    """同 request＋hash 重複送出相同回饋時，即使 UPDATE 0 列也必須回 204。"""
+    app = make_analytics_app(monkeypatch)
+    calls = []
+    app.extensions["analytics_feedback_writer"] = (
+        lambda *args: calls.append(args) or 1)
+    client = app.test_client()
+    payload = {
+        "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+        "feedback_code": "found_space",
+    }
+    assert client.post("/api/analytics/feedback", json=payload).status_code == 204
+    assert client.post("/api/analytics/feedback", json=payload).status_code == 204
+    assert len(calls) == 2
+
+
+def test_feedback_survives_writer_exception(monkeypatch, caplog):
+    app = make_analytics_app(monkeypatch)
+    app.extensions["analytics_feedback_writer"] = (
+        lambda *args: (_ for _ in ()).throw(RuntimeError("db down")))
+    with caplog.at_level("WARNING"):
+        response = app.test_client().post("/api/analytics/feedback", json={
+            "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+            "feedback_code": "did_not_go",
+        })
+    assert response.status_code == 204
+    assert "analytics_feedback_write_failed" in caplog.text
+
+
+def test_feedback_disabled_analytics_returns_204(monkeypatch):
+    app = make_analytics_app(
+        monkeypatch, ANALYTICS_HMAC_SECRET="", ANALYTICS_ENABLED=False)
+    written = []
+    app.extensions["analytics_feedback_writer"] = written.append
+    response = app.test_client().post("/api/analytics/feedback", json={
+        "analytics_id": VALID_UUID, "request_id": VALID_REQUEST_ID,
+        "feedback_code": "found_space",
+    })
+    assert response.status_code == 204
+    assert written == []
+
+
+def test_production_feedback_writer_commits_and_closes_fresh_connection(
+        monkeypatch):
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    called = []
+
+    def update_query_feedback(_connection, request_id, anonymous_id_hash,
+                              feedback_code):
+        called.append((request_id, anonymous_id_hash, feedback_code))
+        return 1
+
+    monkeypatch.setattr(app_module, "update_query_feedback",
+                        update_query_feedback)
+    app = make_analytics_app(monkeypatch)
+    writer = app.extensions["analytics_feedback_writer"]
+
+    result = writer("b" * 64, VALID_REQUEST_ID, "found_space")
+
+    assert result == 1
+    assert called == [(VALID_REQUEST_ID, "b" * 64, "found_space")]
+    assert connection.committed is True
+    assert connection.closed is True
+
+
+def test_production_feedback_writer_rolls_back_and_closes_on_error(monkeypatch):
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+
+    def update_query_feedback(_connection, _request_id, _hash, _code):
+        raise RuntimeError("update failed")
+
+    monkeypatch.setattr(app_module, "update_query_feedback",
+                        update_query_feedback)
+    app = make_analytics_app(monkeypatch)
+    writer = app.extensions["analytics_feedback_writer"]
+
+    with pytest.raises(RuntimeError, match="update failed"):
+        writer("b" * 64, VALID_REQUEST_ID, "found_space")
+
+    assert connection.rolled_back is True
+    assert connection.closed is True
+
+
+def test_run_analytics_write_preserves_connection_failure(monkeypatch):
+    """get_connection 失敗時必須拋出根因，不能用 NameError 蓋掉。"""
+    def raise_connection():
+        raise RuntimeError("connection down")
+
+    monkeypatch.setattr(app_module, "get_connection", raise_connection)
+    app = make_analytics_app(monkeypatch)
+    with pytest.raises(RuntimeError, match="connection down"):
+        app.extensions["analytics_detail_writer"]({})

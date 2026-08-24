@@ -1,11 +1,13 @@
 """儀表板指標測試：鎖定分母、首次點擊、臺北日期邊界與樣本門檻。"""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from analytics_database import fetch_dashboard_events
-from analytics_service import parse_dashboard_range, summarize_events
+from analytics_service import (parse_dashboard_range, summarize_events,
+                               summarize_insights)
 
 NOW_UTC = datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc)
 
@@ -34,7 +36,7 @@ def query_row(event_type, request_id, device, outcome_code, duration_ms,
     }
 
 
-def nav_row(request_id, device, clicked_rank, occurred_at):
+def nav_row(request_id, device, clicked_rank, occurred_at, lot_id="TPE0001"):
     """建構 fetch_events 回傳的 16 鍵導航點擊列。"""
     return {
         "event_type": "navigation_clicked",
@@ -49,7 +51,7 @@ def nav_row(request_id, device, clicked_rank, occurred_at):
         "duration_ms": None,
         "result_count": None,
         "clicked_rank": clicked_rank,
-        "parking_lot_id": "TPE0001",
+        "parking_lot_id": lot_id,
         "walking_minutes": 6.5,
         "availability_bucket": "11_plus",
         "source": "direct",
@@ -299,17 +301,303 @@ def test_dashboard_fetch_extends_navigation_window_past_range_end():
     end = datetime(2026, 8, 23, 16, 0, tzinfo=timezone.utc)
     query = query_row("query_completed", "req-db", "h" * 64, "success",
                       80, 1, datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc))
+    choice_shown = choice_row(
+        "req-choice", "i" * 64, "location_choice_shown",
+        datetime(2026, 8, 23, 9, 0, tzinfo=timezone.utc))
+    choice_selected = choice_row(
+        "req-choice", "i" * 64, "location_choice_selected",
+        datetime(2026, 8, 23, 9, 1, tzinfo=timezone.utc))
     nav = nav_row("req-db", "h" * 64, 1,
                   datetime(2026, 8, 23, 23, 0, tzinfo=timezone.utc))
-    connection = _RecordingConnection([[query], [nav]])
+    connection = _RecordingConnection(
+        [[query, choice_shown, choice_selected], [nav]])
     rows = fetch_dashboard_events(connection, start, end)
     query_sql, query_params = connection.cursor_instance.executions[0]
     nav_sql, nav_params = connection.cursor_instance.executions[1]
-    assert "event_type IN ('query_completed', 'query_failed')" in query_sql
+    assert (
+        "event_type IN ('query_completed', 'query_failed',"
+        " 'location_choice_shown', 'location_choice_selected')"
+        in query_sql
+    )
     assert "occurred_at >= %s AND occurred_at < %s" in query_sql
     assert query_params == (start, end)
     assert "event_type = 'navigation_clicked'" in nav_sql
     assert nav_params == (start, end + timedelta(hours=24))
-    assert rows == [query, nav]
+    assert rows == [query, choice_shown, choice_selected, nav]
     summary = summarize_events(rows, NOW_UTC)
     assert summary["navigation_click_rate"] == 100.0
+
+
+def detail_row(request_id, occurred_at, device, district=None,
+               destination_label=None, outcome_code="success", total_ms=100,
+               feedback_code=None, raw_query_text=None, **timings):
+    """建構 fetch_insight_details 回傳的 26 鍵查詢明細列。"""
+    row = {
+        "request_id": request_id,
+        "occurred_at": occurred_at,
+        "anonymous_id_hash": device,
+        "source": "direct",
+        "query_mode": "manual",
+        "raw_query_text": raw_query_text,
+        "parsed_query_json": None,
+        "destination_label": destination_label,
+        "district": district,
+        "arrival_time": None,
+        "intent": "recommend",
+        "outcome_code": outcome_code,
+        "error_stage": None,
+        "fallback_reason": None,
+        "data_status": "fresh",
+        "result_count": 3,
+        "location_choice_count": 0,
+        "parse_ms": None,
+        "geocode_ms": None,
+        "freshness_ms": None,
+        "database_ms": None,
+        "walking_ms": None,
+        "total_ms": total_ms,
+        "official_data_at": None,
+        "collected_at": None,
+        "feedback_code": feedback_code,
+    }
+    row.update(timings)
+    return row
+
+
+def recommendation_row(request_id, lot_id, lot_name, rank, occurred_at,
+                       navigation_clicked_at=None):
+    """建構 fetch_insight_recommendations 回傳的 18 鍵推薦快照列。"""
+    return {
+        "request_id": request_id,
+        "rank_position": rank,
+        "occurred_at": occurred_at,
+        "parking_lot_id": lot_id,
+        "lot_name": lot_name,
+        "recommendation_group": "recommended",
+        "available_spaces": 10,
+        "total_spaces": 100,
+        "pressure_label": "comfortable",
+        "decision_status": "recommended",
+        "straight_distance_m": 200,
+        "walking_distance_m": None,
+        "walking_minutes": None,
+        "distance_source": "straight_line",
+        "hourly_fee_label": "20 元/時",
+        "daily_cap_label": None,
+        "facility_type_label": "立體停車場",
+        "navigation_clicked_at": navigation_clicked_at,
+    }
+
+
+def choice_row(request_id, device, event_type, occurred_at):
+    """建構固定 16 鍵的地點確認事件列。"""
+    return {
+        "event_type": event_type,
+        "occurred_at": occurred_at,
+        "request_id": request_id,
+        "anonymous_id_hash": device,
+        "district": None,
+        "area_bucket": None,
+        "place_type": None,
+        "query_mode": "manual",
+        "outcome_code": None,
+        "duration_ms": None,
+        "result_count": None,
+        "clicked_rank": None,
+        "parking_lot_id": None,
+        "walking_minutes": None,
+        "availability_bucket": None,
+        "source": "direct",
+    }
+
+
+def sample_details():
+    """三筆中正區查詢，其中一筆有 found_space 回饋與分段耗時。"""
+    return [
+        detail_row("req-1", datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc),
+                   "a" * 64, district="中正區",
+                   destination_label="台北車站", feedback_code="found_space",
+                   raw_query_text="台北車站", parse_ms=10, geocode_ms=200,
+                   freshness_ms=2, database_ms=30, walking_ms=500),
+        detail_row("req-2", datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc),
+                   "b" * 64, district="中正區",
+                   destination_label="台北車站", raw_query_text="台北車站",
+                   parse_ms=12, geocode_ms=150, freshness_ms=3,
+                   database_ms=40, walking_ms=600),
+        detail_row("req-3", datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc),
+                   "c" * 64, district="中正區",
+                   destination_label="臺大醫院", raw_query_text="台大醫院",
+                   parse_ms=8, geocode_ms=250, freshness_ms=1,
+                   database_ms=20, walking_ms=400),
+    ]
+
+
+def sample_recommendations():
+    """含導航場站名稱與原排名的推薦快照；TPE0001 在兩次查詢都出現。"""
+    return [
+        recommendation_row("req-1", "TPE0001", "台北車站地下停車場", 1,
+                           datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc)),
+        recommendation_row("req-1", "TPE0002", "站前廣場停車場", 2,
+                           datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc)),
+        recommendation_row("req-2", "TPE0003", "京站停車場", 2,
+                           datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+        recommendation_row("req-3", "TPE0001", "台北車站地下停車場", 1,
+                           datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc)),
+    ]
+
+
+def sample_events():
+    """三完成、一地點確認、兩導航；另有一筆 shown 供出現次數驗證。"""
+    return [
+        query_row("query_completed", "req-1", "a" * 64, "success", 100, 3,
+                  datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc)),
+        query_row("query_completed", "req-2", "b" * 64, "success", 200, 2,
+                  datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+        query_row("query_completed", "req-3", "c" * 64, "success", 300, 1,
+                  datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc)),
+        choice_row("req-choice", "d" * 64, "location_choice_shown",
+                   datetime(2026, 8, 23, 3, 0, tzinfo=timezone.utc)),
+        choice_row("req-choice", "d" * 64, "location_choice_selected",
+                   datetime(2026, 8, 23, 3, 1, tzinfo=timezone.utc)),
+        nav_row("req-1", "a" * 64, 1,
+                datetime(2026, 8, 23, 0, 10, tzinfo=timezone.utc)),
+        nav_row("req-2", "b" * 64, 2,
+                datetime(2026, 8, 23, 1, 10, tzinfo=timezone.utc),
+                lot_id="TPE0003"),
+    ]
+
+
+def stage_detail_rows():
+    """每階段三筆非空值（中位數為整數），另加一筆全 None 驗證忽略。"""
+    return [
+        detail_row("req-s1", datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc),
+                   "s" * 64, parse_ms=10, geocode_ms=200, freshness_ms=2,
+                   database_ms=30, walking_ms=500),
+        detail_row("req-s2", datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc),
+                   "t" * 64, parse_ms=8, geocode_ms=250, freshness_ms=4,
+                   database_ms=40, walking_ms=600),
+        detail_row("req-s3", datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc),
+                   "u" * 64, parse_ms=12, geocode_ms=150, freshness_ms=1,
+                   database_ms=20, walking_ms=400),
+        detail_row("req-s4", datetime(2026, 8, 23, 3, 0, tzinfo=timezone.utc),
+                   "v" * 64),
+    ]
+
+
+def test_insights_are_simple_bounded_and_use_query_counts():
+    result = summarize_insights(
+        sample_details(), sample_recommendations(), sample_events())
+    assert result["districts"] == [{"district": "中正區", "queries": 3}]
+    assert result["funnel"] == {
+        "completed": 3, "location_choices": 1, "navigations": 2,
+        "feedback": 1,
+    }
+    assert result["feedback"] == {
+        "found_space": 1, "full_on_arrival": 0, "did_not_go": 0,
+    }
+    assert len(result["destinations"]) <= 10
+    assert len(result["recent_queries"]) <= 20
+
+
+def test_stage_medians_ignore_null_values():
+    result = summarize_insights(stage_detail_rows(), [], [])
+    assert result["stage_timings"] == {
+        "parse_ms": 10, "geocode_ms": 200, "freshness_ms": 2,
+        "database_ms": 30, "walking_ms": 500,
+    }
+
+
+def test_insights_destinations_lots_and_location_choice_breakdown():
+    result = summarize_insights(
+        sample_details(), sample_recommendations(), sample_events())
+    assert result["destinations"][0] == {
+        "destination": "台北車站", "queries": 2,
+    }
+    assert {row["lot_name"] for row in result["lots"]} == {
+        "台北車站地下停車場", "京站停車場",
+    }
+    assert {row["rank"] for row in result["lots"]} == {1, 2}
+    assert result["location_choice_counts"] == {
+        "shown": 1, "selected": 1,
+    }
+
+
+def test_insights_navigation_requires_eligible_in_window_completed_query():
+    """孤兒導航、hash 不符或超出 24 小時觀察窗的導航不得計入漏斗與場站。"""
+    events = sample_events()
+    events.append(nav_row(
+        "req-orphan", "a" * 64, 1,
+        datetime(2026, 8, 23, 4, 0, tzinfo=timezone.utc), lot_id="TPE0009"))
+    events.append(nav_row(
+        "req-1", "z" * 64, 1,
+        datetime(2026, 8, 23, 0, 20, tzinfo=timezone.utc), lot_id="TPE0008"))
+    events.append(nav_row(
+        "req-1", "a" * 64, 1,
+        datetime(2026, 8, 24, 0, 30, tzinfo=timezone.utc), lot_id="TPE0007"))
+    result = summarize_insights(
+        sample_details(), sample_recommendations(), events)
+    assert result["funnel"]["navigations"] == 2
+    assert {row["lot_name"] for row in result["lots"]} == {
+        "台北車站地下停車場", "京站停車場",
+    }
+
+
+def test_insights_recent_queries_are_newest_first_without_private_fields():
+    result = summarize_insights(
+        sample_details(), sample_recommendations(), sample_events())
+    recent = result["recent_queries"]
+    assert recent[0]["query"] == "台大醫院"
+    assert recent[1]["lot_name"] == "京站停車場"
+    assert recent[2]["feedback_code"] == "found_space"
+    assert recent[0]["occurred_at"] > recent[2]["occurred_at"]
+    assert all(isinstance(row["occurred_at"], str) for row in recent)
+    blob = json.dumps(result, ensure_ascii=False)
+    assert "anonymous_id_hash" not in blob
+    assert "parsed_query_json" not in blob
+
+
+def test_insights_district_threshold_uses_devices_and_counts_queries():
+    rows = sample_details()
+    rows.append(detail_row(
+        "req-4", datetime(2026, 8, 23, 4, 0, tzinfo=timezone.utc),
+        "c" * 64, district="大安區", destination_label="大安森林公園",
+        raw_query_text="大安森林公園"))
+    result = summarize_insights(rows, [], [], min_devices=2)
+    assert result["districts"] == [{"district": "中正區", "queries": 3}]
+    assert summarize_insights(rows, [], [], min_devices=4)["districts"] == []
+
+
+def test_insights_lists_are_hard_capped():
+    details = [
+        detail_row(
+            f"req-{index:02d}",
+            datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc)
+            + timedelta(minutes=index),
+            f"d{index:02d}".ljust(64, "0"), district="中正區",
+            destination_label=f"目的地{index}")
+        for index in range(25)
+    ]
+    result = summarize_insights(details, [], [], min_devices=1)
+    assert len(result["destinations"]) == 10
+    assert len(result["recent_queries"]) == 20
+    assert result["districts"] == [{"district": "中正區", "queries": 25}]
+
+
+def test_empty_insights_returns_fixed_zero_shape():
+    result = summarize_insights([], [], [])
+    assert result["funnel"] == {
+        "completed": 0, "location_choices": 0, "navigations": 0,
+        "feedback": 0,
+    }
+    assert result["feedback"] == {
+        "found_space": 0, "full_on_arrival": 0, "did_not_go": 0,
+    }
+    assert result["districts"] == []
+    assert result["destinations"] == []
+    assert result["lots"] == []
+    assert result["recent_queries"] == []
+    assert result["stage_timings"] == {
+        "parse_ms": None, "geocode_ms": None, "freshness_ms": None,
+        "database_ms": None, "walking_ms": None,
+    }
+    assert result["location_choice_counts"] == {"shown": 0, "selected": 0}

@@ -40,6 +40,12 @@ class FakeCursor:
     def fetchall(self):
         if self.last_sql and "SELECT 1" in self.last_sql:
             return [{"1": 1}]
+        if self.last_sql and (
+                "FROM analytics_query_details" in self.last_sql
+                or "FROM analytics_recommendations" in self.last_sql):
+            if not self.connection.analytics_queues:
+                return []
+            return self.connection.analytics_queues.pop(0)
         if self.last_sql and "official_data_at" in self.last_sql:
             return self.connection.status_times
         if not self.connection.analytics_queues:
@@ -118,12 +124,15 @@ def nav_row(request_id, device, clicked_rank, occurred_at):
 
 
 def make_admin_client(monkeypatch, database_error=False,
-                      analytics_queues=None, no_secret=False):
+                      analytics_queues=None, no_secret=False,
+                      segment_min_devices=None):
     """建立測試 Flask 用戶端，並隔離資料庫與本機資源讀取。"""
     settings = {
         "TESTING": True, "SECRET_KEY": "test", "DEPLOY_VERSION": "abc1234",
         "ANALYTICS_HMAC_SECRET": "" if no_secret else "test-secret",
     }
+    if segment_min_devices is not None:
+        settings["ANALYTICS_SEGMENT_MIN_DEVICES"] = segment_min_devices
     flask_app = app_module.create_app(settings)
     connections = []
 
@@ -286,3 +295,217 @@ def test_analytics_api_returns_real_summary_and_closes_connection(monkeypatch):
     assert connection.executions[1][1] == (
         start, end + timedelta(hours=24))
     assert connection.executions[2][1] == (rolling_start, NOW_UTC)
+
+
+def detail_row(request_id, occurred_at, device, district=None,
+               destination_label=None, outcome_code="success",
+               feedback_code=None, raw_query_text=None, **timings):
+    """建構 fetch_insight_details 回傳的 26 鍵查詢明細列。"""
+    row = {
+        "request_id": request_id,
+        "occurred_at": occurred_at,
+        "anonymous_id_hash": device,
+        "source": "direct",
+        "query_mode": "manual",
+        "raw_query_text": raw_query_text,
+        "parsed_query_json": None,
+        "destination_label": destination_label,
+        "district": district,
+        "arrival_time": None,
+        "intent": "recommend",
+        "outcome_code": outcome_code,
+        "error_stage": None,
+        "fallback_reason": None,
+        "data_status": "fresh",
+        "result_count": 3,
+        "location_choice_count": 0,
+        "parse_ms": None,
+        "geocode_ms": None,
+        "freshness_ms": None,
+        "database_ms": None,
+        "walking_ms": None,
+        "total_ms": 100,
+        "official_data_at": None,
+        "collected_at": None,
+        "feedback_code": feedback_code,
+    }
+    row.update(timings)
+    return row
+
+
+def recommendation_row(request_id, lot_id, lot_name, rank, occurred_at):
+    """建構 fetch_insight_recommendations 回傳的 18 鍵推薦快照列。"""
+    return {
+        "request_id": request_id,
+        "rank_position": rank,
+        "occurred_at": occurred_at,
+        "parking_lot_id": lot_id,
+        "lot_name": lot_name,
+        "recommendation_group": "recommended",
+        "available_spaces": 10,
+        "total_spaces": 100,
+        "pressure_label": "comfortable",
+        "decision_status": "recommended",
+        "straight_distance_m": 200,
+        "walking_distance_m": None,
+        "walking_minutes": None,
+        "distance_source": "straight_line",
+        "hourly_fee_label": "20 元/時",
+        "daily_cap_label": None,
+        "facility_type_label": "立體停車場",
+        "navigation_clicked_at": None,
+    }
+
+
+def choice_row(request_id, device, event_type, occurred_at):
+    """建構固定 16 鍵的地點確認事件列。"""
+    return {
+        "event_type": event_type,
+        "occurred_at": occurred_at,
+        "request_id": request_id,
+        "anonymous_id_hash": device,
+        "district": None,
+        "area_bucket": None,
+        "place_type": None,
+        "query_mode": "manual",
+        "outcome_code": None,
+        "duration_ms": None,
+        "result_count": None,
+        "clicked_rank": None,
+        "parking_lot_id": None,
+        "walking_minutes": None,
+        "availability_bucket": None,
+        "source": "direct",
+    }
+
+
+def test_analytics_api_returns_bounded_insights_with_single_queries(monkeypatch):
+    """insights 只查明細與推薦各一次，且整份回應維持 JSON 可序列化。"""
+    selected = [
+        query_row("query_completed", "req-a", "a" * 64, "success", 100, 3,
+                  datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc)),
+        query_row("query_completed", "req-b", "b" * 64, "success", 200, 1,
+                  datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+    ]
+    nav = [nav_row("req-a", "a" * 64, 1,
+                   datetime(2026, 8, 23, 0, 10, tzinfo=timezone.utc))]
+    rolling = selected + [
+        query_row("query_completed", "req-c", "c" * 64, "success", 1000, 1,
+                  datetime(2026, 7, 31, 17, 0, tzinfo=timezone.utc),
+                  district="萬華區"),
+    ]
+    details = [
+        detail_row("req-a", datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc),
+                   "a" * 64, district="中正區", destination_label="台北車站",
+                   feedback_code="found_space", raw_query_text="台北車站",
+                   parse_ms=10, geocode_ms=200, freshness_ms=2,
+                   database_ms=30, walking_ms=500),
+        detail_row("req-b", datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc),
+                   "b" * 64, district="中正區", destination_label="台北車站",
+                   raw_query_text="台北車站", parse_ms=8, geocode_ms=150,
+                   freshness_ms=3, database_ms=40, walking_ms=600),
+    ]
+    recommendations = [
+        recommendation_row("req-a", "TPE0001", "台北車站地下停車場", 1,
+                           datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc)),
+        recommendation_row("req-b", "TPE0003", "京站停車場", 2,
+                           datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+    ]
+    client = make_admin_client(
+        monkeypatch,
+        analytics_queues=[selected, nav, rolling, details, recommendations],
+        segment_min_devices=1,
+    )
+
+    body = client.get("/admin/api/analytics?range=7d").get_json()
+
+    insights = body["insights"]
+    assert insights["funnel"] == {
+        "completed": 2, "location_choices": 0, "navigations": 1,
+        "feedback": 1,
+    }
+    assert insights["districts"] == [{"district": "中正區", "queries": 2}]
+    assert insights["feedback"] == {
+        "found_space": 1, "full_on_arrival": 0, "did_not_go": 0,
+    }
+    assert insights["destinations"] == [
+        {"destination": "台北車站", "queries": 2},
+    ]
+    assert insights["stage_timings"] == {
+        "parse_ms": 9, "geocode_ms": 175, "freshness_ms": 2,
+        "database_ms": 35, "walking_ms": 550,
+    }
+    assert len(insights["destinations"]) <= 10
+    assert len(insights["lots"]) <= 10
+    assert len(insights["recent_queries"]) <= 20
+    assert isinstance(insights["recent_queries"][0]["occurred_at"], str)
+    assert "anonymous_id_hash" not in insights["recent_queries"][0]
+    assert "parsed_query_json" not in insights["recent_queries"][0]
+
+    connection = client.connections[-1]
+    executions = connection.executions
+    detail_calls = [
+        (sql, params) for sql, params in executions
+        if "FROM analytics_query_details" in sql
+    ]
+    recommendation_calls = [
+        (sql, params) for sql, params in executions
+        if "FROM analytics_recommendations" in sql
+    ]
+    assert len(detail_calls) == 1
+    assert len(recommendation_calls) == 1
+    assert "LIMIT" not in detail_calls[0][0]
+    start = datetime(2026, 8, 16, 16, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 23, 16, 0, tzinfo=timezone.utc)
+    assert detail_calls[0][1] == (start, end)
+    assert recommendation_calls[0][1] == (start, end)
+    assert connection.closed is True
+
+
+def test_analytics_api_segments_use_config_min_devices(monkeypatch):
+    """行政區是否列出由 ANALYTICS_SEGMENT_MIN_DEVICES 設定決定。"""
+    details = [
+        detail_row(f"req-{index}", NOW_UTC, f"d{index}".ljust(64, "0"),
+                   district="中正區")
+        for index in range(3)
+    ]
+    queues = [[], [], [], details, []]
+
+    shown = make_admin_client(
+        monkeypatch, analytics_queues=list(queues),
+        segment_min_devices=1).get("/admin/api/analytics?range=today")
+    hidden = make_admin_client(
+        monkeypatch, analytics_queues=list(queues),
+        segment_min_devices=5).get("/admin/api/analytics?range=today")
+
+    assert shown.get_json()["insights"]["districts"] == [
+        {"district": "中正區", "queries": 3},
+    ]
+    assert hidden.get_json()["insights"]["districts"] == []
+
+
+def test_analytics_api_location_choice_events_reach_insights(monkeypatch):
+    """choice 事件須隨既有 dashboard fetch 進入 insights，而不是永遠為 0。"""
+    selected = [
+        query_row("query_completed", "req-a", "a" * 64, "success", 100, 3,
+                  datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc)),
+        choice_row("req-choice", "d" * 64, "location_choice_shown",
+                   datetime(2026, 8, 23, 0, 5, tzinfo=timezone.utc)),
+        choice_row("req-choice", "d" * 64, "location_choice_selected",
+                   datetime(2026, 8, 23, 0, 6, tzinfo=timezone.utc)),
+    ]
+    client = make_admin_client(
+        monkeypatch, analytics_queues=[selected, [], [], [], []])
+
+    body = client.get("/admin/api/analytics?range=today").get_json()
+
+    assert body["insights"]["funnel"]["location_choices"] == 1
+    assert body["insights"]["location_choice_counts"] == {
+        "shown": 1, "selected": 1,
+    }
+    assert body["summary"]["completed_queries"] == 1
+    assert body["summary"]["navigation_click_rate"] == 0.0
+    executions = client.connections[-1].executions
+    assert "location_choice_shown" in executions[0][0]
+    assert "location_choice_selected" in executions[0][0]
+    assert len(executions) == 5
