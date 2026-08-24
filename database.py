@@ -87,7 +87,10 @@ def insert_snapshots(connection, snapshots):
 def fetch_latest_snapshot_time(connection):
     """回傳資料庫最後一次成功收集時間；完全沒有快照時回傳 None。"""
     with connection.cursor() as cursor:
-        cursor.execute("SELECT MAX(captured_at) AS captured_at FROM parking_snapshots")
+        cursor.execute(
+            "SELECT captured_at FROM parking_snapshots "
+            "ORDER BY snapshot_id DESC LIMIT 1"
+        )
         rows = list(cursor.fetchall())
         row = rows[0] if rows else None
         return row.get("captured_at") if row else None

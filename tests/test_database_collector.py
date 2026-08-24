@@ -205,7 +205,9 @@ def test_latest_snapshot_and_stale_fallback_queries():
     captured_at = datetime(2026, 8, 4, 6, 0)
     time_connection = SpyConnection([{"captured_at": captured_at}])
     assert database.fetch_latest_snapshot_time(time_connection) == captured_at
-    assert "MAX(captured_at)" in time_connection.spy_cursor.calls[0][0]
+    latest_sql = time_connection.spy_cursor.calls[0][0]
+    assert "ORDER BY snapshot_id DESC LIMIT 1" in latest_sql
+    assert "MAX(captured_at)" not in latest_sql
 
     stale_connection = SpyConnection([{"lot_id": "TPE0001"}])
     rows = database.fetch_current_lots(

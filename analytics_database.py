@@ -109,8 +109,10 @@ def fetch_status_times(connection):
     """一次取出儀表板需要的三個最新時間：官方資料、Collector 與後設資料。"""
     sql = """
         SELECT
-            (SELECT MAX(source_updated_at) FROM parking_snapshots) AS official_data_at,
-            (SELECT MAX(captured_at) FROM parking_snapshots) AS collector_at,
+            (SELECT source_updated_at FROM parking_snapshots
+             ORDER BY snapshot_id DESC LIMIT 1) AS official_data_at,
+            (SELECT captured_at FROM parking_snapshots
+             ORDER BY snapshot_id DESC LIMIT 1) AS collector_at,
             (SELECT MAX(metadata_checked_at) FROM parking_lots) AS metadata_at
     """
     with connection.cursor() as cursor:
