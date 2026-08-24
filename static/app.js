@@ -618,6 +618,8 @@ function setupVoiceInput() {
     isListening = listening;
     voiceButton.classList.toggle("listening", listening);
     voiceButton.setAttribute("aria-pressed", String(listening));
+    voiceButton.setAttribute("aria-label",
+      listening ? "停止語音輸入" : "使用語音輸入目的地");
     const label = voiceButton.querySelector(".voice-label");
     if (label) label.textContent = listening ? "停止" : "語音";
   }
@@ -625,6 +627,8 @@ function setupVoiceInput() {
   // Safari 在 stop() 後仍可能需要時間整理最終文字；收尾期間禁止重新開始，避免舊 onend 干擾新錄音。
   function setProcessing(processing) {
     voiceButton.disabled = processing;
+    voiceButton.setAttribute("aria-label",
+      processing ? "正在辨識語音" : "使用語音輸入目的地");
     const label = voiceButton.querySelector(".voice-label");
     if (label && processing) label.textContent = "辨識中";
   }
@@ -756,8 +760,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!("serviceWorker" in navigator)) return;
   // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
-  navigator.serviceWorker.register("/static/sw.js?v=voice-v3", {scope:"/"})
-    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=voice-v3"));
+  navigator.serviceWorker.register("/static/sw.js?v=voice-v4", {scope:"/"})
+    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=voice-v4"));
 
   let deferredPrompt = null;
   const installButton = document.querySelector("#install-app");

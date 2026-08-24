@@ -158,7 +158,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "voice-v3" in template
+    assert "voice-v4" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -392,20 +392,20 @@ def test_new_interaction_events_use_delegated_handlers():
     assert "history_opened" in script
 
 
-def test_pwa_asset_versions_bumped_for_voice_interim_fix():
+def test_pwa_asset_versions_bumped_for_voice_animation():
     """模板與服務器快取金鑰必須同步升版，避免手機沿用舊語音版畫面。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-    assert "voice-v3" in template
+    assert "voice-v4" in template
     assert "analytics-v3" not in template
-    assert "parking-radar-shell-voice-v3" in sw
-    assert "style.css?v=voice-v3" in sw
-    assert "app.js?v=voice-v3" in sw
-    assert 'register("/static/sw.js?v=voice-v3"' in script
-    assert "voice-v2" not in template
-    assert "voice-v2" not in sw
+    assert "parking-radar-shell-voice-v4" in sw
+    assert "style.css?v=voice-v4" in sw
+    assert "app.js?v=voice-v4" in sw
+    assert 'register("/static/sw.js?v=voice-v4"' in script
+    assert "voice-v3" not in template
+    assert "voice-v3" not in sw
 
 
 def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():
@@ -440,6 +440,31 @@ def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():
     assert "setupVoiceInput();" in script.split(
         'document.addEventListener("DOMContentLoaded"', 1)[1]
     assert script.count("setupVoiceInput();") == 1
+
+
+def test_voice_button_has_listening_wave_animation_with_reduced_motion():
+    """聆聽動畫含四根裝飾音量柱，只在 listening 狀態播放並尊重減少動態設定。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    styles = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+    voice_button = template.split('<button id="voice-input"', 1)[1].split(
+        "</button>", 1)[0]
+
+    assert 'class="voice-input"' in voice_button
+    assert 'class="voice-wave"' in voice_button
+    assert 'aria-hidden="true"' in voice_button
+    assert voice_button.count('class="voice-wave-bar"') == 4
+    assert ".voice-wave {" in styles
+    assert ".voice-input.listening .voice-wave" in styles
+    assert ".voice-input.listening .voice-wave-bar" in styles
+    assert "@keyframes voice-wave" in styles
+    assert "@media (prefers-reduced-motion: reduce)" in styles
+    assert "min-width:" in styles.split(".voice-input {", 1)[1].split("}", 1)[0]
+
+    voice = (ROOT / "static" / "app.js").read_text(encoding="utf-8").split(
+        "function setupVoiceInput()", 1)[1].split(
+        'document.addEventListener("DOMContentLoaded"', 1)[0]
+    assert 'listening ? "停止語音輸入" : "使用語音輸入目的地"' in voice
+    assert 'processing ? "正在辨識語音" : "使用語音輸入目的地"' in voice
 
 
 def test_voice_input_has_plain_language_listening_and_error_messages():

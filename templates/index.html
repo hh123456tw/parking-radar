@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>停車地獄雷達</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='voice-v3') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='voice-v4') }}">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
   <meta name="theme-color" content="#0b1118">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
@@ -33,7 +33,14 @@
         <div class="input-row">
           <input id="message" required placeholder="例如：今晚六點去臺北市政府，哪裡比較好停？">
           <div class="query-actions">
-            <button id="voice-input" type="button" hidden aria-label="使用語音輸入目的地" aria-pressed="false"><span aria-hidden="true">🎤</span><span class="voice-label">語音</span></button>
+            <button id="voice-input" class="voice-input" type="button" hidden aria-label="使用語音輸入目的地" aria-pressed="false">
+              <span aria-hidden="true">🎤</span>
+              <span class="voice-wave" aria-hidden="true">
+                <span class="voice-wave-bar"></span><span class="voice-wave-bar"></span>
+                <span class="voice-wave-bar"></span><span class="voice-wave-bar"></span>
+              </span>
+              <span class="voice-label">語音</span>
+            </button>
             <button>分析</button>
           </div>
         </div>
@@ -122,7 +129,7 @@
   </footer>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='app.js', v='voice-v3') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='voice-v4') }}"></script>
 </body>
 
 </html>
