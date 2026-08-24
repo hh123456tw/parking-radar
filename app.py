@@ -11,8 +11,13 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, render_template, request, session
 from ai_service import IntentServiceError, TAIPEI_DISTRICTS, parse_parking_query
+from analytics_capture import (build_query_detail,
+                               build_recommendation_snapshots,
+                               infer_destination_district, new_query_trace)
 from analytics_database import (fetch_dashboard_events, fetch_events,
-                                insert_event, insert_navigation_event)
+                                insert_event, insert_navigation_event,
+                                replace_recommendation_snapshots,
+                                upsert_query_detail)
 from analytics_service import (DASHBOARD_RANGES, SOURCES, analytics_identity,
                                build_browser_event, build_query_event,
                                parse_dashboard_range, summarize_events)
@@ -268,6 +273,32 @@ def create_app(test_config=None):
 
     app.extensions["analytics_writer"] = analytics_writer
 
+    def run_analytics_write(operation, *args):
+        """共用短交易：成功提交，失敗回滾並重拋，最後關閉連線。"""
+        connection = get_connection()
+        try:
+            operation(connection, *args)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def analytics_detail_writer(detail):
+        run_analytics_write(upsert_query_detail, detail)
+
+    def analytics_recommendation_writer(rows):
+        """獨立短交易替換最多三筆推薦快照，成功才提交。"""
+        if rows:
+            run_analytics_write(
+                replace_recommendation_snapshots,
+                rows[0]["request_id"], rows)
+
+    app.extensions["analytics_detail_writer"] = analytics_detail_writer
+    app.extensions["analytics_recommendation_writer"] = \
+        analytics_recommendation_writer
+
     def write_analytics_safely(event):
         """分析寫入失敗只能留下不含目的地的警告，不得影響查詢。"""
         if not event:
@@ -308,15 +339,50 @@ def create_app(test_config=None):
             return
         write_analytics_safely(event)
 
+    def capture_query_detail(trace, request_id, anonymous_hash, outcome_code,
+                             total_ms, stage):
+        """最佳努力寫入查詢明細；失敗只留 request_id 與 stage 警告。"""
+        try:
+            detail = build_query_detail(
+                trace, request_id, anonymous_hash, outcome_code, total_ms)
+            if detail is not None:
+                app.extensions["analytics_detail_writer"](detail)
+        except Exception:
+            app.logger.warning(
+                "analytics_detail_write_failed request_id=%s stage=%s",
+                request_id, stage)
+
+    def capture_recommendation_snapshots(request_id, occurred_at, groups,
+                                         stage):
+        """最佳努力寫入前三名推薦快照；失敗只留 request_id 與 stage 警告。"""
+        try:
+            rows = build_recommendation_snapshots(
+                request_id, occurred_at, groups or {})
+            if rows:
+                app.extensions["analytics_recommendation_writer"](rows)
+        except Exception:
+            app.logger.warning(
+                "analytics_recommendation_write_failed request_id=%s stage=%s",
+                request_id, stage)
+
     def terminal(payload, status_code, outcome_code, query_mode, request_id,
                  anonymous_hash, query_source, duration_ms, result_count=0,
-                 district=None, latitude=None, longitude=None):
-        """加上 request_id 回傳終端 JSON，並記錄同意下的對應事件。"""
+                 district=None, latitude=None, longitude=None, trace=None,
+                 recommendation_groups=None):
+        """加上 request_id 回傳終端 JSON，並最佳努力記錄事件、明細與快照。"""
         payload["request_id"] = request_id
         record_query_event(
             outcome_code, query_mode, request_id, anonymous_hash,
             query_source, duration_ms, result_count, district, latitude,
             longitude)
+        if trace is not None and anonymous_hash:
+            capture_query_detail(
+                trace, request_id, anonymous_hash, outcome_code, duration_ms,
+                "terminal")
+            if recommendation_groups is not None:
+                capture_recommendation_snapshots(
+                    request_id, trace["occurred_at"], recommendation_groups,
+                    "terminal")
         return jsonify(payload), status_code
 
     @app.after_request
@@ -360,6 +426,8 @@ def create_app(test_config=None):
                             "failed_validation", query_mode, request_id,
                             anonymous_hash, query_source,
                             elapsed_ms(query_started))
+        trace = new_query_trace(
+            payload, query_mode, query_source, datetime.now(timezone.utc))
         try:
             if payload.get("mode") == "chat":
                 parsed = parse_parking_query(payload.get("message", ""), dict(session)).model_dump()
@@ -367,12 +435,16 @@ def create_app(test_config=None):
                 parsed = parse_manual_payload(payload)
             parsed = validate_parsed_query(parsed)
             timings["parse_ms"] = round((time.perf_counter() - query_started) * 1000)
+            trace["parse_ms"] = timings["parse_ms"]
+            trace["parsed"] = parsed
         except IntentServiceError as exc:
+            trace["error_stage"] = "parse"
             return terminal({"error": str(exc), "fallback": "manual"}, 503,
                             "failed_internal", query_mode, request_id,
                             anonymous_hash, query_source,
                             elapsed_ms(query_started))
         except (KeyError, TypeError, ValueError) as exc:
+            trace["error_stage"] = "parse"
             return terminal({"error": str(exc)}, 400, "failed_validation",
                             query_mode, request_id, anonymous_hash,
                             query_source, elapsed_ms(query_started))
@@ -388,13 +460,20 @@ def create_app(test_config=None):
             needs_choice = len(verified_choices) > 1 or (
                 verified_choices and requires_location_confirmation(parsed))
             if needs_choice:
+                trace["geocode_ms"] = round(
+                    (time.perf_counter() - geocode_started) * 1000)
                 if request.headers.get("X-Client-Version") != \
                         LOCATION_CHOICE_CLIENT_VERSION:
                     return terminal(
                         {"error": "畫面已更新，請重新整理頁面後再查詢"},
                         409, "failed_validation", query_mode, request_id,
                         anonymous_hash, query_source,
-                        elapsed_ms(query_started))
+                        elapsed_ms(query_started), trace=trace)
+                trace["location_choice_count"] = len(verified_choices)
+                capture_query_detail(
+                    trace, request_id, anonymous_hash,
+                    "location_choice_required", elapsed_ms(query_started),
+                    "location_choice")
                 return jsonify(
                     needs_location_choice=True,
                     location_choices=verified_choices,
@@ -418,14 +497,21 @@ def create_app(test_config=None):
                 destination = geocode_address(
                     parsed.get("address"), connection) if parsed.get("address") else None
             if parsed.get("address") and destination is None:
+                trace["error_stage"] = "geocode"
+                trace["geocode_ms"] = round(
+                    (time.perf_counter() - geocode_started) * 1000)
                 return terminal(
                     {"error": "找不到地址，請修正或改選行政區",
                      "fallback": "district"},
                     422, "failed_geocode", query_mode, request_id,
                     anonymous_hash, query_source,
-                    elapsed_ms(query_started))
+                    elapsed_ms(query_started), trace=trace)
             timings["geocode_ms"] = round(
                 (time.perf_counter() - geocode_started) * 1000)
+            trace["geocode_ms"] = timings["geocode_ms"]
+            trace["district"] = infer_destination_district(
+                parsed.get("district"), parsed.get("address"),
+                destination.get("display_address") if destination else None)
 
             # 地理快取查詢可能已建立 MySQL 交易快照；先關閉，避免補抓後仍讀到舊資料。
             connection.close()
@@ -437,6 +523,8 @@ def create_app(test_config=None):
                 data_status, data_notice = "fresh", None
             timings["freshness_ms"] = round(
                 (time.perf_counter() - freshness_started) * 1000)
+            trace["freshness_ms"] = timings["freshness_ms"]
+            trace["data_status"] = data_status
             database_started = time.perf_counter()
             connection = get_connection()
             freshness = Config.FRESHNESS_MINUTES if data_status == "fresh" else None
@@ -490,19 +578,24 @@ def create_app(test_config=None):
             session.update(destination=parsed.get("address"), district=parsed.get("district"),
                            arrival_time=parsed["arrival_time"].isoformat(),
                            lot_id=ranked[0]["lot_id"] if ranked else None)
-            collected_at = taipei_iso(max(
-                (row["captured_at"] for row in rows), default=None))
-            official_updated_at = taipei_iso(max(
+            trace["collected_at"] = max(
+                (row["captured_at"] for row in rows), default=None)
+            trace["official_data_at"] = max(
                 (row.get("snapshot_updated_at") for row in rows
                  if row.get("snapshot_updated_at") is not None),
                 default=None,
-            ))
+            )
+            collected_at = taipei_iso(trace["collected_at"])
+            official_updated_at = taipei_iso(trace["official_data_at"])
             total_ms = round((time.perf_counter() - query_started) * 1000)
             timings["database_ms"] = max(
                 0,
                 round((time.perf_counter() - database_started) * 1000)
                 - timings["walking_ms"],
             )
+            trace["database_ms"] = timings["database_ms"]
+            trace["walking_ms"] = timings["walking_ms"]
+            trace["result_count"] = len(ranked)
             app.logger.info(
                 "query_complete mode=%s parse_ms=%s geocode_ms=%s "
                 "freshness_ms=%s database_ms=%s walking_ms=%s total_ms=%s",
@@ -544,17 +637,23 @@ def create_app(test_config=None):
                 district=parsed.get("district"),
                 latitude=destination_coords.get("latitude"),
                 longitude=destination_coords.get("longitude"),
+                trace=trace,
+                recommendation_groups=groups,
             )
         except ParkingDataUnavailable as exc:
+            trace["error_stage"] = "database"
             return terminal({"error": str(exc)}, 503, "failed_database",
                             query_mode, request_id, anonymous_hash,
-                            query_source, elapsed_ms(query_started))
+                            query_source, elapsed_ms(query_started),
+                            trace=trace)
         except Exception:
             app.logger.exception("停車查詢失敗")
+            trace["error_stage"] = "internal"
             return terminal(
                 {"error": "服務暫時無法使用，請稍後再試"},
                 503, "failed_internal", query_mode, request_id,
-                anonymous_hash, query_source, elapsed_ms(query_started))
+                anonymous_hash, query_source, elapsed_ms(query_started),
+                trace=trace)
         finally:
             if connection is not None:
                 connection.close()
