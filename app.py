@@ -521,7 +521,11 @@ def create_app(test_config=None):
             database_started = time.perf_counter()
             connection = get_connection()
             freshness = Config.FRESHNESS_MINUTES if data_status == "fresh" else None
-            rows = fetch_current_lots(connection, parsed.get("district"), freshness)
+            rows = fetch_current_lots(
+                connection,
+                district=parsed.get("district"),
+                freshness_minutes=freshness,
+            )
             if destination:
                 # 一般查詢只使用即時資料與距離；歷史由使用者點擊後的專用 API 載入。
                 ranked = rank_candidates(
