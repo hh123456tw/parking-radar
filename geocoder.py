@@ -35,13 +35,13 @@ def normalize_address(address, city=None):
     return normalized
 
 
-def nominatim_queries(address):
+def nominatim_queries(address, city=None):
     """建立查詢候選；完整雙北門牌優先改成門牌、道路、行政區順序。"""
-    city = None
-    for code in CITIES:
-        if city_name(code) in address:
-            city = code
-            break
+    if city is None:
+        for code in CITIES:
+            if city_name(code) in address:
+                city = code
+                break
     normalized = normalize_address(address, city=city)
     match = re.match(
         r"^(?:臺北市|新北市)(?P<district>.+?區)(?:(?P<village>.+?里))?"
@@ -83,14 +83,36 @@ def _verified_city_and_district(display_name):
     return city, district
 
 
+def _city_and_district_from_text(text):
+    """從 display text 或正規化地址推論城市代碼與行政區。"""
+    city, district = _verified_city_and_district(text)
+    if city is not None:
+        return city, district
+    for code in CITIES:
+        if city_name(code) in text:
+            city = code
+            break
+    if city is None:
+        return None, None
+    district = next(
+        (d for d in CITIES[city].districts if d in text), None)
+    return city, district
+
+
 def geocode_address(address, connection, city=None, http_get=requests.get):
     """回傳快取或第一筆雙北座標；查無結果或城市不符時回傳 None。"""
     key = normalize_address(address, city=city)
     cached = get_cached_geocode(connection, key)
     if cached:
-        return cached
+        result = dict(cached)
+        inferred_city, inferred_district = _city_and_district_from_text(
+            result.get("display_address") or result.get("normalized_address")
+            or "")
+        result.setdefault("city", inferred_city)
+        result.setdefault("district", inferred_district)
+        return result
 
-    for query in nominatim_queries(address):
+    for query in nominatim_queries(address, city=city):
         _respect_rate_limit()
         response = http_get(
             NOMINATIM_URL,

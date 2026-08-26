@@ -212,6 +212,7 @@ def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):
     cached = {
         "normalized_address": "臺北市信義區市府路1號", "display_address": "臺北市政府",
         "latitude": 25.0375, "longitude": 121.5637,
+        "city": "taipei", "district": "信義區",
     }
     monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: cached)
 
@@ -222,6 +223,61 @@ def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):
     )
 
     assert result == cached
+
+
+def test_geocoder_accepts_verified_new_taipei_result(connection, monkeypatch):
+    """城市明確時，驗證過的新北結果必須帶回 city 與 district。"""
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
+    monkeypatch.setattr(geocoder, "save_cached_geocode",
+                        lambda _connection, row: None)
+    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
+
+    result = geocode_address("板橋車站", connection, city="new_taipei",
+        http_get=lambda *_args, **_kwargs: response([{
+            "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
+            "lat": "25.0143", "lon": "121.4638"}]))
+
+    assert result["city"] == "new_taipei"
+    assert result["district"] == "板橋區"
+    assert connection.commits == 1
+
+
+def test_geocoder_new_taipei_query_is_city_qualified(monkeypatch):
+    """指定新北市時，實際送出的 Nominatim 查詢不得再預設臺北市。"""
+    requested_queries = []
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
+    monkeypatch.setattr(geocoder, "save_cached_geocode",
+                        lambda _connection, row: None)
+    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
+
+    def fake_get(_url, **kwargs):
+        requested_queries.append(kwargs["params"]["q"])
+        return response([{
+            "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
+            "lat": "25.0143", "lon": "121.4638"}])
+
+    geocoder.geocode_address(
+        "板橋車站", CommitConnection(), city="new_taipei", http_get=fake_get)
+
+    assert requested_queries == ["新北市板橋車站"]
+
+
+def test_geocoder_cache_hit_returns_verified_city_and_district(monkeypatch):
+    """快取命中時仍須回傳可驗證的 city 與 district，不能遺失。"""
+    cached = {
+        "normalized_address": "新北市板橋車站",
+        "display_address": "板橋車站, 板橋區, 新北市, 臺灣",
+        "latitude": 25.0143, "longitude": 121.4638,
+    }
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: cached)
+
+    result = geocoder.geocode_address(
+        "板橋車站", object(), city="new_taipei",
+        http_get=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("快取命中不應呼叫 HTTP")))
+
+    assert result["city"] == "new_taipei"
+    assert result["district"] == "板橋區"
 
 
 def test_known_landmarks_use_fixed_addresses_and_other_names_stay_generic():
