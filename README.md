@@ -128,6 +128,14 @@ python -m pytest -q
 node --check static/app.js
 ```
 
+## 快照保留與每日清理
+
+- 歷史圖表顯示最近 7 天；系統每天刪除超過 8 天的 `parking_snapshots`，保留一天安全餘裕。
+- 每日清理命令為 `python parking_cleanup.py`，由獨立的 systemd timer（`deploy/parking-snapshot-cleanup.timer`）觸發，與主服務及 Collector 互不依賴。
+- 清理只刪除 `captured_at` 嚴格早於「現在 − 8 天」截止時間的快照，等於截止時間的列一律保留。命令可重複執行，8 天內資料不受影響（冪等）。
+- Collector 收集與公開查詢不依賴清理成功；清理失敗只回滾未完成批次並結束，不會影響資料寫入或歷史圖表。
+- 回滾方式：停用 timer（`systemctl disable --now parking-snapshot-cleanup.timer`）並還原上一版 `parking_cleanup.py` 與 `database.py`；此功能不變更資料庫 schema，已刪除的舊快照只能從備份還原。
+
 ## Windows 快速啟動
 
 需求：Python 3.11+、MySQL 8，以及可選的 Gemini、Nominatim 與 OpenRouteService 設定。

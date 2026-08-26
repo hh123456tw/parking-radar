@@ -1,0 +1,10 @@
+[Unit]
+Description=Parking Hell Radar daily parking snapshot cleanup (retain eight days)
+After=network.target
+
+[Service]
+Type=oneshot
+User=parking
+WorkingDirectory=/opt/parking-hell
+EnvironmentFile=/opt/parking-hell/.env
+ExecStart=/opt/parking-hell/.venv/bin/python parking_cleanup.py

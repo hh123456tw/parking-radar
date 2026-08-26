@@ -89,6 +89,40 @@ def insert_snapshots(connection, snapshots):
         return cursor.rowcount
 
 
+def delete_old_snapshots(connection, cutoff_utc, batch_size=5000):
+    """分批刪除 cutoff 之前（不含等於）的快照，每批完成即提交。
+
+    以 snapshot_id 主鍵順序選取並限制 batch_size，刪除列數少於
+    batch_size 時停止。只刪除嚴格早於 cutoff 的列，邊界列一律保留。
+    """
+    select_sql = """
+        SELECT snapshot_id FROM parking_snapshots
+        WHERE captured_at < %s
+        ORDER BY snapshot_id
+        LIMIT %s
+    """
+    total = 0
+    with connection.cursor() as cursor:
+        while True:
+            cursor.execute(select_sql, (cutoff_utc, batch_size))
+            ids = [row["snapshot_id"] for row in cursor.fetchall()]
+            if not ids:
+                break
+            placeholders = ",".join(["%s"] * len(ids))
+            cursor.execute(
+                "DELETE FROM parking_snapshots"
+                " WHERE snapshot_id IN ({placeholders})".format(
+                    placeholders=placeholders),
+                tuple(ids),
+            )
+            deleted = cursor.rowcount
+            total += deleted
+            connection.commit()
+            if deleted < batch_size:
+                break
+    return total
+
+
 def fetch_latest_snapshot_times(connection):
     """回傳每來源最後一次成功收集時間，供新鮮度分別判斷。"""
     sql = """

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Parking Hell Radar daily parking snapshot cleanup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
