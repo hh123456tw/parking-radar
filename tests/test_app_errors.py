@@ -337,3 +337,30 @@ def test_failed_refresh_without_any_snapshot_is_unavailable(monkeypatch):
     with pytest.raises(app_module.ParkingDataUnavailable,
                        match="暫時無法取得官方停車資料"):
         app_module.ensure_fresh_parking_data()
+
+
+def test_partial_refresh_with_missing_source_still_returns_stale(monkeypatch):
+    """部分補抓後某來源仍缺資料時，不得因 None 混入 max 而誤報 503。"""
+    now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
+    state = {"phase": "empty"}
+
+    def snapshot_times():
+        if state["phase"] == "empty":
+            return {}
+        return {"taipei": now - timedelta(minutes=120)}
+
+    collected = []
+    monkeypatch.setattr(app_module, "_latest_snapshot_times", snapshot_times)
+
+    def collect_once(**_kwargs):
+        state["phase"] = "refreshed"
+        collected.append(True)
+        return {"taipei": {"status": "ok"}}
+
+    monkeypatch.setattr(app_module, "collect_once", collect_once)
+
+    result = app_module.ensure_fresh_parking_data(
+        now=now, required_sources={"taipei", "new_taipei"})
+
+    assert result == ("stale", "官方尚未提供更新，目前顯示 120 分鐘前資料")
+    assert collected == [True]

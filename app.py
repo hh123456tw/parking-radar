@@ -50,6 +50,10 @@ class ParkingDataUnavailable(RuntimeError):
     """表示資料庫沒有快照，而且官方資料也無法即時補入。"""
 
 
+class CityNotEnabledError(ValueError):
+    """旗標關閉時，驗證後仍指向新北的目的地必須以 HTTP 400 拒絕。"""
+
+
 def requires_location_confirmation(parsed):
     """沒有門牌的聊天地標必須由使用者確認，不能自動採用單一候選。"""
     original = (parsed.get("original_destination") or "").strip()
@@ -118,7 +122,10 @@ def ensure_fresh_parking_data(now=None, required_sources=None):
             if refreshed_result is not None:
                 if refreshed_result[0] == "fresh":
                     return refreshed_result
-                return "stale", f"官方尚未提供更新，目前顯示 {max(refreshed.values())} 分鐘前資料"
+                available_ages = [
+                    age for age in refreshed.values() if age is not None]
+                return "stale", \
+                    f"官方尚未提供更新，目前顯示 {max(available_ages)} 分鐘前資料"
         except Exception:
             pass
 
@@ -488,7 +495,7 @@ def create_app(test_config=None):
             parsed = validate_parsed_query(parsed)
             if parsed.get("city") == "new_taipei" and \
                     not app.config.get("NEW_TAIPEI_ENABLED", False):
-                raise ValueError("新北市停車資料尚未開放")
+                raise CityNotEnabledError("新北市停車資料尚未開放")
             trace["parse_ms"] = round(
                 (time.perf_counter() - query_started) * 1000)
             trace["parsed"] = parsed
@@ -547,6 +554,7 @@ def create_app(test_config=None):
                     "display_address": choice["display_address"],
                     "latitude": choice["latitude"],
                     "longitude": choice["longitude"],
+                    "city": choice.get("city"),
                 }
             else:
                 destination = geocode_address(
@@ -576,6 +584,11 @@ def create_app(test_config=None):
                 # 已驗證城市取代表單猜測，避免跨市地址被當成另一城市。
                 parsed["city"] = (destination.get("city")
                                   or parsed.get("city") or "taipei")
+            # 驗證後的城市即使沒有出現在 payload 也必須遵守旗標；
+            # 守門要在任何新鮮度判斷或場站查詢之前完成。
+            if parsed["city"] == "new_taipei" and \
+                    not app.config.get("NEW_TAIPEI_ENABLED", False):
+                raise CityNotEnabledError("新北市停車資料尚未開放")
             # 地址查詢的 1.5 公里圓可能跨市，兩種已啟用城市都要查；
             # 行政區查詢只查選定城市。
             required_sources = (
@@ -776,6 +789,12 @@ def create_app(test_config=None):
                 trace=trace,
                 recommendation_groups=groups,
             )
+        except CityNotEnabledError as exc:
+            trace["error_stage"] = "validation"
+            return terminal({"error": str(exc)}, 400, "failed_validation",
+                            query_mode, request_id, anonymous_hash,
+                            query_source, elapsed_ms(query_started),
+                            trace=trace)
         except ParkingDataUnavailable as exc:
             trace["error_stage"] = "database"
             return terminal({"error": str(exc)}, 503, "failed_database",

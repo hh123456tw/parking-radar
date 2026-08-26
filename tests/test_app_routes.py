@@ -368,6 +368,62 @@ def test_parking_data_status_marks_missing_source(monkeypatch):
     assert statuses["new_taipei"]["status"] == "missing"
 
 
+def test_flag_off_rejects_geocoder_inferred_new_taipei_before_query(monkeypatch):
+    """payload 沒帶 city 但地理服務驗證為新北時，旗標關閉必須在查詢前 400 拒絕。"""
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
+        "display_address": "板橋車站, 板橋區, 新北市", "latitude": 25.0143,
+        "longitude": 121.4638, "city": "new_taipei", "district": "板橋區"})
+    monkeypatch.setattr(
+        app_module, "fetch_current_lots",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("旗標關閉時不應查詢任何停車場")),
+    )
+
+    response = make_client(NEW_TAIPEI_ENABLED=False).post("/api/query", json={
+        "mode": "manual", "address": "新北市板橋區中山路一段152號",
+        "arrival_time": "2026-08-26T18:00:00+08:00"})
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "新北市停車資料尚未開放"
+
+
+def test_flag_off_rejects_chosen_new_taipei_candidate_before_query(monkeypatch):
+    """聊天候選目的地驗證為新北時，旗標關閉必須沿用同一 400 守門。"""
+    monkeypatch.setattr(
+        app_module, "parse_parking_query",
+        lambda *_args, **_kwargs: ParkingIntent(
+            intent="recommend",
+            original_destination="新北市板橋區中山路一段152號",
+            address="新北市板橋區中山路一段152號",
+            city=None, district=None,
+            arrival_time="2026-08-26T18:00:00+08:00", missing_fields=[],
+            location_candidates=[{
+                "name": "板橋車站",
+                "address": "新北市板橋區中山路一段152號",
+            }],
+        ),
+    )
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_candidates", lambda *_args: [{
+        "name": "板橋車站", "address": "新北市板橋區中山路一段152號",
+        "city": "new_taipei", "district": "板橋區",
+        "display_address": "板橋車站, 板橋區, 新北市",
+        "latitude": 25.0143, "longitude": 121.4638,
+    }])
+    monkeypatch.setattr(
+        app_module, "fetch_current_lots",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("旗標關閉時不應查詢任何停車場")),
+    )
+
+    response = make_client(NEW_TAIPEI_ENABLED=False).post(
+        "/api/query", json={"mode": "chat", "message": "我要去板橋車站"})
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "新北市停車資料尚未開放"
+
+
 def test_address_query_uses_walking_routes_to_order_safe_lots(monkeypatch):
     """有地址與金鑰時，安全場站要依步行時間排序並輸出步行欄位。"""
     straight_near = lot_row()
