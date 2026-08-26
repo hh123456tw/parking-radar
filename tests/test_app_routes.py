@@ -208,6 +208,166 @@ def test_taipei_station_characterization_keeps_top_order(monkeypatch):
     assert [row["lot_id"] for row in body["recommendations"]][:2] == ["NEAR", "FAR"]
 
 
+class RotatingRowsConnection(SpyConnection):
+    """每次 cursor() 回傳下一組資料列，模擬逐來源查詢的結果。"""
+
+    def __init__(self, row_groups):
+        self.row_groups = list(row_groups)
+        self.spy_cursor = SpyCursor(self.row_groups.pop(0))
+
+    def cursor(self):
+        self.spy_cursor.rows = (
+            self.row_groups.pop(0) if self.row_groups else [])
+        return self.spy_cursor
+
+
+def test_address_query_can_return_cross_border_lots(monkeypatch):
+    """地址查詢的 1.5 公里圓可能跨市，必須能同時回傳雙北場站。"""
+    taipei = lot_row()
+    taipei.update(lot_id="TPE", city="臺北市", source="taipei",
+                  latitude=25.0150, longitude=121.4650,
+                  captured_at=datetime(2026, 8, 26, 10, tzinfo=timezone.utc))
+    taipei["snapshot_updated_at"] = datetime(
+        2026, 8, 26, 9, 55, tzinfo=timezone.utc)
+    new_taipei = lot_row()
+    new_taipei.update(lot_id="NTP:1", city="新北市", source="new_taipei",
+                      district="板橋區", latitude=25.0130, longitude=121.4620,
+                      captured_at=datetime(2026, 8, 26, 10, tzinfo=timezone.utc))
+    rows = [taipei, new_taipei]
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
+        "display_address": "板橋車站, 板橋區, 新北市", "latitude": 25.0143,
+        "longitude": 121.4638, "city": "new_taipei", "district": "板橋區"})
+    monkeypatch.setattr(app_module, "fetch_current_lots",
+                        lambda *_args, **_kwargs: rows)
+    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
+                        lambda _connection: {
+                            "taipei": datetime.now(timezone.utc),
+                            "new_taipei": datetime.now(timezone.utc)})
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+
+    response = make_client(NEW_TAIPEI_ENABLED=True).post("/api/query", json={
+        "mode": "manual", "city": "new_taipei", "address": "板橋車站",
+        "arrival_time": "2026-08-26T18:00:00+08:00"})
+
+    body = response.get_json()
+    assert response.status_code == 200
+    visible = body["recommendations"] + body["other_recommended"]
+    assert {row["city"] for row in visible} == {"臺北市", "新北市"}
+    for row in visible:
+        assert row["city"] and row["source"] and row["data_time_label"]
+    taipei_lot = next(row for row in visible if row["source"] == "taipei")
+    assert taipei_lot["data_time_label"] == \
+        "臺北市官方資料時間 2026-08-26T17:55:00+08:00"
+    new_taipei_lot = next(row for row in visible if row["source"] == "new_taipei")
+    assert new_taipei_lot["data_time_label"] == \
+        "新北市系統取得時間 2026-08-26T18:00:00+08:00"
+    sources = {entry["source"]: entry for entry in body["data_sources"]}
+    assert sources["taipei"] == {
+        "source": "taipei", "city": "臺北市", "status": "fresh",
+        "time_kind": "official",
+        "collected_at": "2026-08-26T18:00:00+08:00",
+        "official_updated_at": "2026-08-26T17:55:00+08:00",
+    }
+    assert sources["new_taipei"] == {
+        "source": "new_taipei", "city": "新北市", "status": "fresh",
+        "time_kind": "collected",
+        "collected_at": "2026-08-26T18:00:00+08:00",
+        "official_updated_at": None,
+    }
+
+
+def test_address_query_bounds_freshness_per_source(monkeypatch):
+    """新鮮城市維持 45 分鐘門檻，過期城市才允許舊資料降級。"""
+    taipei = lot_row()
+    taipei.update(lot_id="TPE", city="臺北市", source="taipei",
+                  latitude=25.0150, longitude=121.4650)
+    stale_new_taipei = lot_row()
+    stale_new_taipei.update(lot_id="NTP:1", city="新北市", source="new_taipei",
+                            district="板橋區", latitude=25.0130,
+                            longitude=121.4620)
+    connection = RotatingRowsConnection([[taipei], [stale_new_taipei]])
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
+        "display_address": "板橋車站, 板橋區, 新北市", "latitude": 25.0143,
+        "longitude": 121.4638, "city": "new_taipei", "district": "板橋區"})
+    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
+                        lambda _connection: {
+                            "taipei": datetime.now(timezone.utc),
+                            "new_taipei": datetime.now(timezone.utc)
+                            - timedelta(hours=2)})
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+
+    response = make_client(NEW_TAIPEI_ENABLED=True).post("/api/query", json={
+        "mode": "manual", "city": "new_taipei", "address": "板橋車站",
+        "arrival_time": "2026-08-26T18:00:00+08:00"})
+
+    calls = connection.spy_cursor.calls
+    assert calls[0][1] == (45, "臺北市")
+    assert "UTC_TIMESTAMP()" in calls[0][0]
+    assert calls[1][1] == ("新北市",)
+    assert "UTC_TIMESTAMP()" not in calls[1][0]
+    body = response.get_json()
+    assert response.status_code == 200
+    sources = {entry["source"]: entry for entry in body["data_sources"]}
+    assert sources["taipei"]["status"] == "fresh"
+    assert sources["new_taipei"]["status"] == "stale"
+    assert body["data_status"] == "stale"
+
+
+def test_district_query_only_selected_city_and_district(monkeypatch):
+    """行政區查詢只送選定城市與行政區，不得跨市查詢。"""
+    connection = SpyConnection([lot_row()])
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
+                        lambda _connection: {
+                            "new_taipei": datetime.now(timezone.utc)})
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+
+    response = make_client(NEW_TAIPEI_ENABLED=True).post("/api/query", json={
+        "mode": "manual", "city": "new_taipei", "district": "板橋區",
+        "arrival_time": "2026-08-26T18:00:00+08:00"})
+
+    sql, params = connection.spy_cursor.calls[0]
+    assert "AND city = %s" in sql
+    assert "AND district = %s" in sql
+    assert params == (45, "新北市", "板橋區")
+    body = response.get_json()
+    assert response.status_code == 200
+    sources = {entry["source"]: entry for entry in body["data_sources"]}
+    assert list(sources) == ["new_taipei"]
+
+
+def test_taipei_fresh_does_not_hide_stale_new_taipei(monkeypatch):
+    """單一來源新鮮不得讓另一來源的過期資料被標成新鮮。"""
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
+                        lambda _connection: {
+                            "taipei": datetime.now(timezone.utc),
+                            "new_taipei": datetime.now(timezone.utc)
+                            - timedelta(hours=2)})
+
+    statuses = app_module.parking_data_status({"taipei", "new_taipei"})
+
+    assert statuses["taipei"]["status"] == "fresh"
+    assert statuses["new_taipei"]["status"] == "stale"
+    assert connection.closed is True
+
+
+def test_parking_data_status_marks_missing_source(monkeypatch):
+    """完全沒有快照的來源必須誠實標示 missing，不能偽裝成 fresh。"""
+    connection = CloseTrackingConnection()
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
+                        lambda _connection: {
+                            "taipei": datetime.now(timezone.utc)})
+
+    statuses = app_module.parking_data_status({"taipei", "new_taipei"})
+
+    assert statuses["new_taipei"]["status"] == "missing"
+
+
 def test_address_query_uses_walking_routes_to_order_safe_lots(monkeypatch):
     """有地址與金鑰時，安全場站要依步行時間排序並輸出步行欄位。"""
     straight_near = lot_row()
@@ -502,7 +662,7 @@ def test_district_query_binds_real_fetch_current_lots_keywords(monkeypatch):
 
     sql, params = connection.spy_cursor.calls[0]
     assert "AND district = %s" in sql
-    assert params == (45, "信義區")
+    assert params == (45, "臺北市", "信義區")
     body = response.get_json()
     assert response.status_code == 200
     assert body["recommendations"][0]["lot_id"] == "TPE1"

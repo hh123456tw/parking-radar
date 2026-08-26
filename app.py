@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, render_template, request, session
-from ai_service import IntentServiceError, TAIPEI_DISTRICTS, parse_parking_query
+from ai_service import IntentServiceError, parse_parking_query
 from analytics_capture import (build_query_detail,
                                build_recommendation_snapshots,
                                infer_destination_district, new_query_trace)
@@ -30,11 +30,12 @@ from analysis import (build_history_series, district_hell_score,
                       summarize_hour_comparison,
                       summarize_matching_history)
 from calendar_service import classify_arrival_day
+from city_config import CITIES, city_name, normalize_city, validate_city_district
 from config import Config
 from collector import collect_once
 from database import (fetch_current_lots, fetch_history,
-                      fetch_latest_snapshot_time, fetch_matching_history,
-                      get_connection)
+                      fetch_latest_snapshot_times,
+                      fetch_matching_history, get_connection)
 from fee_service import build_fee_summary
 from geocoder import geocode_address, geocode_candidates, resolve_known_landmark
 from status_service import build_status
@@ -42,6 +43,7 @@ from walking_service import WalkingRouteError, fetch_walking_routes
 
 _refresh_lock = Lock()
 LOCATION_CHOICE_CLIENT_VERSION = "2"
+SOURCE_ORDER = ("taipei", "new_taipei")
 
 
 class ParkingDataUnavailable(RuntimeError):
@@ -72,61 +74,98 @@ def elapsed_ms(started, now=None):
     return max(0, round((current - started) * 1000))
 
 
-def _latest_snapshot_time():
-    """使用短連線讀取全庫最新快照時間，避免刷新後沿用舊交易。"""
+def _latest_snapshot_times():
+    """使用短連線讀取各來源最新快照時間，避免刷新後沿用舊交易。"""
     connection = get_connection()
     try:
-        return fetch_latest_snapshot_time(connection)
+        return fetch_latest_snapshot_times(connection)
     finally:
         connection.close()
 
 
-def ensure_fresh_parking_data(now=None):
+def ensure_fresh_parking_data(now=None, required_sources=None):
     """查詢只讀既有快照；僅全新資料庫才同步補抓一次。"""
-    latest = _latest_snapshot_time()
-    age = snapshot_age_minutes(latest, now)
-    if age is not None and age <= Config.FRESHNESS_MINUTES:
-        return "fresh", None
-    if latest is not None:
-        return "stale", f"資料更新排程尚未完成，目前顯示 {age} 分鐘前資料"
+    if required_sources is None:
+        required_sources = {"taipei"}
+
+    def snapshot_ages(now):
+        times = _latest_snapshot_times()
+        return {source: snapshot_age_minutes(times.get(source), now)
+                for source in required_sources}
+
+    def verdict(ages):
+        available = [age for age in ages.values() if age is not None]
+        if not available:
+            return None
+        worst = max(available)
+        if worst <= Config.FRESHNESS_MINUTES:
+            return "fresh", None
+        return "stale", f"資料更新排程尚未完成，目前顯示 {worst} 分鐘前資料"
+
+    result = verdict(snapshot_ages(now))
+    if result is not None:
+        return result
 
     with _refresh_lock:
         # 全新資料庫才允許補抓；等鎖期間排程或其他請求可能已經寫入。
-        latest = _latest_snapshot_time()
-        age = snapshot_age_minutes(latest, now)
-        if age is not None and age <= Config.FRESHNESS_MINUTES:
-            return "fresh", None
-        if latest is not None:
-            return "stale", f"資料更新排程尚未完成，目前顯示 {age} 分鐘前資料"
+        result = verdict(snapshot_ages(now))
+        if result is not None:
+            return result
         try:
             collect_once(timeout=Config.ON_DEMAND_FETCH_TIMEOUT_SECONDS)
-            refreshed = _latest_snapshot_time()
-            refreshed_age = snapshot_age_minutes(refreshed, now)
-            if refreshed_age is not None and refreshed_age <= Config.FRESHNESS_MINUTES:
-                return "fresh", None
-            latest, age = refreshed, refreshed_age
-            reason = "官方尚未提供更新"
+            refreshed = snapshot_ages(now)
+            refreshed_result = verdict(refreshed)
+            if refreshed_result is not None:
+                if refreshed_result[0] == "fresh":
+                    return refreshed_result
+                return "stale", f"官方尚未提供更新，目前顯示 {max(refreshed.values())} 分鐘前資料"
         except Exception:
-            reason = "官方更新失敗"
+            pass
 
-    if latest is None:
-        raise ParkingDataUnavailable("暫時無法取得官方停車資料")
-    return "stale", f"{reason}，目前顯示 {age} 分鐘前資料"
+    raise ParkingDataUnavailable("暫時無法取得官方停車資料")
 
 
-def parse_manual_payload(payload):
-    """驗證手動表單並回傳與 Gemini 相同概念的普通字典。"""
+def parking_data_status(required_sources, now=None):
+    """依各來源最新快照分別判斷新鮮度，單一來源新鮮不得遮蔽另一來源過期。"""
+    connection = get_connection()
+    try:
+        times = fetch_latest_snapshot_times(connection)
+    finally:
+        connection.close()
+    statuses = {}
+    for source in required_sources:
+        captured_at = times.get(source)
+        age = snapshot_age_minutes(captured_at, now)
+        if age is None:
+            statuses[source] = {"status": "missing", "age_minutes": None}
+        elif age <= Config.FRESHNESS_MINUTES:
+            statuses[source] = {"status": "fresh", "age_minutes": age}
+        else:
+            statuses[source] = {"status": "stale", "age_minutes": age}
+    return statuses
+
+
+def parse_manual_payload(payload, new_taipei_enabled=False):
+    """驗證手動表單並回傳與 Gemini 相同概念的普通字典；行政區必須屬於選定城市。"""
     district = (payload.get("district") or "").strip()
     address = (payload.get("address") or "").strip()
     destination_label = (payload.get("destination_label") or "").strip()
     if not district and not address:
         raise ValueError("請輸入地址或選擇行政區")
-    if district and district not in TAIPEI_DISTRICTS:
-        raise ValueError("只支援臺北市十二行政區")
+    city = normalize_city(payload.get("city") or None)
+    if district:
+        if city is None:
+            # 旗標關閉時沿用既有臺北行為；開啟後前端會送 city，不允許默默猜測。
+            if new_taipei_enabled:
+                raise ValueError("請選擇城市")
+            city = "taipei"
+        if city == "taipei" and district not in CITIES["taipei"].districts:
+            raise ValueError("只支援臺北市十二行政區")
+        validate_city_district(city, district)
     arrival = datetime.fromisoformat(payload["arrival_time"])
     if arrival.tzinfo is None:
         raise ValueError("抵達時間必須包含時區")
-    return {"intent": "recommend", "address": address or None,
+    return {"intent": "recommend", "city": city, "address": address or None,
             "district": district or None, "arrival_time": arrival,
             "destination_label": destination_label or None,
             # 與聊天模式共用地標別名與地址快取，避免同一地點重複查外部服務。
@@ -135,6 +174,8 @@ def parse_manual_payload(payload):
 
 def validate_parsed_query(parsed, now=None):
     """驗證 Gemini 結果；未指定抵達時間時，自動使用台北現在時間。"""
+    if parsed.get("city") is not None:
+        parsed["city"] = normalize_city(parsed["city"])
     # 地標名稱也能交給 Nominatim 搜尋，例如「臺北市政府」或「資策會」。
     landmark = (parsed.get("original_destination") or "").strip()
     if not parsed.get("address") and not parsed.get("district") and landmark:
@@ -153,13 +194,15 @@ def validate_parsed_query(parsed, now=None):
     address = (parsed.get("address") or "").strip()
     district = (parsed.get("district") or "").strip()
     if address and district:
-        without_city = address.removeprefix("臺北市").removeprefix("台北市")
+        prefix = city_name(parsed.get("city") or "taipei")
+        without_city = (address.removeprefix("臺北市")
+                        .removeprefix("台北市").removeprefix("新北市"))
         if district in without_city:
-            parsed["address"] = "臺北市" + without_city
+            parsed["address"] = prefix + without_city
         elif without_city.endswith("號"):
-            parsed["address"] = "臺北市" + district + without_city
+            parsed["address"] = prefix + district + without_city
         else:
-            parsed["address"] = f"{address}, {district}, 臺北市"
+            parsed["address"] = f"{address}, {district}, {prefix}"
 
     missing_fields = [
         name for name in parsed.get("missing_fields", [])
@@ -221,6 +264,18 @@ def enrich_candidate_metadata(row, arrival_time, day_info):
     row.update(build_fee_summary(
         row.get("fare_rules_json"), row.get("fee_info"),
         arrival_time, day_info["kind"]))
+    source = row.get("source") or "taipei"
+    if source == "new_taipei":
+        label_time = taipei_iso(row.get("captured_at"))
+        row["data_time_label"] = (
+            f"新北市系統取得時間 {label_time}" if label_time
+            else "新北市系統取得時間")
+    else:
+        label_time = taipei_iso(
+            row.get("snapshot_updated_at") or row.get("captured_at"))
+        row["data_time_label"] = (
+            f"臺北市官方資料時間 {label_time}" if label_time
+            else "臺北市官方資料時間")
     facility_type = row.get("facility_type") or "unknown"
     row.update(
         arrival_day_label=day_info["label"],
@@ -235,7 +290,8 @@ def enrich_candidate_metadata(row, arrival_time, day_info):
 def public_candidate(row):
     """只輸出頁面需要的安全欄位，並把 Decimal 與 datetime 轉成 JSON 型別。"""
     keys = (
-        "lot_id", "lot_name", "district", "address", "operator_type",
+        "lot_id", "lot_name", "city", "source", "data_time_label",
+        "district", "address", "operator_type",
         "total_spaces", "available_spaces", "fee_info", "service_time",
         "hell_label", "history_sample_count", "decision_status",
         "decision_label", "pressure_label", "recommendation_label", "reasons",
@@ -427,8 +483,12 @@ def create_app(test_config=None):
             if payload.get("mode") == "chat":
                 parsed = parse_parking_query(payload.get("message", ""), dict(session)).model_dump()
             else:
-                parsed = parse_manual_payload(payload)
+                parsed = parse_manual_payload(
+                    payload, app.config.get("NEW_TAIPEI_ENABLED", False))
             parsed = validate_parsed_query(parsed)
+            if parsed.get("city") == "new_taipei" and \
+                    not app.config.get("NEW_TAIPEI_ENABLED", False):
+                raise ValueError("新北市停車資料尚未開放")
             trace["parse_ms"] = round(
                 (time.perf_counter() - query_started) * 1000)
             trace["parsed"] = parsed
@@ -490,7 +550,8 @@ def create_app(test_config=None):
                 }
             else:
                 destination = geocode_address(
-                    parsed.get("address"), connection) if parsed.get("address") else None
+                    parsed.get("address"), connection, parsed.get("city")) \
+                    if parsed.get("address") else None
             if parsed.get("address") and destination is None:
                 trace["error_stage"] = "geocode"
                 trace["geocode_ms"] = round(
@@ -511,21 +572,68 @@ def create_app(test_config=None):
             connection.close()
             connection = None
             freshness_started = time.perf_counter()
-            if app.config.get("AUTO_REFRESH_ENABLED", True):
-                data_status, data_notice = ensure_fresh_parking_data()
+            if destination:
+                # 已驗證城市取代表單猜測，避免跨市地址被當成另一城市。
+                parsed["city"] = (destination.get("city")
+                                  or parsed.get("city") or "taipei")
+            # 地址查詢的 1.5 公里圓可能跨市，兩種已啟用城市都要查；
+            # 行政區查詢只查選定城市。
+            required_sources = (
+                {"taipei", "new_taipei"}
+                if destination and app.config.get("NEW_TAIPEI_ENABLED", False)
+                else {parsed.get("city") or "taipei"}
+            )
+            if app.config.get("NEW_TAIPEI_ENABLED", False):
+                if app.config.get("AUTO_REFRESH_ENABLED", True):
+                    # 全新資料庫仍允許補抓一次；既有資料由下方逐來源判斷新鮮度。
+                    ensure_fresh_parking_data(
+                        required_sources=required_sources)
+                source_statuses = parking_data_status(required_sources)
+                stale_sources = [
+                    source for source in SOURCE_ORDER
+                    if source in source_statuses
+                    and source_statuses[source]["status"] == "stale"
+                ]
+                if stale_sources:
+                    data_status = "stale"
+                    details = "、".join(
+                        f"{city_name(source)}資料"
+                        f"{source_statuses[source]['age_minutes']} 分鐘前"
+                        for source in stale_sources)
+                    data_notice = f"資料更新排程尚未完成，目前顯示 {details}"
+                else:
+                    data_status = "fresh"
+                    data_notice = None
             else:
-                data_status, data_notice = "fresh", None
+                if app.config.get("AUTO_REFRESH_ENABLED", True):
+                    data_status, data_notice = ensure_fresh_parking_data()
+                else:
+                    data_status, data_notice = "fresh", None
+                source_statuses = {
+                    source: {"status": data_status, "age_minutes": None}
+                    for source in required_sources
+                }
             trace["freshness_ms"] = round(
                 (time.perf_counter() - freshness_started) * 1000)
             trace["data_status"] = data_status
             database_started = time.perf_counter()
             connection = get_connection()
-            freshness = Config.FRESHNESS_MINUTES if data_status == "fresh" else None
-            rows = fetch_current_lots(
-                connection,
-                district=parsed.get("district"),
-                freshness_minutes=freshness,
-            )
+            # 過期來源才允許舊資料；新鮮來源維持 45 分鐘門檻，再合併逐來源結果。
+            rows = []
+            for source in SOURCE_ORDER:
+                if source not in required_sources:
+                    continue
+                freshness = (
+                    Config.FRESHNESS_MINUTES
+                    if source_statuses[source]["status"] == "fresh"
+                    else None
+                )
+                rows.extend(fetch_current_lots(
+                    connection,
+                    city=city_name(source),
+                    district=parsed.get("district"),
+                    freshness_minutes=freshness,
+                ))
             if destination:
                 # 一般查詢只使用即時資料與距離；歷史由使用者點擊後的專用 API 載入。
                 ranked = rank_candidates(
@@ -578,6 +686,32 @@ def create_app(test_config=None):
                 "latitude": float(destination["latitude"]),
                 "longitude": float(destination["longitude"]),
             }
+            # 每個必要來源都提供誠實的狀態與各自時間，新北沒有可靠官方時間。
+            data_sources = []
+            for source in SOURCE_ORDER:
+                if source not in required_sources:
+                    continue
+                source_rows = [
+                    row for row in rows if row.get("source") == source]
+                collected = max(
+                    (row["captured_at"] for row in source_rows
+                     if row.get("captured_at") is not None),
+                    default=None)
+                official = None
+                if source == "taipei":
+                    official = max(
+                        (row.get("snapshot_updated_at") for row in source_rows
+                         if row.get("snapshot_updated_at") is not None),
+                        default=None)
+                data_sources.append({
+                    "source": source,
+                    "city": city_name(source),
+                    "status": source_statuses[source]["status"],
+                    "time_kind": ("official" if source == "taipei"
+                                  else "collected"),
+                    "collected_at": taipei_iso(collected),
+                    "official_updated_at": taipei_iso(official),
+                })
             first = ranked[0] if ranked else None
             session.update(destination=parsed.get("address"), district=parsed.get("district"),
                            arrival_time=parsed["arrival_time"].isoformat(),
@@ -622,6 +756,7 @@ def create_app(test_config=None):
                 "updated_at": collected_at,
                 "data_status": data_status,
                 "data_notice": data_notice,
+                "data_sources": data_sources,
             }
             payload.update(groups)
             if not ranked:

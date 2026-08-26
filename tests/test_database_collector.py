@@ -229,12 +229,13 @@ def test_current_lots_can_filter_city_and_district():
     assert params == (45, "新北市", "板橋區")
 
 
-def test_latest_snapshot_and_stale_fallback_queries():
-    """新鮮度安全網可讀最後時間，降級查詢則不得保留時間門檻。"""
+def test_latest_snapshot_times_and_stale_fallback_queries():
+    """每來源最新快照可讀最後時間，降級查詢則不得保留時間門檻。"""
     captured_at = datetime(2026, 8, 4, 6, 0)
     time_connection = SpyConnection([
         {"source": "taipei", "captured_at": captured_at}])
-    assert database.fetch_latest_snapshot_time(time_connection) == captured_at
+    assert database.fetch_latest_snapshot_times(time_connection) == {
+        "taipei": captured_at}
     latest_sql = time_connection.spy_cursor.calls[0][0]
     assert "GROUP BY l.source" in latest_sql
 

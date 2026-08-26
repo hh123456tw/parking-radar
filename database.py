@@ -89,18 +89,6 @@ def insert_snapshots(connection, snapshots):
         return cursor.rowcount
 
 
-def fetch_latest_snapshot_time(connection):
-    """回傳資料庫最後一次成功收集時間；完全沒有快照時回傳 None。"""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT captured_at FROM parking_snapshots "
-            "ORDER BY snapshot_id DESC LIMIT 1"
-        )
-        rows = list(cursor.fetchall())
-        row = rows[0] if rows else None
-        return row.get("captured_at") if row else None
-
-
 def fetch_latest_snapshot_times(connection):
     """回傳每來源最後一次成功收集時間，供新鮮度分別判斷。"""
     sql = """
@@ -112,12 +100,6 @@ def fetch_latest_snapshot_times(connection):
     with connection.cursor() as cursor:
         cursor.execute(sql)
         return {row["source"]: row["captured_at"] for row in cursor.fetchall()}
-
-
-def fetch_latest_snapshot_time(connection):
-    """暫時包裝 fetch_latest_snapshot_times：回傳全部來源的最大值。"""
-    times = fetch_latest_snapshot_times(connection)
-    return max(times.values()) if times else None
 
 
 def fetch_source_lot_state(connection, source):
