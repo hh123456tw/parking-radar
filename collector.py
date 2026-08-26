@@ -1,17 +1,27 @@
-"""下載臺北市官方停車資料，清洗後以單一交易保存。"""
+"""下載雙北官方停車資料，每個來源以各自交易獨立保存。"""
 
 import argparse
 import json
-from datetime import datetime, timezone
+import logging
+import sys
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import requests
+
 from analysis import clean_available
-from database import get_connection, insert_snapshots, upsert_parking_lots
+from config import Config
+from database import (
+    fetch_source_lot_state, get_connection, insert_snapshots,
+    update_static_fetched_at, upsert_parking_lots,
+)
+import new_taipei_source
 from parking_metadata import infer_official_facility_type
 
 STATIC_URL = "https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_alldesc.json"
 DYNAMIC_URL = "https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_allavailable.json"
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+
+logger = logging.getLogger(__name__)
 
 
 def parse_source_time(value):
@@ -90,8 +100,8 @@ def fetch_json(url, timeout=15):
     return response.json()
 
 
-def collect_once(timeout=15):
-    """先完整下載與清洗兩份資料，再以單一交易寫入，避免半套快照。"""
+def _collect_taipei(timeout):
+    """下載並清洗臺北靜態與動態資料；回傳 (lots, snapshots, static_fetched_at=None)。"""
     static_payload = fetch_json(STATIC_URL, timeout=timeout)
     dynamic_payload = fetch_json(DYNAMIC_URL, timeout=timeout)
     captured_at = datetime.now(timezone.utc)
@@ -102,10 +112,61 @@ def collect_once(timeout=15):
     totals = {row["lot_id"]: row["total_spaces"] for row in lots}
     snapshots = [row for row in raw_snapshots
                  if clean_available(totals.get(row["lot_id"]), row["available_spaces"]) is not None]
+    return lots, snapshots, None
+
+
+def fetch_new_taipei_static(timeout=15, dynamic_rows=None):
+    """下載並解析新北靜態資料集；回傳 (lots, fetched_at)。"""
+    rows = new_taipei_source.fetch_pages(
+        new_taipei_source.STATIC_DATASET_ID, timeout)
+    captured_at = datetime.now(timezone.utc)
+    deduped, _duplicates = new_taipei_source.deduplicate_static(rows)
+    realtime_ids = {
+        str(row["ID"]) for row in dynamic_rows or [] if row.get("ID") is not None}
+    lots = new_taipei_source.parse_static(
+        list(deduped.values()), realtime_ids, captured_at)
+    return lots, captured_at
+
+
+def _collect_new_taipei(connection, timeout):
+    """先抓動態，再依靜態標記決定是否重抓靜態；回傳 (lots, snapshots, fetched_at)。"""
+    dynamic_rows = new_taipei_source.fetch_pages(
+        new_taipei_source.DYNAMIC_DATASET_ID, timeout)
+    captured_at = datetime.now(timezone.utc)
+    raw_snapshots = new_taipei_source.parse_dynamic(dynamic_rows, captured_at)
+    state = fetch_source_lot_state(connection, "new_taipei")
+    totals = state["totals"]
+    latest = state["latest_updated_at"]
+    if latest is not None and latest.tzinfo is None:
+        latest = latest.replace(tzinfo=timezone.utc)
+    lots = []
+    static_fetched_at = None
+    if not totals or latest is None or captured_at - latest >= timedelta(hours=24):
+        lots, static_fetched_at = fetch_new_taipei_static(timeout, dynamic_rows)
+        totals = {row["lot_id"]: row["total_spaces"] for row in lots}
+    snapshots = [row for row in raw_snapshots
+                 if clean_available(totals.get(row["lot_id"]), row["available_spaces"]) is not None]
+    return lots, snapshots, static_fetched_at
+
+
+def collect_source(source, timeout=15):
+    """以來源自己的連線完成下載、驗證與單一交易寫入。"""
     connection = get_connection()
     try:
-        upsert_parking_lots(connection, lots)
-        inserted = insert_snapshots(connection, snapshots)
+        if source == "taipei":
+            lots, snapshots, static_fetched_at = _collect_taipei(timeout)
+        elif source == "new_taipei":
+            lots, snapshots, static_fetched_at = _collect_new_taipei(
+                connection, timeout)
+        else:
+            raise ValueError(f"unknown source: {source}")
+        if lots:
+            upsert_parking_lots(connection, lots)
+        # 靜態抓取標記只在成功抓取靜態時寫入，動態-only 週期不得改寫。
+        if static_fetched_at is not None and lots:
+            update_static_fetched_at(
+                connection, [row["lot_id"] for row in lots], static_fetched_at)
+        inserted = insert_snapshots(connection, snapshots) if snapshots else 0
         connection.commit()
         return {"lots": len(lots), "snapshots": inserted}
     except Exception:
@@ -115,9 +176,28 @@ def collect_once(timeout=15):
         connection.close()
 
 
+def collect_once(timeout=15, new_taipei_enabled=None):
+    """逐來源獨立交易；單一來源失敗不影響其他來源已完成的 commit。"""
+    enabled = (
+        Config.NEW_TAIPEI_ENABLED if new_taipei_enabled is None
+        else new_taipei_enabled)
+    sources = ["taipei"] + (["new_taipei"] if enabled else [])
+    results = {}
+    for source in sources:
+        try:
+            results[source] = {"status": "ok", **collect_source(source, timeout)}
+        except Exception as exc:
+            logger.exception("collector_source_failed source=%s", source)
+            results[source] = {"status": "error", "error": type(exc).__name__}
+    return results
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="蒐集一次臺北市停車資料")
+    parser = argparse.ArgumentParser(description="蒐集一次雙北停車資料")
     parser.add_argument("--once", action="store_true", help="執行一次後結束")
     args = parser.parse_args()
     if args.once:
-        print(collect_once())
+        summary = collect_once()
+        print(json.dumps(summary, ensure_ascii=False))
+        if any(item.get("status") == "error" for item in summary.values()):
+            sys.exit(1)

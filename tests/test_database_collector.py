@@ -1,13 +1,16 @@
 """資料庫與蒐集器測試：驗證 SQL 參數、資料清洗及交易邊界。"""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+import requests
 
 import collector
 import database
+import new_taipei_source
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -321,16 +324,16 @@ def test_collect_once_rejects_available_over_its_own_total(monkeypatch):
     monkeypatch.setattr(collector, "insert_snapshots",
                         lambda conn, rows: saved.extend(rows) or len(rows))
 
-    result = collector.collect_once()
+    result = collector.collect_once(new_taipei_enabled=False)
 
     assert [row["lot_id"] for row in saved] == ["TPE0001"]
-    assert result == {"lots": 3, "snapshots": 1}
+    assert result["taipei"] == {"status": "ok", "lots": 3, "snapshots": 1}
     assert connection.committed is True
     assert connection.closed is True
 
 
 def test_collect_once_rolls_back_and_closes_when_insert_fails(monkeypatch):
-    """快照寫入失敗時不得 commit，且必須 rollback、close 並重拋例外。"""
+    """快照寫入失敗時不得 commit，且必須 rollback、close 並回報 error。"""
     static = load_fixture("taipei_static.json")
     dynamic = load_fixture("taipei_dynamic.json")
     connection = TransactionConnection()
@@ -343,9 +346,162 @@ def test_collect_once_rolls_back_and_closes_when_insert_fails(monkeypatch):
         lambda *_args: (_ for _ in ()).throw(RuntimeError("insert failed")),
     )
 
-    with pytest.raises(RuntimeError, match="insert failed"):
-        collector.collect_once()
+    result = collector.collect_once(new_taipei_enabled=False)
 
+    assert result["taipei"]["status"] == "error"
+    assert result["taipei"]["error"] == "RuntimeError"
     assert connection.committed is False
     assert connection.rolled_back is True
     assert connection.closed is True
+
+
+def test_collect_once_commits_taipei_when_new_taipei_fails(monkeypatch):
+    """新北失敗不得回滾臺北；collect_once 必須逐來源回報狀態。"""
+    monkeypatch.setattr(collector, "collect_source", lambda source, timeout=15: (
+        {"lots": 2, "snapshots": 2} if source == "taipei"
+        else (_ for _ in ()).throw(requests.Timeout("new taipei timeout"))))
+
+    result = collector.collect_once(new_taipei_enabled=True)
+
+    assert result["taipei"]["status"] == "ok"
+    assert result["new_taipei"]["status"] == "error"
+
+
+def test_source_write_rolls_back_only_its_own_connection(monkeypatch):
+    """寫入失敗只 rollback 該來源自己的連線，臺北仍獨立 commit。"""
+    taipei_connection = TransactionConnection()
+    new_taipei_connection = TransactionConnection()
+    connections = [taipei_connection, new_taipei_connection]
+    monkeypatch.setattr(collector, "get_connection", lambda: connections.pop(0))
+    static = load_fixture("taipei_static.json")
+    dynamic = load_fixture("taipei_dynamic.json")
+    monkeypatch.setattr(collector, "fetch_json",
+                        lambda url, timeout=15: static if "alldesc" in url else dynamic)
+    monkeypatch.setattr(new_taipei_source, "fetch_pages",
+                        lambda *_args, **_kwargs: [{"ID": "010056", "AVAILABLECAR": "24"}])
+    monkeypatch.setattr(collector, "fetch_source_lot_state", lambda *_args: {
+        "latest_updated_at": datetime.now(timezone.utc) - timedelta(hours=2),
+        "totals": {"NTP:010056": 453}})
+    monkeypatch.setattr(collector, "upsert_parking_lots", lambda conn, rows: len(rows))
+    monkeypatch.setattr(collector, "insert_snapshots", lambda connection, rows: (
+        (_ for _ in ()).throw(RuntimeError("insert failed"))
+        if connection is new_taipei_connection else len(rows)))
+
+    result = collector.collect_once(new_taipei_enabled=True)
+
+    assert result["taipei"]["status"] == "ok"
+    assert result["new_taipei"]["status"] == "error"
+    assert taipei_connection.committed is True
+    assert new_taipei_connection.rolled_back is True
+
+
+def test_new_taipei_static_download_is_skipped_within_one_day(monkeypatch):
+    """24 小時內且已有場站時，不得重複抓取靜態端點或改寫標記。"""
+    monkeypatch.setattr(collector, "fetch_source_lot_state", lambda *_args: {
+        "latest_updated_at": datetime.now(timezone.utc) - timedelta(hours=2),
+        "totals": {"NTP:010056": 453}})
+    static_fetch = Mock(side_effect=AssertionError("static endpoint must be skipped"))
+    monkeypatch.setattr(collector, "fetch_new_taipei_static", static_fetch)
+    mark_static = Mock()
+    monkeypatch.setattr(collector, "update_static_fetched_at", mark_static)
+    connection = TransactionConnection()
+    monkeypatch.setattr(collector, "get_connection", lambda: connection)
+    monkeypatch.setattr(new_taipei_source, "fetch_pages",
+                        lambda *_args, **_kwargs: [{"ID": "010056", "AVAILABLECAR": "24"}])
+    monkeypatch.setattr(collector, "insert_snapshots", lambda conn, rows: len(rows))
+
+    result = collector.collect_source("new_taipei", timeout=3)
+
+    static_fetch.assert_not_called()
+    mark_static.assert_not_called()
+    assert result == {"lots": 0, "snapshots": 1}
+    assert connection.committed is True
+
+
+def test_new_taipei_static_refetches_after_24h_and_marks_fetch(monkeypatch):
+    """靜態標記超過 24 小時必須重新抓取靜態，並寫入新的抓取標記。"""
+    old_marker = datetime.now(timezone.utc) - timedelta(hours=25)
+    monkeypatch.setattr(collector, "fetch_source_lot_state", lambda *_args: {
+        "latest_updated_at": old_marker, "totals": {"NTP:010056": 453}})
+    fetched_at = datetime.now(timezone.utc)
+    static_fetch = Mock(return_value=(
+        [{"lot_id": "NTP:010056", "total_spaces": 453}], fetched_at))
+    monkeypatch.setattr(collector, "fetch_new_taipei_static", static_fetch)
+    connection = TransactionConnection()
+    monkeypatch.setattr(collector, "get_connection", lambda: connection)
+    monkeypatch.setattr(new_taipei_source, "fetch_pages",
+                        lambda *_args, **_kwargs: [{"ID": "010056", "AVAILABLECAR": "24"}])
+    monkeypatch.setattr(collector, "upsert_parking_lots", lambda conn, rows: len(rows))
+    marked = []
+    monkeypatch.setattr(
+        collector, "update_static_fetched_at",
+        lambda conn, lot_ids, when: marked.append((lot_ids, when)) or len(lot_ids))
+    monkeypatch.setattr(collector, "insert_snapshots", lambda conn, rows: len(rows))
+
+    result = collector.collect_source("new_taipei", timeout=3)
+
+    static_fetch.assert_called_once()
+    assert marked == [(["NTP:010056"], fetched_at)]
+    assert result == {"lots": 1, "snapshots": 1}
+    assert connection.committed is True
+
+
+def test_new_taipei_static_handles_naive_db_marker_as_utc(monkeypatch):
+    """DATETIME 欄位回傳的 naive 標記必須視為 UTC，不得因比較例外失敗。"""
+    naive_old = (datetime.now(timezone.utc) - timedelta(hours=25)).replace(tzinfo=None)
+    monkeypatch.setattr(collector, "fetch_source_lot_state", lambda *_args: {
+        "latest_updated_at": naive_old, "totals": {"NTP:010056": 453}})
+    static_fetch = Mock(return_value=([], None))
+    monkeypatch.setattr(collector, "fetch_new_taipei_static", static_fetch)
+    connection = TransactionConnection()
+    monkeypatch.setattr(collector, "get_connection", lambda: connection)
+    monkeypatch.setattr(new_taipei_source, "fetch_pages",
+                        lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(collector, "insert_snapshots", lambda conn, rows: len(rows))
+
+    collector.collect_source("new_taipei", timeout=3)
+
+    static_fetch.assert_called_once()
+    assert connection.committed is True
+
+
+def test_fetch_source_lot_state_returns_totals_and_static_marker():
+    """每來源必須能一次讀出場站總車位與最近一次靜態抓取標記。"""
+    marker = datetime(2026, 8, 26, 12, 0)
+    connection = SpyConnection([
+        {"lot_id": "NTP:010056", "total_spaces": 453, "static_fetched_at": marker},
+        {"lot_id": "NTP:060040", "total_spaces": 60, "static_fetched_at": None},
+    ])
+
+    state = database.fetch_source_lot_state(connection, "new_taipei")
+
+    assert state == {
+        "latest_updated_at": marker,
+        "totals": {"NTP:010056": 453, "NTP:060040": 60},
+    }
+    sql, params = connection.spy_cursor.calls[0]
+    assert "static_fetched_at" in sql
+    assert params == ("new_taipei",)
+
+
+def test_fetch_source_lot_state_empty_source_has_no_marker():
+    """完全沒有場站時不得偽造標記，collector 必須重新抓取靜態。"""
+    connection = SpyConnection([])
+
+    assert database.fetch_source_lot_state(connection, "new_taipei") == {
+        "latest_updated_at": None, "totals": {}}
+
+
+def test_update_static_fetched_at_marks_only_given_lots():
+    """靜態抓取標記只能以參數更新指定場站，不得拼接 ID。"""
+    connection = SpyConnection()
+    fetched_at = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+
+    database.update_static_fetched_at(
+        connection, ["NTP:010056", "NTP:060040"], fetched_at)
+
+    sql, params = connection.spy_cursor.calls[0]
+    assert "UPDATE parking_lots" in sql
+    assert "static_fetched_at = %s" in sql
+    assert "NTP:010056" not in sql
+    assert params == (fetched_at, "NTP:010056", "NTP:060040")

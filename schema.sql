@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS parking_lots (
     longitude DECIMAL(10, 7),
     supports_realtime BOOLEAN NOT NULL DEFAULT FALSE,
     source_updated_at DATETIME NULL,
+    -- 靜態資料抓取標記：只有靜態抓取成功才寫入，動態-only 週期不得改寫。
+    static_fetched_at DATETIME NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_lots_district (district),

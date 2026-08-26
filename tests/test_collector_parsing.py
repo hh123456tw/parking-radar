@@ -4,7 +4,10 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
+
 import collector
+import new_taipei_source
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -133,3 +136,19 @@ def test_fetch_json_uses_timeout_and_checks_http_status(monkeypatch):
     assert collector.fetch_json("https://example.test/data.json", timeout=7) == payload
     assert captured == {"url": "https://example.test/data.json", "timeout": 7}
     assert response.status_checked is True
+
+
+def test_fetch_new_taipei_static_parses_with_dynamic_realtime_ids(monkeypatch):
+    """collector 的新北靜態抓取必須沿用官方解析器與動態即時支援 ID。"""
+    static_rows = load_fixture("new_taipei_static.json")
+    dynamic_rows = load_fixture("new_taipei_dynamic.json")
+    monkeypatch.setattr(
+        new_taipei_source, "fetch_pages",
+        lambda dataset_id, timeout, http_get=requests.get: static_rows)
+
+    lots, fetched_at = collector.fetch_new_taipei_static(
+        timeout=3, dynamic_rows=dynamic_rows)
+
+    assert [lot["lot_id"] for lot in lots] == ["NTP:010056", "NTP:060040"]
+    assert lots[0]["supports_realtime"] is True
+    assert fetched_at.tzinfo is not None

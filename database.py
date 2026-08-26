@@ -120,6 +120,39 @@ def fetch_latest_snapshot_time(connection):
     return max(times.values()) if times else None
 
 
+def fetch_source_lot_state(connection, source):
+    """回傳來源目前場站總車位與最近一次成功靜態抓取的標記時間。"""
+    sql = """
+        SELECT lot_id, total_spaces, static_fetched_at
+        FROM parking_lots
+        WHERE source = %s
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(sql, (source,))
+        rows = list(cursor.fetchall())
+    fetched = [row["static_fetched_at"] for row in rows
+               if row.get("static_fetched_at") is not None]
+    return {
+        "latest_updated_at": max(fetched) if fetched else None,
+        "totals": {row["lot_id"]: row["total_spaces"] for row in rows},
+    }
+
+
+def update_static_fetched_at(connection, lot_ids, fetched_at):
+    """只由靜態資料抓取成功後呼叫；動態-only 週期不得改寫此標記。"""
+    if not lot_ids:
+        return 0
+    placeholders = ",".join(["%s"] * len(lot_ids))
+    sql = f"""
+        UPDATE parking_lots
+        SET static_fetched_at = %s
+        WHERE lot_id IN ({placeholders})
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(sql, (fetched_at,) + tuple(lot_ids))
+        return cursor.rowcount
+
+
 def fetch_current_lots(connection, city=None, district=None,
                        freshness_minutes=45):
     """取得每場站最新有效快照；freshness_minutes=None 時允許舊資料。"""
