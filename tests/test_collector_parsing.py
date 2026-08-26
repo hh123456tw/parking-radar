@@ -33,6 +33,9 @@ def test_static_parser_uses_exact_id_and_valid_wgs84_entrance():
     lots = collector.parse_static(load_fixture("taipei_static.json"), {"TPE0001"})
 
     assert lots[0]["lot_id"] == "TPE0001"
+    assert lots[0]["city"] == "臺北市"
+    assert lots[0]["source"] == "taipei"
+    assert lots[0]["source_lot_id"] == "TPE0001"
     assert lots[0]["operator_type"] == "民營停車場"
     assert lots[0]["latitude"] == 25.0552
     assert lots[0]["longitude"] == 121.5242

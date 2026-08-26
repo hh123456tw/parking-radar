@@ -16,6 +16,7 @@ EXPECTED_CUTOFF = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
 EXPECTED_SCRUB_CUTOFF = datetime(2026, 8, 9, 12, 0, tzinfo=timezone.utc)
 SCHEMA = Path("schema.sql")
 MIGRATION = Path("migrations/20260824_add_analytics_insights.sql")
+PARKING_SOURCES_MIGRATION = Path("migrations/20260826_add_parking_sources.sql")
 
 
 def test_nginx_protects_admin_and_does_not_log_ip():
@@ -126,6 +127,25 @@ def test_analytics_insights_migration_matches_schema_contract():
     # 只允許既有 events 加新兩張，不增加第三張 analytics 表。
     assert migration.count("CREATE TABLE IF NOT EXISTS analytics_") == 2
     assert schema.count("CREATE TABLE IF NOT EXISTS analytics_") == 3
+
+
+def test_parking_sources_migration_matches_schema_contract():
+    """parking_lots 的城市/來源欄位與唯一鍵必須在 schema 和 migration 一致。"""
+    schema = SCHEMA.read_text(encoding="utf-8")
+    migration = PARKING_SOURCES_MIGRATION.read_text(encoding="utf-8")
+    block = table_block(schema, "parking_lots")
+    for column in (
+        "city VARCHAR(20) NOT NULL",
+        "source VARCHAR(20) NOT NULL",
+        "source_lot_id VARCHAR(64) NOT NULL",
+        "UNIQUE KEY uq_lots_source_id (source, source_lot_id)",
+    ):
+        assert "".join(column.split()) in "".join(block.split())
+        assert "".join(column.split()) in "".join(migration.split())
+    # 三個 ADD COLUMN、三個 MODIFY、一個唯一鍵，全部都要先檢查再執行。
+    assert migration.count("PREPARE stmt FROM @ddl") == 7
+    assert "WHERE city IS NULL OR source IS NULL OR source_lot_id IS NULL" in migration
+    assert "SET city = '臺北市', source = 'taipei', source_lot_id = lot_id" in migration
 
 
 def test_cleanup_run_cleanup_commits_cutoffs_and_closes(monkeypatch):

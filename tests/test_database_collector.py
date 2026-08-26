@@ -77,6 +77,7 @@ def sample_lot():
         "lot_id": "TPE0001", "lot_name": "測試停車場", "district": "信義區",
         "address": "市府路1號", "operator_type": "民營停車場",
         "total_spaces": 100, "fee_info": "每小時30元", "service_time": "24小時",
+        "city": "臺北市", "source": "taipei", "source_lot_id": "TPE0001",
         "latitude": 25.0375, "longitude": 121.5637, "supports_realtime": True,
         "source_updated_at": "2026-08-04 10:00:00",
         "fare_rules_json": '{"FareRule":[]}',
@@ -108,12 +109,26 @@ def test_upsert_parking_lots_binds_complete_row_as_parameters():
     sql, values = connection.spy_cursor.calls[0]
     assert "ON DUPLICATE KEY UPDATE" in sql
     assert "測試停車場" not in sql
-    assert values[0][0:4] == ("TPE0001", "測試停車場", "信義區", "市府路1號")
+    assert values[0][0] == "TPE0001"
+    assert values[0][4:7] == ("測試停車場", "信義區", "市府路1號")
     assert '{"FareRule":[]}' in values[0]
     for column in ("fare_rules_json", "facility_type", "facility_source",
                    "metadata_checked_at"):
         assert column in sql
     assert count == 1
+
+
+def test_upsert_lots_binds_city_source_and_source_id():
+    """城市與來源欄位必須綁定參數，不得拼進 SQL 字串。"""
+    connection = SpyConnection([])
+    row = sample_lot()
+    row.update(city="臺北市", source="taipei", source_lot_id="TPE0001")
+
+    database.upsert_parking_lots(connection, [row])
+
+    sql, values = connection.spy_cursor.calls[0]
+    assert "city" in sql and "source" in sql and "source_lot_id" in sql
+    assert values[0][:4] == ("TPE0001", "臺北市", "taipei", "TPE0001")
 
 
 def test_upsert_duplicate_key_preserves_manual_facility_with_case():
@@ -193,29 +208,57 @@ def test_fetch_current_lots_supports_all_city_and_district_queries():
 
     district_connection = SpyConnection([{"lot_id": "TPE0001"}])
     rows = database.fetch_current_lots(
-        district_connection, "信義區", freshness_minutes=45)
+        district_connection, district="信義區", freshness_minutes=45)
     district_sql, district_params = district_connection.spy_cursor.calls[0]
     assert "AND district = %s" in district_sql
     assert district_params == (45, "信義區")
     assert rows == [{"lot_id": "TPE0001"}]
 
 
+def test_current_lots_can_filter_city_and_district():
+    """城市與行政區同時存在時，條件必須一起加入且順序固定。"""
+    connection = SpyConnection([])
+    database.fetch_current_lots(
+        connection, city="新北市", district="板橋區", freshness_minutes=45)
+
+    sql, params = connection.spy_cursor.calls[0]
+    assert "AND city = %s" in sql
+    assert params == (45, "新北市", "板橋區")
+
+
 def test_latest_snapshot_and_stale_fallback_queries():
     """新鮮度安全網可讀最後時間，降級查詢則不得保留時間門檻。"""
     captured_at = datetime(2026, 8, 4, 6, 0)
-    time_connection = SpyConnection([{"captured_at": captured_at}])
+    time_connection = SpyConnection([
+        {"source": "taipei", "captured_at": captured_at}])
     assert database.fetch_latest_snapshot_time(time_connection) == captured_at
     latest_sql = time_connection.spy_cursor.calls[0][0]
-    assert "ORDER BY snapshot_id DESC LIMIT 1" in latest_sql
-    assert "MAX(captured_at)" not in latest_sql
+    assert "GROUP BY l.source" in latest_sql
 
     stale_connection = SpyConnection([{"lot_id": "TPE0001"}])
     rows = database.fetch_current_lots(
-        stale_connection, "信義區", freshness_minutes=None)
+        stale_connection, district="信義區", freshness_minutes=None)
     sql, params = stale_connection.spy_cursor.calls[0]
     assert "UTC_TIMESTAMP()" not in sql
     assert params == ("信義區",)
     assert rows == [{"lot_id": "TPE0001"}]
+
+
+def test_fetch_latest_snapshot_times_groups_by_source():
+    """每來源最新快照時間必須由單一群組查詢產生，供 Task 6 分別判斷新鮮度。"""
+    taipei_time = datetime(2026, 8, 4, 6, 0)
+    new_taipei_time = datetime(2026, 8, 4, 5, 0)
+    connection = SpyConnection([
+        {"source": "taipei", "captured_at": taipei_time},
+        {"source": "new_taipei", "captured_at": new_taipei_time},
+    ])
+
+    times = database.fetch_latest_snapshot_times(connection)
+
+    assert times == {"taipei": taipei_time, "new_taipei": new_taipei_time}
+    sql, _params = connection.spy_cursor.calls[0]
+    assert "JOIN parking_lots l ON l.lot_id = s.lot_id" in sql
+    assert "GROUP BY l.source" in sql
 
 
 def test_fetch_history_uses_lot_and_time_parameters():

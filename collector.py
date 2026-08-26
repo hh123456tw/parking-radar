@@ -52,6 +52,7 @@ def parse_static(payload, realtime_ids):
         lots.append({
             "lot_id": str(raw["id"]), "lot_name": raw.get("name", "未命名停車場"),
             "district": raw.get("area", "未知"), "address": raw.get("address", ""),
+            "city": "臺北市", "source": "taipei", "source_lot_id": str(raw["id"]),
             "operator_type": raw.get("type2", "未標示"),
             "total_spaces": int(raw.get("totalcar") or 0),
             "fee_info": raw.get("payex", ""), "service_time": raw.get("serviceTime", ""),

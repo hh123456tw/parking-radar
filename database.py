@@ -18,13 +18,17 @@ def upsert_parking_lots(connection, lots):
     """以官方 lot_id 批次新增或更新基本資料，回傳受影響列數。"""
     sql = """
         INSERT INTO parking_lots
-            (lot_id, lot_name, district, address, operator_type,
+            (lot_id, city, source, source_lot_id,
+             lot_name, district, address, operator_type,
              total_spaces, fee_info, fare_rules_json,
              facility_type, facility_source, metadata_checked_at,
              service_time, latitude, longitude,
              supports_realtime, source_updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s)
         ON DUPLICATE KEY UPDATE
+            city=VALUES(city), source=VALUES(source),
+            source_lot_id=VALUES(source_lot_id),
             lot_name=VALUES(lot_name), district=VALUES(district),
             address=VALUES(address), operator_type=VALUES(operator_type),
             total_spaces=VALUES(total_spaces), fee_info=VALUES(fee_info),
@@ -56,7 +60,8 @@ def upsert_parking_lots(connection, lots):
                 ELSE parking_lots.facility_source
             END
     """
-    keys = ("lot_id", "lot_name", "district", "address", "operator_type",
+    keys = ("lot_id", "city", "source", "source_lot_id",
+            "lot_name", "district", "address", "operator_type",
             "total_spaces", "fee_info", "fare_rules_json",
             "facility_type", "facility_source", "metadata_checked_at",
             "service_time", "latitude", "longitude",
@@ -96,7 +101,27 @@ def fetch_latest_snapshot_time(connection):
         return row.get("captured_at") if row else None
 
 
-def fetch_current_lots(connection, district=None, freshness_minutes=45):
+def fetch_latest_snapshot_times(connection):
+    """回傳每來源最後一次成功收集時間，供新鮮度分別判斷。"""
+    sql = """
+        SELECT l.source, MAX(s.captured_at) AS captured_at
+        FROM parking_snapshots s
+        JOIN parking_lots l ON l.lot_id = s.lot_id
+        GROUP BY l.source
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(sql)
+        return {row["source"]: row["captured_at"] for row in cursor.fetchall()}
+
+
+def fetch_latest_snapshot_time(connection):
+    """暫時包裝 fetch_latest_snapshot_times：回傳全部來源的最大值。"""
+    times = fetch_latest_snapshot_times(connection)
+    return max(times.values()) if times else None
+
+
+def fetch_current_lots(connection, city=None, district=None,
+                       freshness_minutes=45):
     """取得每場站最新有效快照；freshness_minutes=None 時允許舊資料。"""
     freshness_sql = ""
     params = []
@@ -120,6 +145,9 @@ def fetch_current_lots(connection, district=None, freshness_minutes=45):
         ) latest
         WHERE row_num = 1
     """.format(freshness_sql=freshness_sql)
+    if city:
+        sql += " AND city = %s"
+        params.append(city)
     if district:
         sql += " AND district = %s"
         params.append(district)
