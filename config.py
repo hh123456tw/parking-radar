@@ -41,4 +41,6 @@ class Config:
     ANALYTICS_HMAC_SECRET = os.getenv("ANALYTICS_HMAC_SECRET", "")
     ANALYTICS_RETENTION_DAYS = 90
     ANALYTICS_SEGMENT_MIN_DEVICES = int(os.getenv("ANALYTICS_SEGMENT_MIN_DEVICES", "5"))
+    # 新北市路外停車：旗標關閉時不收集、不顯示、不查詢，但保留既有臺北行為。
+    NEW_TAIPEI_ENABLED = os.getenv("NEW_TAIPEI_ENABLED", "0") == "1"
     DEPLOY_VERSION = os.getenv("DEPLOY_VERSION", "unknown")

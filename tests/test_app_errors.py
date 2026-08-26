@@ -83,6 +83,15 @@ def test_manual_query_validation_returns_json_400(payload, message):
     assert body["error"] == message
 
 
+def test_manual_parser_locks_taipei_only_district_contract():
+    """功能旗標開放前，手動表單解析器必須繼續拒絕新北行政區。"""
+    with pytest.raises(ValueError, match="只支援臺北市十二行政區"):
+        app_module.parse_manual_payload({
+            "district": "板橋區",
+            "arrival_time": "2026-08-26T18:00:00+08:00",
+        })
+
+
 @pytest.mark.parametrize(("parsed", "message"), [
     ({"missing_fields": ["address"], "arrival_time": "2026-08-04T18:00:00+08:00"},
      "還需要：address"),

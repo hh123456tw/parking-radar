@@ -155,6 +155,26 @@ def test_public_candidate_keeps_decision_card_fields():
     assert result["reasons"] == row["reasons"]
 
 
+def test_taipei_station_characterization_keeps_top_order(monkeypatch):
+    """台北車站地址查詢必須維持近場站優先的既有排序合約。"""
+    near = lot_row()
+    near.update(lot_id="NEAR", latitude=25.0477, longitude=121.5169)
+    far = lot_row()
+    far.update(lot_id="FAR", latitude=25.0520, longitude=121.5230)
+    rows = [near, far]
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
+        "display_address": "臺北車站, 臺北市", "latitude": 25.0478,
+        "longitude": 121.5170, "city": "taipei", "district": "中正區"})
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: rows)
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "address": "台北車站",
+        "arrival_time": "2026-08-26T18:00:00+08:00"})
+    body = response.get_json()
+    assert response.status_code == 200
+    assert [row["lot_id"] for row in body["recommendations"]][:2] == ["NEAR", "FAR"]
+
+
 def test_address_query_uses_walking_routes_to_order_safe_lots(monkeypatch):
     """有地址與金鑰時，安全場站要依步行時間排序並輸出步行欄位。"""
     straight_near = lot_row()
