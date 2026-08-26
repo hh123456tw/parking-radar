@@ -67,7 +67,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 details { margin-top:16px; }
 summary { color:#c7d1db; cursor:pointer; }
-.manual-grid { grid-template-columns:2fr 1fr 1.4fr auto; margin-top:14px; align-items:end; }
+.manual-grid { grid-template-columns:1fr 2fr 1fr 1.4fr auto; margin-top:14px; align-items:end; }
 .manual-grid label { display:grid; gap:5px; color:var(--muted); font-size:.9rem; }
 #status { min-height:24px; margin:14px 0 0; }
 #status.error { color:#ff9298; }
@@ -122,6 +122,7 @@ summary { color:#c7d1db; cursor:pointer; }
   color:#ffe49a; background:#2b2618; font-size:.82rem; font-weight:850;
 }
 .parking-address { min-height:46px; color:#bac7d2; text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
+.data-time { margin:4px 0 0; color:var(--muted); font-size:.82rem; }
 .capacity { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px; margin-top:18px; }
 .capacity strong { font-size:2.35rem; line-height:1; }
 .capacity span { font-weight:750; }
@@ -182,6 +183,7 @@ summary { color:#c7d1db; cursor:pointer; }
   color:#c8d3dd; font-size:14px; font-weight:700;
 }
 .compact-lot.warning .compact-meta span { border-color:#6b5a20; color:#ffe9a8; }
+.compact-lot .data-time { grid-column:1/-1; }
 .compact-lot .fee-note { display:block; grid-column:1/-1; margin:0; }
 .other-toggle { width:100%; color:#e5ebf1; background:#26313d; border:1px solid #374555; }
 #other-lots { margin-top:12px; }

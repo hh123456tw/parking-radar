@@ -30,7 +30,8 @@ from analysis import (build_history_series, district_hell_score,
                       summarize_hour_comparison,
                       summarize_matching_history)
 from calendar_service import classify_arrival_day
-from city_config import CITIES, city_name, normalize_city, validate_city_district
+from city_config import (CITIES, city_name, normalize_city,
+                         public_city_options, validate_city_district)
 from config import Config
 from collector import collect_once
 from database import (fetch_current_lots, fetch_history,
@@ -466,6 +467,8 @@ def create_app(test_config=None):
             "index.html",
             analytics_require_consent=app.config.get(
                 "ANALYTICS_REQUIRE_CONSENT", True),
+            city_options=public_city_options(
+                app.config.get("NEW_TAIPEI_ENABLED", False)),
         )
 
     @app.post("/api/query")

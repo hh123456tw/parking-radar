@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import app as app_module
+
 ROOT = Path(__file__).parents[1]
 DASHBOARD_TEMPLATE = ROOT / "templates" / "admin_analytics.html"
 DASHBOARD_SCRIPT = ROOT / "static" / "admin_analytics.js"
@@ -25,6 +27,25 @@ def test_decision_cards_keep_required_data_and_actions():
     assert "function compactLot(lot)" in script
     assert "data.data_notice" in script
     assert "score-details" not in script
+
+
+def test_manual_form_uses_server_city_options_and_sends_city():
+    """手動表單的城市與行政區必須由伺服器注入，查詢 payload 要帶 city。"""
+    html = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="city"' in html
+    assert 'id="city-options" type="application/json"' in html
+    assert "city:citySelect.value" in script
+    assert "const districts =" not in script
+
+
+def test_new_taipei_disabled_never_appears_in_rendered_options():
+    """旗標關閉時，伺服器渲染的首頁不得出現任何新北市選項。"""
+    response = app_module.create_app({
+        "TESTING": True, "NEW_TAIPEI_ENABLED": False}).test_client().get("/")
+
+    assert "新北市" not in response.get_data(as_text=True)
 
 
 def test_cards_and_map_distinguish_walking_route_from_straight_fallback():
@@ -218,7 +239,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "decision-ui-v3" in template
+    assert "city-select-v1" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -452,20 +473,20 @@ def test_new_interaction_events_use_delegated_handlers():
     assert "history_opened" in script
 
 
-def test_pwa_asset_versions_bumped_for_decision_ui():
+def test_pwa_asset_versions_bumped_for_city_select():
     """模板與服務器快取金鑰必須同步升版，避免手機沿用舊決策卡畫面。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-    assert "decision-ui-v3" in template
+    assert "city-select-v1" in template
     assert "analytics-v3" not in template
-    assert "parking-radar-shell-decision-ui-v3" in sw
-    assert "style.css?v=decision-ui-v3" in sw
-    assert "app.js?v=decision-ui-v3" in sw
-    assert 'register("/static/sw.js?v=decision-ui-v3"' in script
-    assert "decision-ui-v2" not in template
-    assert "decision-ui-v2" not in sw
+    assert "parking-radar-shell-city-select-v1" in sw
+    assert "style.css?v=city-select-v1" in sw
+    assert "app.js?v=city-select-v1" in sw
+    assert 'register("/static/sw.js?v=city-select-v1"' in script
+    assert "decision-ui-v3" not in template
+    assert "decision-ui-v3" not in sw
 
 
 def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():

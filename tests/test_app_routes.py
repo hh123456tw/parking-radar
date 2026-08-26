@@ -1,6 +1,8 @@
 """Flask 路由整合測試：保留真實分析流程，只隔離 DB 與外部 API。"""
 
+import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -125,6 +127,24 @@ def test_public_analytics_mode_keeps_original_opt_in_controls():
     assert 'id="analytics-accept"' in body
     assert 'id="analytics-decline"' in body
     assert 'id="analytics-choice"' in body
+
+
+def test_index_route_injects_server_owned_city_options():
+    """首頁城市選項必須由伺服器依旗標注入，前端不能自行猜測城市。"""
+    off_body = make_client(NEW_TAIPEI_ENABLED=False).get("/").get_data(as_text=True)
+    on_body = make_client(NEW_TAIPEI_ENABLED=True).get("/").get_data(as_text=True)
+
+    def city_codes(body):
+        match = re.search(
+            r'<script id="city-options" type="application/json">(.*?)</script>',
+            body, re.DOTALL)
+        assert match is not None
+        return [option["code"] for option in json.loads(match.group(1))]
+
+    assert city_codes(off_body) == ["taipei"]
+    assert "新北市" not in off_body
+    assert city_codes(on_body) == ["taipei", "new_taipei"]
+    assert "新北市" in on_body
 
 
 def test_history_route_returns_real_series_and_closes_connection(monkeypatch):
