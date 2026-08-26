@@ -335,6 +335,64 @@ def test_address_query_bounds_freshness_per_source(monkeypatch):
     assert body["data_status"] == "stale"
 
 
+def test_address_query_omits_district_filter_with_gemini_district_present(
+        monkeypatch):
+    """Gemini 帶行政區時，地址查詢不得把行政區綁進雙城市 SQL。
+
+    1.5 公里排名圓就是地理邊界；真實 database.fetch_current_lots 的
+    兩次城市查詢都只能綁 city 與新鮮度，不能出現 AND district = %s。
+    """
+    taipei = lot_row()
+    taipei.update(lot_id="TPE", city="臺北市", source="taipei",
+                  latitude=25.0150, longitude=121.4650,
+                  captured_at=datetime(2026, 8, 26, 10, tzinfo=timezone.utc))
+    new_taipei = lot_row()
+    new_taipei.update(lot_id="NTP:1", city="新北市", source="new_taipei",
+                      district="板橋區", latitude=25.0130, longitude=121.4620,
+                      captured_at=datetime(2026, 8, 26, 10, tzinfo=timezone.utc))
+    # RotatingRowsConnection 的 __init__ 會先消耗一組；前方放空組，
+    # 讓第一次 fetch_current_lots（臺北）拿到 taipei、第二次（新北）
+    # 拿到 new_taipei。
+    connection = RotatingRowsConnection([[], [taipei], [new_taipei]])
+    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
+    monkeypatch.setattr(
+        app_module, "parse_parking_query",
+        lambda *_args, **_kwargs: ParkingIntent(
+            intent="recommend",
+            original_destination="新北市板橋區中山路一段152號",
+            address="新北市板橋區中山路一段152號",
+            city="new_taipei", district="板橋區",
+            arrival_time="2026-08-26T18:00:00+08:00",
+            missing_fields=[], location_candidates=[],
+        ),
+    )
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
+        "display_address": "板橋車站, 板橋區, 新北市, 臺灣",
+        "latitude": 25.0143, "longitude": 121.4638,
+        "city": "new_taipei", "district": "板橋區",
+    })
+    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
+                        lambda _connection: {
+                            "taipei": datetime.now(timezone.utc),
+                            "new_taipei": datetime.now(timezone.utc)})
+    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
+
+    response = make_client(NEW_TAIPEI_ENABLED=True).post(
+        "/api/query",
+        json={"mode": "chat", "message": "我要去新北市板橋區中山路一段152號"})
+
+    calls = connection.spy_cursor.calls
+    assert len(calls) == 2
+    for _sql, _params in calls:
+        assert "AND district = %s" not in _sql
+    assert calls[0][1] == (45, "臺北市")
+    assert calls[1][1] == (45, "新北市")
+    assert response.status_code == 200
+    visible = (response.get_json()["recommendations"]
+               + response.get_json()["other_recommended"])
+    assert {row["city"] for row in visible} == {"臺北市", "新北市"}
+
+
 def test_district_query_only_selected_city_and_district(monkeypatch):
     """行政區查詢只送選定城市與行政區，不得跨市查詢。"""
     connection = SpyConnection([lot_row()])

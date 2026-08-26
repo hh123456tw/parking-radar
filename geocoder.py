@@ -83,6 +83,15 @@ def _verified_city_and_district(display_name):
     return city, district
 
 
+def _effective_city(address, city):
+    """地址文字已明確命名支援城市時以地址城市為準，否則以要求的城市為準。"""
+    normalized = re.sub(r"\s+", "", address or "").replace("台北市", "臺北市")
+    for code in CITIES:
+        if city_name(code) in normalized:
+            return code
+    return city
+
+
 def _city_and_district_from_text(text):
     """從 display text 或正規化地址推論城市代碼與行政區。"""
     city, district = _verified_city_and_district(text)
@@ -102,17 +111,25 @@ def _city_and_district_from_text(text):
 def geocode_address(address, connection, city=None, http_get=requests.get):
     """回傳快取或第一筆雙北座標；查無結果或城市不符時回傳 None。"""
     key = normalize_address(address, city=city)
+    # 冷路徑與熱路徑共用同一條有效城市規則，城市衝突才不會因快取溫度
+    # 而出現不同結果：地址已含城市時由地址城市主導，否則由要求的城市約束。
+    effective_city = _effective_city(address, city)
     cached = get_cached_geocode(connection, key)
     if cached:
-        result = dict(cached)
         inferred_city, inferred_district = _city_and_district_from_text(
-            result.get("display_address") or result.get("normalized_address")
+            cached.get("display_address") or cached.get("normalized_address")
             or "")
-        result.setdefault("city", inferred_city)
-        result.setdefault("district", inferred_district)
-        return result
+        if (inferred_city is not None
+                and (effective_city is None
+                     or inferred_city == effective_city)):
+            result = dict(cached)
+            result.setdefault("city", inferred_city)
+            result.setdefault("district", inferred_district)
+            return result
+        # 快取城市與有效城市不符時視為 miss，重新走 Nominatim 驗證；
+        # 不得讓舊快取靜默覆寫地址或請求決定的城市。
 
-    for query in nominatim_queries(address, city=city):
+    for query in nominatim_queries(address, city=effective_city):
         _respect_rate_limit()
         response = http_get(
             NOMINATIM_URL,
@@ -126,7 +143,7 @@ def geocode_address(address, connection, city=None, http_get=requests.get):
         if not items:
             continue
         display_name = items[0].get("display_name", "")
-        expected_city = city_name(city) if city else None
+        expected_city = city_name(effective_city) if effective_city else None
         if expected_city and expected_city not in display_name:
             continue
         verified_city, district = _verified_city_and_district(display_name)
@@ -176,7 +193,9 @@ def geocode_candidates(candidates, connection, http_get=requests.get, limit=3):
             "name": (candidate.get("name") or result["display_address"]).strip(),
             "address": address,
             "city": result.get("city"),
-            "district": result.get("district") or candidate.get("district"),
+            # 只使用已驗證 display text 推論的行政區；驗證文字沒有
+            # 可辨識行政區時保持 None，不回退 Gemini 猜測值。
+            "district": result.get("district"),
             "display_address": result["display_address"],
             "latitude": float(result["latitude"]),
             "longitude": float(result["longitude"]),

@@ -550,7 +550,9 @@ def create_app(test_config=None):
             if verified_choices:
                 choice = verified_choices[0]
                 parsed["address"] = choice["address"]
-                parsed["district"] = choice["district"] or parsed.get("district")
+                # 只用已驗證文字推論的行政區；Gemini 猜的行政區未經驗證時
+                # 保持 None，不流入地址查詢的 SQL。
+                parsed["district"] = choice["district"]
                 parsed["destination_label"] = \
                     f'{choice["name"]}（{choice["address"]}）'
                 destination = {
@@ -647,7 +649,10 @@ def create_app(test_config=None):
                 rows.extend(fetch_current_lots(
                     connection,
                     city=city_name(source),
-                    district=parsed.get("district"),
+                    # 地址查詢以 1.5 公里排名圓為地理邊界，行政區不得
+                    # 同時綁進兩城市 SQL；純行政區查詢才保留 district。
+                    district=(None if destination
+                              else parsed.get("district")),
                     freshness_minutes=freshness,
                 ))
             if destination:

@@ -4,6 +4,7 @@
 - 分支工作樹：`.worktrees/new-taipei-phase1`，base commit `7a245a1`
 - 結果：**通過**。所有離線檢查綠燈；遷移在一次性 MySQL 上排練兩輪且資料不變；旗標關閉／開啟的離線 API smoke 全數通過；未部署、未合併、未推送、未觸碰任何 VM 或既有資料庫。
 - 最終測試數：**454 passed**；關鍵子套件 136 passed；離線 smoke **29/29 passed**；靜態檢查全部 exit 0。
+- 後續最終修復波（base `d097133`，commit `fix: close New Taipei release review gaps`）：全量 **460 passed**；兩支 migration 在升級與全新路徑各排練兩次（見 3.5）。
 
 ## 1. 依賴安裝與全量自動測試
 
@@ -92,6 +93,57 @@ TPE0003  臺北市   taipei   TPE0003
 - `DROP DATABASE` 僅針對上述兩個 QA 資料庫；執行後 `SHOW DATABASES` 確認 `ph_qa_ntp_*` 殘留為 **0**。
 - `docker rm -f` 移除一次性容器；本機既有容器與 `MySQL80` 服務保持原狀。
 
+### 3.5 最終修復波：兩支 migration 的升級／全新路徑排練（各 2 次）
+
+最終審查指出 `migrations/20260826_add_static_fetched_at.sql` 是 collector 的
+必要相依（`database.py` 讀寫 `static_fetched_at`），因此本波以另一組一次性
+Docker `mysql:8`（伺服器 8.4.11）重新排練，**依序執行兩支 migration**：
+
+```text
+1. migrations/20260826_add_parking_sources.sql
+2. migrations/20260826_add_static_fetched_at.sql
+```
+
+一次性容器 `codex-ntp-final-fin2026082616262887588`（不發布 host port，
+root 空密碼僅存在於容器內，未寫入任何檔案）；資料庫
+`ntp_final_upgrade_fin2026082616262887588`（升級路徑）與
+`ntp_final_fresh_fin2026082616262887588`（全新路徑）。建立前先確認名稱
+不存在，結束後只刪除這兩個資料庫與該容器，`SHOW DATABASES` 殘留
+`ntp_final_%` 為 **0**，`docker ps -a` 也確認容器已移除。
+
+#### Rehearsal C：升級路徑（既有安裝）
+
+以 `a72b29b^:schema.sql`（無 `city/source/source_lot_id/static_fetched_at`）
+建立結構，插入 3 筆既有臺北場站與 4 筆快照，再依序執行兩支 migration 各兩次：
+
+| 檢查 | M1 第 1 次 | M1 第 2 次 | M2 第 1 次 | M2 第 2 次 |
+| --- | --- | --- | --- | --- |
+| `parking_lots` 筆數 | 3（不變） | 3（不變） | 3（不變） | 3（不變） |
+| `parking_snapshots` 筆數 | 4（不變） | 4（不變） | 4（不變） | 4（不變） |
+| backfill（`臺北市/taipei/source_lot_id=lot_id`） | 3/3 | 3/3 | — | — |
+| `city/source/source_lot_id` NOT NULL 欄位數 | 3 | 3 | 3 | 3 |
+| `uq_lots_source_id`（distinct index 數） | 1 | 1 | 1 | 1 |
+| `static_fetched_at` 欄位數（NULL、DATETIME、位於 `source_updated_at` 之後） | — | — | 1（3 項皆 1） | 1 |
+| SQL 錯誤 | 無 | 無 | 無 | 無 |
+
+#### Rehearsal D：全新安裝路徑
+
+以目前 `schema.sql`（已含全部欄位）建立結構，插入 1 筆新北場站
+（`新北市/new_taipei/010056`、`板橋區`、453 格、有效 WGS84 座標），再依序
+執行兩支 migration 各兩次：
+
+| 檢查 | M1 第 1 次 | M1 第 2 次 | M2 第 1 次 | M2 第 2 次 |
+| --- | --- | --- | --- | --- |
+| `parking_lots` 筆數 | 1（不變） | 1（不變） | 1（不變） | 1（不變） |
+| 原列值保持（`新北市/new_taipei/010056`、`板橋區`） | 1/1 | 1/1 | 1/1 | 1/1 |
+| `uq_lots_source_id`（distinct index 數） | 1 | 1 | 1 | 1 |
+| `static_fetched_at` 欄位數 | 1 | 1 | 1 | 1 |
+| SQL 錯誤 | 無 | 無 | 無 | 無 |
+
+唯一鍵功能驗證：以相同 `(source='new_taipei', source_lot_id='010056')` 但
+不同 `lot_id` 插入，被 MySQL 以 `Duplicate entry` 拒絕（exit code 1），
+`parking_lots` 仍為 1 筆。
+
 ## 4. 離線 API smoke（旗標關閉與開啟）
 
 方法：Flask test client + 固定 fixtures/mocks；`geocode_address`、`geocode_candidates`、Gemini `parse_parking_query`、DB 連線、`fetch_current_lots`、`fetch_history`、`parking_data_status` 全部以固定資料替換；`OPENROUTESERVICE_API_KEY` 留空、`AUTO_REFRESH_ENABLED=False`、Analytics 關閉。**全程未呼叫真實 Gemini、Nominatim、臺北／新北、OpenRouteService 或其他外部 API。**
@@ -143,8 +195,9 @@ TPE0003  臺北市   taipei   TPE0003
 
 - 靜態 fixture：2 列 → 2 場站；有效 WGS84 座標 **2/2**，無效座標 **0**。TWD97 已知點轉換在容差內（`296882, 2767068` → `25.0109252, 121.4644919`）。
 - 座標防護：缺值、非數字、超出雙北範圍的 TWD97 一律回傳 `(None, None)`（探測 `(121.0, 25.0)` → `(None, None)`）。
-- 動態 fixture：3 列 → 2 筆有效快照（`NTP:010056`、`NTP:999999`）；負數 `-9` 跳過（`invalid_dynamic=1`）。
+- 動態 fixture：3 列 → **2 筆可解析動態列**（`NTP:010056`、`NTP:999999`）；負數 `-9` 跳過（`invalid_dynamic=1`）。
 - 對應不到靜態場站的動態 ID：`999999` 被排除（`unmatched_dynamic=1`）。
+- 因此最終**只有 1 筆匹配快照 `NTP:010056` 持久化**（`999999` 不建立半套場站）；「2 筆可解析動態列」與「1 筆最終持久化匹配快照」是不同計數，不得混為一談。
 - 含重複靜態列的 adapter 測量：`duplicates=1`、`invalid_dynamic=1`、`unmatched_dynamic=1`，重複 ID 最後一筆勝出。
 
 ## 6. 限制與誠實聲明
@@ -158,7 +211,7 @@ TPE0003  臺北市   taipei   TPE0003
 ## 7. 回滾指示
 
 1. **程式回滾**：設定 `NEW_TAIPEI_ENABLED=0` 並重啟服務（`systemctl restart parking-radar` 或等同指令）。旗標關閉後：前端不顯示新北市、collector 不收集新北、查詢與聊天一律拒絕新北目的地，既有臺北行為不變。
-2. **資料庫**：本次 migration 為 additive 且可重複執行。回滾程式時**不得移除** `parking_lots.city`、`source`、`source_lot_id` 欄位或 `uq_lots_source_id` 唯一鍵（移除會破壞既有資料列）；新北資料可保留，重新開啟旗標即可恢復。
+2. **資料庫**：兩支 migration 皆為 additive 且可重複執行。回滾程式時**不得移除** `parking_lots.city`、`source`、`source_lot_id` 欄位、`uq_lots_source_id` 唯一鍵，或 `static_fetched_at` 欄位（移除會破壞既有資料列，或讓新北收集以 unknown-column 失敗）；新北資料可保留，重新開啟旗標即可恢復。
 3. **快照清理（Task 8 既有功能）**：停用 `parking-snapshot-cleanup.timer` 並還原上一版 `parking_cleanup.py`／`database.py`；該功能不變更 schema，已刪除的 8 天前快照只能從備份還原。
 
 ## 8. 提交內容

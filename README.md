@@ -136,6 +136,24 @@ node --check static/app.js
 - Collector 收集與公開查詢不依賴清理成功；清理失敗只回滾未完成批次並結束，不會影響資料寫入或歷史圖表。
 - 回滾方式：停用 timer（`systemctl disable --now parking-snapshot-cleanup.timer`）並還原上一版 `parking_cleanup.py` 與 `database.py`；此功能不變更資料庫 schema，已刪除的舊快照只能從備份還原。
 
+## 資料庫遷移（雙北第一階段）
+
+發布前必須依序套用下列兩支 additive migration，並在**重啟服務與開啟
+`NEW_TAIPEI_ENABLED=1` 之前**完成：
+
+1. `migrations/20260826_add_parking_sources.sql`：`parking_lots` 新增
+   `city`、`source`、`source_lot_id`，回填既有列並建立 `uq_lots_source_id`
+   唯一鍵。
+2. `migrations/20260826_add_static_fetched_at.sql`：`parking_lots` 新增
+   `static_fetched_at` 靜態抓取標記；缺少此欄位時，新北收集會以
+   unknown-column 錯誤失敗（`fetch_source_lot_state` → SQL error），
+   README 與 QA 文件都必須先列出這兩支 migration。
+
+兩支 migration 都以 `INFORMATION_SCHEMA` 檢查後才變更，可重複執行
+（排練證據見 [QA Review — New Taipei Phase 1](docs/QA_REVIEW_2026-08-26_NEW_TAIPEI_PHASE1.md)）。
+回滾程式時**不得移除**上述任一欄位或唯一鍵（additive；移除會破壞既有資料列），
+新北資料可保留，重新開啟旗標即可恢復。
+
 ## Windows 快速啟動
 
 需求：Python 3.11+、MySQL 8，以及可選的 Gemini、Nominatim 與 OpenRouteService 設定。
@@ -164,6 +182,7 @@ flask --app app run --debug
 | `GEMINI_API_KEY`、`GEMINI_MODEL` | 自然語言意圖解析；留空時停用 |
 | `NOMINATIM_USER_AGENT` | 地址搜尋服務識別資訊 |
 | `OPENROUTESERVICE_API_KEY` | 實際步行路線；留空時改用直線距離 |
+| `NEW_TAIPEI_ENABLED` | 新北查詢／收集功能旗標；`0` 關閉、`1` 開啟（開啟前必須先套用兩支 migration） |
 | `ANALYTICS_ENABLED` | 管理分析功能總開關 |
 | `ANALYTICS_HMAC_SECRET` | 分析識別簽章秘密，只能存放於部署環境 |
 | `DEPLOY_VERSION` | 管理儀表板顯示的部署版本 |

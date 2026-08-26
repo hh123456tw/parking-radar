@@ -312,6 +312,24 @@ def test_geocode_candidates_validates_and_deduplicates(monkeypatch):
     assert [row["name"] for row in verified] == ["A"]
 
 
+def test_geocode_candidates_keeps_unverified_district_none(monkeypatch):
+    """驗證文字沒有可辨識行政區時，不得回退使用 Gemini 猜的行政區。"""
+    monkeypatch.setattr(
+        geocoder, "geocode_address",
+        lambda *_args, **_kwargs: {
+            "display_address": "板橋車站, 新北市, 臺灣",
+            "latitude": 25.0143, "longitude": 121.4638,
+            "city": "new_taipei", "district": None,
+        },
+    )
+
+    verified = geocoder.geocode_candidates([
+        {"name": "板橋車站", "address": "板橋車站", "district": "板橋區"},
+    ], object())
+
+    assert verified[0]["district"] is None
+
+
 def test_landmark_query_with_city_suffix_does_not_duplicate_taipei():
     """地標與行政區組合後已有臺北市，不得再在開頭重複補城市。"""
     assert geocoder.normalize_address("台北車站, 中正區, 臺北市") == \
@@ -359,6 +377,89 @@ def test_geocoder_rejects_display_name_missing_requested_city(monkeypatch):
             "lat": "25.0143", "lon": "121.4638"}]))
 
     assert result is None
+
+
+def test_geocoder_city_conflict_parity_between_cache_hit_and_miss(
+        monkeypatch):
+    """地址文字已含新北市時，指定 city=taipei 也必須冷熱快取行為一致。
+
+    設計規則：地址已有城市時以地址城市為準，所以冷路徑與熱路徑都要
+    回傳 new_taipei，不能讓同一個請求依快取溫度而結果不同。
+    """
+    nominatim_payload = [{
+        "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
+        "lat": "25.0143", "lon": "121.4638",
+    }]
+    saved = []
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
+    monkeypatch.setattr(geocoder, "save_cached_geocode",
+                        lambda _connection, row: saved.append(row))
+    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
+
+    cold = geocoder.geocode_address(
+        "新北市板橋車站", CommitConnection(), city="taipei",
+        http_get=lambda *_args, **_kwargs: response(nominatim_payload))
+
+    assert cold is not None and cold["city"] == "new_taipei"
+    assert cold["district"] == "板橋區"
+    assert saved and saved[0]["normalized_address"] == "新北市板橋車站"
+
+    cached = {
+        "normalized_address": "新北市板橋車站",
+        "display_address": "板橋車站, 板橋區, 新北市, 臺灣",
+        "latitude": 25.0143, "longitude": 121.4638,
+    }
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: cached)
+
+    warm = geocoder.geocode_address(
+        "新北市板橋車站", object(), city="taipei",
+        http_get=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("有效快取命中不應呼叫 HTTP")))
+
+    assert warm["city"] == "new_taipei"
+    assert warm["district"] == "板橋區"
+
+
+def test_geocoder_cache_city_mismatch_is_treated_as_miss(monkeypatch):
+    """快取城市與有效城市不符時，不得靜默覆寫，必須視為 miss 重新查詢。"""
+    monkeypatch.setattr(
+        geocoder, "get_cached_geocode",
+        lambda *_args: {
+            "normalized_address": "新北市板橋車站",
+            "display_address": "某地, 臺北市",
+            "latitude": 25.04, "longitude": 121.54,
+        })
+    monkeypatch.setattr(geocoder, "save_cached_geocode",
+                        lambda _connection, row: None)
+    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
+
+    result = geocoder.geocode_address(
+        "新北市板橋車站", CommitConnection(), city="taipei",
+        http_get=lambda *_args, **_kwargs: response([{
+            "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
+            "lat": "25.0143", "lon": "121.4638"}]))
+
+    assert result is not None
+    assert result["city"] == "new_taipei"
+    assert result["district"] == "板橋區"
+
+
+def test_geocoder_cache_hit_respects_requested_city_match(monkeypatch):
+    """正常快取命中時，有效城市與要求城市一致即可直接回傳且不呼叫 HTTP。"""
+    cached = {
+        "normalized_address": "臺北市信義區市府路1號",
+        "display_address": "臺北市政府, 信義區, 臺北市",
+        "latitude": 25.0375, "longitude": 121.5637,
+    }
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: cached)
+
+    result = geocoder.geocode_address(
+        "市府路1號", object(), city="taipei",
+        http_get=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("快取命中不應呼叫 HTTP")))
+
+    assert result["city"] == "taipei"
+    assert result["district"] == "信義區"
 
 
 def test_geocode_uses_reordered_taipei_house_address(monkeypatch):
