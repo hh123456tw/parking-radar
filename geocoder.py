@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import requests
 from config import Config
 from database import get_cached_geocode, save_cached_geocode
+from city_config import CITIES, city_name
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 _last_request_at = 0.0
@@ -24,20 +25,26 @@ def resolve_known_landmark(name):
     return LANDMARK_ALIASES.get(key, name.strip())
 
 
-def normalize_address(address):
-    """統一台／臺、移除空白，並在缺少城市時補上臺北市。"""
+def normalize_address(address, city=None):
+    """統一台／臺、移除空白，並在缺少城市時補上指定或預設城市。"""
     normalized = re.sub(r"\s+", "", address.strip()).replace("台北市", "臺北市")
-    # 地標查詢可能是「台北車站,中正區,臺北市」；已有城市就不能再加一次。
-    if "臺北市" not in normalized:
-        normalized = "臺北市" + normalized
+    # 地標查詢可能是「板橋車站,板橋區,新北市」；已有城市就不能再加一次。
+    if "臺北市" not in normalized and "新北市" not in normalized:
+        prefix = city_name(city) if city else "臺北市"
+        normalized = prefix + normalized
     return normalized
 
 
 def nominatim_queries(address):
-    """建立查詢候選；完整臺北門牌優先改成門牌、道路、行政區順序。"""
-    normalized = normalize_address(address)
+    """建立查詢候選；完整雙北門牌優先改成門牌、道路、行政區順序。"""
+    city = None
+    for code in CITIES:
+        if city_name(code) in address:
+            city = code
+            break
+    normalized = normalize_address(address, city=city)
     match = re.match(
-        r"^臺北市(?P<district>.+?區)(?:(?P<village>.+?里))?"
+        r"^(?:臺北市|新北市)(?P<district>.+?區)(?:(?P<village>.+?里))?"
         r"(?P<street>.+?)(?P<number>\d+(?:-\d+)?號)$",
         normalized,
     )
@@ -50,7 +57,7 @@ def nominatim_queries(address):
     ]
     if match.group("village"):
         parts.append(match.group("village"))
-    parts.extend([match.group("district"), "臺北市"])
+    parts.extend([match.group("district"), city_name(city) if city else "臺北市"])
     return [", ".join(parts), normalized]
 
 
@@ -63,9 +70,22 @@ def _respect_rate_limit():
     _last_request_at = time.monotonic()
 
 
-def geocode_address(address, connection, http_get=requests.get):
-    """回傳快取或第一筆臺北市座標；查無結果時回傳 None。"""
-    key = normalize_address(address)
+def _verified_city_and_district(display_name):
+    """從已驗證 display text 推論城市代碼與行政區；找不到時為 None。"""
+    city = None
+    for code in CITIES:
+        if city_name(code) in display_name:
+            city = code
+            break
+    district = next(
+        (d for d in CITIES[city].districts if d in display_name), None) \
+        if city else None
+    return city, district
+
+
+def geocode_address(address, connection, city=None, http_get=requests.get):
+    """回傳快取或第一筆雙北座標；查無結果或城市不符時回傳 None。"""
+    key = normalize_address(address, city=city)
     cached = get_cached_geocode(connection, key)
     if cached:
         return cached
@@ -81,13 +101,28 @@ def geocode_address(address, connection, http_get=requests.get):
         )
         response.raise_for_status()
         items = response.json()
-        if not items or "臺北市" not in items[0].get("display_name", ""):
+        if not items:
+            continue
+        display_name = items[0].get("display_name", "")
+        expected_city = city_name(city) if city else None
+        if expected_city and expected_city not in display_name:
+            continue
+        verified_city, district = _verified_city_and_district(display_name)
+        if not verified_city:
+            continue
+        latitude = float(items[0]["lat"])
+        longitude = float(items[0]["lon"])
+        min_lat, max_lat, min_lon, max_lon = CITIES[verified_city].bounds
+        if not (min_lat <= latitude <= max_lat
+                and min_lon <= longitude <= max_lon):
             continue
         result = {
             "normalized_address": key,
-            "display_address": items[0]["display_name"],
-            "latitude": float(items[0]["lat"]),
-            "longitude": float(items[0]["lon"]),
+            "display_address": display_name,
+            "latitude": latitude,
+            "longitude": longitude,
+            "city": verified_city,
+            "district": district,
             "cached_at": datetime.now(timezone.utc),
         }
         save_cached_geocode(connection, result)
@@ -104,7 +139,8 @@ def geocode_candidates(candidates, connection, http_get=requests.get, limit=3):
         address = (candidate.get("address") or "").strip()
         if not address:
             continue
-        result = geocode_address(address, connection, http_get=http_get)
+        result = geocode_address(
+            address, connection, city=candidate.get("city"), http_get=http_get)
         if result is None:
             continue
         coordinate_key = (
@@ -117,7 +153,8 @@ def geocode_candidates(candidates, connection, http_get=requests.get, limit=3):
         verified.append({
             "name": (candidate.get("name") or result["display_address"]).strip(),
             "address": address,
-            "district": candidate.get("district"),
+            "city": result.get("city"),
+            "district": result.get("district") or candidate.get("district"),
             "display_address": result["display_address"],
             "latitude": float(result["latitude"]),
             "longitude": float(result["longitude"]),

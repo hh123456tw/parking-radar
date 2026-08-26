@@ -7,6 +7,7 @@ import pytest
 import ai_service
 import geocoder
 from ai_service import IntentServiceError, ParkingIntent, parse_parking_query
+from geocoder import geocode_address
 from config import Config
 
 
@@ -33,24 +34,66 @@ class CommitConnection:
         self.commits += 1
 
 
+@pytest.fixture
+def connection():
+    """回傳只記錄 commit 的連線，讓地址測試完全離線。"""
+    return CommitConnection()
+
+
+def response(items):
+    """回傳帶 Nominatim 結果清單的最小 HTTP response。"""
+    return JsonResponse(items)
+
+
 def valid_intent_json():
     """回傳完整的 Gemini 結構化意圖 fixture。"""
     return json.dumps({
         "intent": "compare",
         "original_destination": "臺北市政府",
         "address": "臺北市信義區市府路1號",
+        "city": "taipei",
         "district": "信義區",
         "arrival_time": "2026-08-08T18:00:00+08:00",
         "missing_fields": [],
     }, ensure_ascii=False)
 
 
-def test_intent_schema_rejects_non_taipei_district():
-    """Gemini 即使輸出合法 JSON，也不能把新北行政區交給後端。"""
-    with pytest.raises(ValueError, match="只支援臺北市十二行政區"):
+def test_intent_schema_rejects_unsupported_district():
+    """Gemini 即使輸出合法 JSON，也不能把雙北以外行政區交給後端。"""
+    with pytest.raises(ValueError, match="不支援行政區"):
+        ParkingIntent(
+            intent="recommend", original_destination="基隆廟口",
+            address=None, district="仁愛區", arrival_time=None, missing_fields=[])
+
+
+def test_intent_district_without_city_infers_owning_city():
+    """只有行政區時，可推論唯一擁有城市。"""
+    intent = ParkingIntent(
+        intent="recommend", original_destination="板橋車站",
+        address="板橋車站", district="板橋區",
+        arrival_time=None, missing_fields=[], location_candidates=[])
+    assert intent.city == "new_taipei"
+    taipei = ParkingIntent(
+        intent="recommend", original_destination="中正區",
+        address=None, district="中正區",
+        arrival_time=None, missing_fields=[])
+    assert taipei.city == "taipei"
+
+
+def test_new_taipei_intent_accepts_city_and_board_district():
+    intent = ParkingIntent(intent="recommend", original_destination="板橋車站",
+        address="板橋車站", city="new_taipei", district="板橋區",
+        arrival_time=None, missing_fields=[], location_candidates=[])
+    assert intent.city == "new_taipei"
+
+
+def test_intent_rejects_city_district_mismatch():
+    """行政區與城市不一致時，不得讓錯誤的行政區流入資料庫查詢。"""
+    with pytest.raises(ValueError, match="不屬於"):
         ParkingIntent(
             intent="recommend", original_destination="板橋車站",
-            address=None, district="板橋區", arrival_time=None, missing_fields=[])
+            address="板橋車站", city="new_taipei", district="信義區",
+            arrival_time=None, missing_fields=[], location_candidates=[])
 
 
 def test_gemini_request_includes_context_model_and_json_schema():
@@ -76,6 +119,7 @@ def test_gemini_request_includes_context_model_and_json_schema():
     assert captured["config"].response_mime_type == "application/json"
     schema = captured["config"].response_json_schema
     assert {"intent", "address", "district", "arrival_time"} <= set(schema["properties"])
+    assert "city" in schema["properties"]
     assert "location_candidates" in schema["properties"]
 
 
@@ -226,6 +270,41 @@ def test_nominatim_queries_reorder_taipei_house_address():
     ]
 
 
+def test_geocoder_accepts_verified_new_taipei_result(connection, monkeypatch):
+    """城市明確時，驗證過的新北結果必須帶回 city 與 district。"""
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
+    monkeypatch.setattr(geocoder, "save_cached_geocode",
+                        lambda _connection, row: None)
+    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
+
+    result = geocode_address("板橋車站", connection, city="new_taipei",
+        http_get=lambda *_args, **_kwargs: response([{
+            "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
+            "lat": "25.0143", "lon": "121.4638"}]))
+
+    assert result["city"] == "new_taipei"
+    assert result["district"] == "板橋區"
+    assert connection.commits == 1
+
+
+def test_geocoder_rejects_display_name_missing_requested_city(monkeypatch):
+    """指定 city 時，display_name 未包含該城市官方名稱必須拒絕。"""
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
+    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
+    monkeypatch.setattr(
+        geocoder, "save_cached_geocode",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("不應寫入快取")),
+    )
+
+    result = geocoder.geocode_address(
+        "板橋車站", object(), city="taipei",
+        http_get=lambda *_args, **_kwargs: response([{
+            "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
+            "lat": "25.0143", "lon": "121.4638"}]))
+
+    assert result is None
+
+
 def test_geocode_uses_reordered_taipei_house_address(monkeypatch):
     """手動輸入完整門牌時，第一個外部查詢就應使用重排後的地址。"""
     requested_queries = []
@@ -284,10 +363,11 @@ def test_nominatim_request_uses_policy_headers_and_saves_cache(monkeypatch):
 
 @pytest.mark.parametrize("payload", [
     [],
-    [{"display_name": "新北市板橋區", "lat": "25.01", "lon": "121.46"}],
+    [{"display_name": "基隆市信義區", "lat": "25.13", "lon": "121.74"}],
 ])
-def test_nominatim_empty_or_non_taipei_result_returns_none(monkeypatch, payload):
-    """查無資料或結果不在臺北市時，不得寫入地址快取。"""
+def test_nominatim_empty_or_unsupported_city_result_returns_none(
+        monkeypatch, payload):
+    """查無資料或結果不在雙北時，不得寫入地址快取。"""
     monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
     monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
     monkeypatch.setattr(
