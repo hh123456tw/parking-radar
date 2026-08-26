@@ -181,6 +181,7 @@ flask --app app run --debug
 ## Documentation
 
 - [Changelog](CHANGELOG.md)
+- [QA Review — New Taipei Phase 1](docs/QA_REVIEW_2026-08-26_NEW_TAIPEI_PHASE1.md)
 - [QA Review](docs/QA_REVIEW_2026-08-21.md)
 - [Analytics QA Review](docs/QA_REVIEW_2026-08-23_ANALYTICS.md)
 - [Deployment Configurations](deploy/)
