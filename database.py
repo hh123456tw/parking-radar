@@ -209,7 +209,7 @@ def fetch_current_lots(connection, city=None, district=None,
                        PARTITION BY l.lot_id ORDER BY s.captured_at DESC
                    ) AS row_num
             FROM parking_lots l
-            JOIN parking_snapshots s ON s.lot_id = l.lot_id
+            STRAIGHT_JOIN parking_snapshots s ON s.lot_id = l.lot_id
             WHERE l.supports_realtime = TRUE
               {freshness_sql}
               {lot_filter_sql}

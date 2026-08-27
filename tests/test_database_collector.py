@@ -226,6 +226,7 @@ def test_current_lots_can_filter_city_and_district():
 
     sql, params = connection.spy_cursor.calls[0]
     window_end = sql.index(") latest")
+    assert "STRAIGHT_JOIN parking_snapshots" in sql[:window_end]
     assert "AND l.city = %s" in sql[:window_end]
     assert "AND l.district = %s" in sql[:window_end]
     assert params == (45, "新北市", "板橋區")
