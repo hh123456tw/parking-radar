@@ -1,6 +1,7 @@
 """新北市官方資料解析測試：固定 JSON fixture，不呼叫真實網路。"""
 
 import json
+import ssl
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -162,6 +163,18 @@ def test_fetch_pages_retries_failed_page_at_most_twice_then_raises():
         new_taipei_source.fetch_pages("dataset", 3, http_get=http_get)
 
     assert http_get.call_count == 3
+
+
+def test_ntpc_session_keeps_certificate_and_hostname_checks_without_strict_mode():
+    """新北舊憑證可相容，但不得關閉 CA 或主機名驗證。"""
+    session = new_taipei_source.build_ntpc_session()
+    adapter = session.get_adapter("https://data.ntpc.gov.tw/")
+    context = adapter.poolmanager.connection_pool_kw["ssl_context"]
+
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    if hasattr(ssl, "VERIFY_X509_STRICT"):
+        assert not context.verify_flags & ssl.VERIFY_X509_STRICT
 
 
 def test_collect_deduplicates_and_reports_metrics(monkeypatch):

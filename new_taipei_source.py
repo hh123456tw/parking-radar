@@ -1,9 +1,11 @@
 """下載新北市官方停車資料，轉換 TWD97 座標並正規化為統一字典契約。"""
 
+import ssl
 from datetime import datetime, timezone
 
 import requests
 from pyproj import Transformer
+from requests.adapters import HTTPAdapter
 
 from parking_metadata import infer_official_facility_type
 
@@ -16,6 +18,38 @@ MAX_RETRIES = 2
 NEW_TAIPEI_BOUNDS = (24.5, 25.4, 121.2, 122.1)
 
 _TWD97_TO_WGS84 = Transformer.from_crs("EPSG:3826", "EPSG:4326", always_xy=True)
+
+
+class _VerifiedCompatibilityAdapter(HTTPAdapter):
+    """只放寬舊憑證格式規則，保留 CA 與主機名驗證。"""
+
+    def __init__(self, ssl_context, *args, **kwargs):
+        self.ssl_context = ssl_context
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **kwargs):
+        kwargs["ssl_context"] = self.ssl_context
+        return super().init_poolmanager(
+            connections, maxsize, block=block, **kwargs)
+
+
+def build_ntpc_session():
+    """建立僅供新北官方 API 使用的已驗證相容 Session。"""
+    context = ssl.create_default_context()
+    strict_flag = getattr(ssl, "VERIFY_X509_STRICT", 0)
+    if strict_flag:
+        # Python 3.13 預設 strict 會拒絕缺少 SKI 的舊憑證；CA 與 hostname
+        # 驗證仍保持啟用，不能改成 verify=False。
+        context.verify_flags &= ~strict_flag
+    session = requests.Session()
+    session.mount(
+        "https://data.ntpc.gov.tw/",
+        _VerifiedCompatibilityAdapter(context),
+    )
+    return session
+
+
+_NTPC_SESSION = build_ntpc_session()
 
 
 def twd97_to_wgs84(x, y):
@@ -50,8 +84,10 @@ def _fetch_page(dataset_id, page, timeout, http_get):
     raise last_error
 
 
-def fetch_pages(dataset_id, timeout, http_get=requests.get):
+def fetch_pages(dataset_id, timeout, http_get=None):
     """以固定頁大小抓完整個資料集；官方在最後一頁之後回傳空陣列，故以空頁停止。"""
+    if http_get is None:
+        http_get = _NTPC_SESSION.get
     rows = []
     page = 1
     while True:
@@ -138,7 +174,7 @@ class NewTaipeiSourceAdapter:
     """新北官方資料來源：分頁下載、去重、座標轉換並回傳可寫入的統一記錄。"""
 
     @classmethod
-    def collect(cls, timeout, http_get=requests.get):
+    def collect(cls, timeout, http_get=None):
         """抓取兩份資料集，回傳 (lots, snapshots, metrics)。"""
         static_rows = fetch_pages(
             STATIC_DATASET_ID, timeout, http_get=http_get)
