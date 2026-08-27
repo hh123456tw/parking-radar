@@ -407,8 +407,8 @@ def test_district_query_only_selected_city_and_district(monkeypatch):
         "arrival_time": "2026-08-26T18:00:00+08:00"})
 
     sql, params = connection.spy_cursor.calls[0]
-    assert "AND city = %s" in sql
-    assert "AND district = %s" in sql
+    assert "AND l.city = %s" in sql
+    assert "AND l.district = %s" in sql
     assert params == (45, "新北市", "板橋區")
     body = response.get_json()
     assert response.status_code == 200
@@ -795,7 +795,7 @@ def test_district_query_binds_real_fetch_current_lots_keywords(monkeypatch):
     })
 
     sql, params = connection.spy_cursor.calls[0]
-    assert "AND district = %s" in sql
+    assert "AND l.district = %s" in sql
     assert params == (45, "臺北市", "信義區")
     body = response.get_json()
     assert response.status_code == 200

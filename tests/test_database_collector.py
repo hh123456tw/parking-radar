@@ -206,26 +206,28 @@ def test_fetch_current_lots_supports_all_city_and_district_queries():
     city_sql, city_params = city_connection.spy_cursor.calls[0]
     assert "ROW_NUMBER()" in city_sql
     assert "s.source_updated_at AS snapshot_updated_at" in city_sql
-    assert "AND district = %s" not in city_sql
+    assert "AND l.district = %s" not in city_sql
     assert city_params == (45,)
 
     district_connection = SpyConnection([{"lot_id": "TPE0001"}])
     rows = database.fetch_current_lots(
         district_connection, district="信義區", freshness_minutes=45)
     district_sql, district_params = district_connection.spy_cursor.calls[0]
-    assert "AND district = %s" in district_sql
+    assert "AND l.district = %s" in district_sql
     assert district_params == (45, "信義區")
     assert rows == [{"lot_id": "TPE0001"}]
 
 
 def test_current_lots_can_filter_city_and_district():
-    """城市與行政區同時存在時，條件必須一起加入且順序固定。"""
+    """城市與行政區必須在視窗排序前過濾，避免掃描整張快照表。"""
     connection = SpyConnection([])
     database.fetch_current_lots(
         connection, city="新北市", district="板橋區", freshness_minutes=45)
 
     sql, params = connection.spy_cursor.calls[0]
-    assert "AND city = %s" in sql
+    window_end = sql.index(") latest")
+    assert "AND l.city = %s" in sql[:window_end]
+    assert "AND l.district = %s" in sql[:window_end]
     assert params == (45, "新北市", "板橋區")
 
 
@@ -237,7 +239,9 @@ def test_latest_snapshot_times_and_stale_fallback_queries():
     assert database.fetch_latest_snapshot_times(time_connection) == {
         "taipei": captured_at}
     latest_sql = time_connection.spy_cursor.calls[0][0]
-    assert "GROUP BY l.source" in latest_sql
+    assert "STRAIGHT_JOIN parking_lots" in latest_sql
+    assert "ORDER BY snapshots.snapshot_id DESC" in latest_sql
+    assert "MAX(" not in latest_sql
 
     stale_connection = SpyConnection([{"lot_id": "TPE0001"}])
     rows = database.fetch_current_lots(
@@ -249,7 +253,7 @@ def test_latest_snapshot_times_and_stale_fallback_queries():
 
 
 def test_fetch_latest_snapshot_times_groups_by_source():
-    """每來源最新快照時間必須由單一群組查詢產生，供 Task 6 分別判斷新鮮度。"""
+    """每來源以最新主鍵反向查找，不得彙總掃描全部歷史快照。"""
     taipei_time = datetime(2026, 8, 4, 6, 0)
     new_taipei_time = datetime(2026, 8, 4, 5, 0)
     connection = SpyConnection([
@@ -261,8 +265,11 @@ def test_fetch_latest_snapshot_times_groups_by_source():
 
     assert times == {"taipei": taipei_time, "new_taipei": new_taipei_time}
     sql, _params = connection.spy_cursor.calls[0]
-    assert "JOIN parking_lots l ON l.lot_id = s.lot_id" in sql
-    assert "GROUP BY l.source" in sql
+    assert "STRAIGHT_JOIN parking_lots" in sql
+    assert "ORDER BY snapshots.snapshot_id DESC" in sql
+    assert "GROUP BY" not in sql
+    assert sql.count("LIMIT 1") == 2
+    assert _params == ("taipei", "taipei", "new_taipei", "new_taipei")
 
 
 def test_fetch_history_uses_lot_and_time_parameters():

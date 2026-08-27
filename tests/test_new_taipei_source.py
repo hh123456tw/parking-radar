@@ -135,7 +135,7 @@ def test_dynamic_skips_negative_and_prefixes_ids(captured_at):
 def test_fetch_pages_retries_one_timeout_then_completes(monkeypatch):
     """單頁 timeout 一次後必須重試成功，最後回傳全部列。"""
     http_get = SequenceGet(
-        [requests.Timeout(), page_response(1, 2), page_response(2, 2)])
+        [requests.Timeout(), page_response(0, 1), page_response(1, 1)])
 
     rows = new_taipei_source.fetch_pages("dataset", 3, http_get=http_get)
 
@@ -144,14 +144,15 @@ def test_fetch_pages_retries_one_timeout_then_completes(monkeypatch):
 
 
 def test_fetch_pages_uses_page_and_size_parameters():
-    """每頁請求必須帶有限 size，避免官方預設上限不一致。"""
-    http_get = SequenceGet([page_response(1, 2), page_response(2, 2)])
+    """官方分頁從第 0 頁開始，否則會漏掉前 1000 筆資料。"""
+    http_get = SequenceGet([page_response(0, 1), page_response(1, 1)])
 
     new_taipei_source.fetch_pages("dataset", 3, http_get=http_get)
 
     url, _args, kwargs = http_get.calls[0]
     assert "dataset" in url
-    assert kwargs == {"params": {"page": 1, "size": 1000}, "timeout": 3}
+    assert kwargs == {"params": {"page": 0, "size": 1000}, "timeout": 3}
+    assert [call[2]["params"]["page"] for call in http_get.calls] == [0, 1]
 
 
 def test_fetch_pages_retries_failed_page_at_most_twice_then_raises():

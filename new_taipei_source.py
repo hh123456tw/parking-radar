@@ -89,7 +89,7 @@ def fetch_pages(dataset_id, timeout, http_get=None):
     if http_get is None:
         http_get = _NTPC_SESSION.get
     rows = []
-    page = 1
+    page = 0
     while True:
         payload = _fetch_page(dataset_id, page, timeout, http_get)
         rows.extend(payload)

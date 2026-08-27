@@ -126,13 +126,27 @@ def delete_old_snapshots(connection, cutoff_utc, batch_size=5000):
 def fetch_latest_snapshot_times(connection):
     """回傳每來源最後一次成功收集時間，供新鮮度分別判斷。"""
     sql = """
-        SELECT l.source, MAX(s.captured_at) AS captured_at
-        FROM parking_snapshots s
-        JOIN parking_lots l ON l.lot_id = s.lot_id
-        GROUP BY l.source
+        SELECT source, captured_at FROM (
+            (SELECT %s AS source, snapshots.captured_at
+             FROM parking_snapshots AS snapshots
+             STRAIGHT_JOIN parking_lots AS lots
+               ON lots.lot_id = snapshots.lot_id
+             WHERE lots.source = %s
+             ORDER BY snapshots.snapshot_id DESC
+             LIMIT 1)
+            UNION ALL
+            (SELECT %s AS source, snapshots.captured_at
+             FROM parking_snapshots AS snapshots
+             STRAIGHT_JOIN parking_lots AS lots
+               ON lots.lot_id = snapshots.lot_id
+             WHERE lots.source = %s
+             ORDER BY snapshots.snapshot_id DESC
+             LIMIT 1)
+        ) latest
     """
     with connection.cursor() as cursor:
-        cursor.execute(sql)
+        cursor.execute(sql, ("taipei", "taipei",
+                             "new_taipei", "new_taipei"))
         return {row["source"]: row["captured_at"] for row in cursor.fetchall()}
 
 
@@ -179,6 +193,13 @@ def fetch_current_lots(connection, city=None, district=None,
             "AND s.captured_at >= UTC_TIMESTAMP() - INTERVAL %s MINUTE"
         )
         params.append(freshness_minutes)
+    lot_filter_sql = ""
+    if city:
+        lot_filter_sql += " AND l.city = %s"
+        params.append(city)
+    if district:
+        lot_filter_sql += " AND l.district = %s"
+        params.append(district)
     sql = """
         SELECT * FROM (
             SELECT l.*, s.available_spaces,
@@ -191,15 +212,11 @@ def fetch_current_lots(connection, city=None, district=None,
             JOIN parking_snapshots s ON s.lot_id = l.lot_id
             WHERE l.supports_realtime = TRUE
               {freshness_sql}
+              {lot_filter_sql}
         ) latest
         WHERE row_num = 1
-    """.format(freshness_sql=freshness_sql)
-    if city:
-        sql += " AND city = %s"
-        params.append(city)
-    if district:
-        sql += " AND district = %s"
-        params.append(district)
+    """.format(freshness_sql=freshness_sql,
+               lot_filter_sql=lot_filter_sql)
     with connection.cursor() as cursor:
         cursor.execute(sql, tuple(params))
         return list(cursor.fetchall())
