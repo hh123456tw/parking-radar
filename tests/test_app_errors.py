@@ -26,6 +26,38 @@ def fail_connection():
     raise RuntimeError("mysql unavailable")
 
 
+def test_local_chat_parser_handles_known_landmark_without_gemini():
+    """穩定的已知地標應走本機解析，避免簡單查詢等待 Gemini。"""
+    parsed = app_module.parse_local_chat_query("我找臺北車站")
+
+    assert parsed == {
+        "intent": "recommend",
+        "original_destination": "臺北車站",
+        "address": "臺北車站",
+        "city": "taipei",
+        "district": "中正區",
+        "arrival_time": None,
+        "missing_fields": [],
+        "location_candidates": [],
+    }
+
+
+def test_local_chat_parser_handles_bare_known_landmark():
+    """只輸入固定地標名稱時也不需要等待 Gemini。"""
+    assert app_module.parse_local_chat_query("臺北車站")["district"] == "中正區"
+
+
+@pytest.mark.parametrize("message", ["臺北車站明天晚上", "查臺北車站歷史"])
+def test_local_chat_parser_preserves_complex_intent_for_gemini(message):
+    """包含時間或歷史意圖時不可被簡單推薦路徑攔截。"""
+    assert app_module.parse_local_chat_query(message) is None
+
+
+def test_local_chat_parser_leaves_ambiguous_landmark_to_gemini():
+    """未知或可能多據點的地標仍交給 Gemini 產生可選候選。"""
+    assert app_module.parse_local_chat_query("我要去資策會") is None
+
+
 def test_query_database_connection_failure_returns_json_503(monkeypatch):
     """查詢 API 的 DB 連線失敗不得落入 Flask HTML 500。"""
     monkeypatch.setattr(app_module, "get_connection", fail_connection)

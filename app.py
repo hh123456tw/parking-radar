@@ -63,6 +63,34 @@ def requires_location_confirmation(parsed):
     return re.search(r"\d+(?:-\d+)?號", original) is None
 
 
+def parse_local_chat_query(message):
+    """本機解析少量穩定地標；其餘問句仍由 Gemini 處理。"""
+    text = re.sub(r"\s+", "", str(message or "")).strip("，。！？!? ")
+    match = re.match(
+        r"^(?:請幫我找|幫我找|我(?:想)?要去|我想去|我找|帶我去|去)(.+)$",
+        text,
+    )
+    destination = (match.group(1) if match else text).strip("，。！？!? ")
+    resolved = resolve_known_landmark(destination) if destination else ""
+    if not destination or resolved == destination:
+        return None
+    city = next(
+        (code for code in CITIES if city_name(code) in resolved), None)
+    district = next(
+        (name for name in CITIES[city].districts if name in resolved), None) \
+        if city else None
+    return {
+        "intent": "recommend",
+        "original_destination": destination,
+        "address": destination,
+        "city": city,
+        "district": district,
+        "arrival_time": None,
+        "missing_fields": [],
+        "location_candidates": [],
+    }
+
+
 def snapshot_age_minutes(captured_at, now=None):
     """計算 UTC 快照距現在幾分鐘；未提供快照時回傳 None。"""
     if captured_at is None:
@@ -491,7 +519,10 @@ def create_app(test_config=None):
             payload, query_mode, query_source, datetime.now(timezone.utc))
         try:
             if payload.get("mode") == "chat":
-                parsed = parse_parking_query(payload.get("message", ""), dict(session)).model_dump()
+                parsed = parse_local_chat_query(payload.get("message", ""))
+                if parsed is None:
+                    parsed = parse_parking_query(
+                        payload.get("message", ""), dict(session)).model_dump()
             else:
                 parsed = parse_manual_payload(
                     payload, app.config.get("NEW_TAIPEI_ENABLED", False))

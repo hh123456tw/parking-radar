@@ -961,7 +961,7 @@ def test_chat_follow_up_receives_previous_session_context(monkeypatch):
     def fake_parse(message, context):
         contexts.append(dict(context))
         return ParkingIntent(
-            intent="recommend" if len(contexts) == 1 else "compare",
+            intent="compare",
             original_destination="臺北市政府",
             address="臺北市信義區市府路1號", district="信義區",
             arrival_time="2026-08-08T18:00:00+08:00", missing_fields=[],
@@ -981,10 +981,11 @@ def test_chat_follow_up_receives_previous_session_context(monkeypatch):
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.get_json()["intent"] == "compare"
-    assert contexts[0] == {}
-    assert contexts[1]["destination"] == "臺北市信義區市府路1號"
-    assert contexts[1]["district"] == "信義區"
-    assert contexts[1]["lot_id"] == "TPE1"
+    # 第一個穩定地標由本機解析；只有追問才需要 Gemini 與上一輪狀態。
+    assert len(contexts) == 1
+    assert contexts[0]["destination"] == "臺北市信義區市府路1號"
+    assert contexts[0]["district"] == "信義區"
+    assert contexts[0]["lot_id"] == "TPE1"
 
 
 def test_chat_naive_arrival_time_is_rejected():
