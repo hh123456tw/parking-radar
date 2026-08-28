@@ -38,7 +38,8 @@ from database import (fetch_current_lots, fetch_history,
                       fetch_latest_snapshot_times,
                       fetch_matching_history, get_connection)
 from fee_service import build_fee_summary
-from geocoder import geocode_address, geocode_candidates, resolve_known_landmark
+from geocoder import (geocode_address, geocode_candidates,
+                      geocode_fast_landmark, resolve_known_landmark)
 from status_service import build_status
 from walking_service import WalkingRouteError, fetch_walking_routes
 
@@ -63,14 +64,42 @@ def requires_location_confirmation(parsed):
     return re.search(r"\d+(?:-\d+)?號", original) is None
 
 
-def parse_local_chat_query(message):
-    """本機解析少量穩定地標；其餘問句仍由 Gemini 處理。"""
+def extract_simple_destination(message):
+    """抽出不含時間、歷史或比較條件的單純目的地文字。"""
     text = re.sub(r"\s+", "", str(message or "")).strip("，。！？!? ")
+    if not text or len(text) > 60 or re.search(
+        r"歷史|趨勢|比較|平日|假日|週末|星期|明天|後天|今晚|晚上|早上|下午|"
+        r"\d{1,2}(?::\d{2})?點|幾點|小時後",
+        text,
+    ):
+        return None
     match = re.match(
         r"^(?:請幫我找|幫我找|我(?:想)?要去|我想去|我找|帶我去|去)(.+)$",
         text,
     )
-    destination = (match.group(1) if match else text).strip("，。！？!? ")
+    return (match.group(1) if match else text).strip("，。！？!? ") or None
+
+
+def _local_recommendation(destination, resolved_address=None, city=None,
+                          district=None, destination_label=None):
+    """建立與 Gemini ParkingIntent 相同的本機推薦資料。"""
+    return {
+        "intent": "recommend",
+        "original_destination": destination,
+        "address": resolved_address or destination,
+        "city": city,
+        "district": district,
+        "arrival_time": None,
+        "missing_fields": [],
+        "location_candidates": [],
+        **({"destination_label": destination_label}
+           if destination_label else {}),
+    }
+
+
+def parse_local_chat_query(message):
+    """本機解析少量穩定地標；其餘問句仍由通用服務處理。"""
+    destination = extract_simple_destination(message)
     resolved = resolve_known_landmark(destination) if destination else ""
     if not destination or resolved == destination:
         return None
@@ -79,16 +108,8 @@ def parse_local_chat_query(message):
     district = next(
         (name for name in CITIES[city].districts if name in resolved), None) \
         if city else None
-    return {
-        "intent": "recommend",
-        "original_destination": destination,
-        "address": destination,
-        "city": city,
-        "district": district,
-        "arrival_time": None,
-        "missing_fields": [],
-        "location_candidates": [],
-    }
+    return _local_recommendation(
+        destination, city=city, district=district)
 
 
 def snapshot_age_minutes(captured_at, now=None):
@@ -517,12 +538,28 @@ def create_app(test_config=None):
                             elapsed_ms(query_started))
         trace = new_query_trace(
             payload, query_mode, query_source, datetime.now(timezone.utc))
+        fast_destination = None
         try:
             if payload.get("mode") == "chat":
-                parsed = parse_local_chat_query(payload.get("message", ""))
+                message = payload.get("message", "")
+                parsed = parse_local_chat_query(message)
+                simple_destination = extract_simple_destination(message)
+                if parsed is None and simple_destination:
+                    fast_destination = geocode_fast_landmark(
+                        simple_destination,
+                        app.config.get("OPENROUTESERVICE_API_KEY", ""),
+                    )
+                    if fast_destination:
+                        parsed = _local_recommendation(
+                            simple_destination,
+                            city=fast_destination.get("city"),
+                            district=fast_destination.get("district"),
+                            destination_label=fast_destination[
+                                "display_address"],
+                        )
                 if parsed is None:
                     parsed = parse_parking_query(
-                        payload.get("message", ""), dict(session)).model_dump()
+                        message, dict(session)).model_dump()
             else:
                 parsed = parse_manual_payload(
                     payload, app.config.get("NEW_TAIPEI_ENABLED", False))
@@ -593,9 +630,11 @@ def create_app(test_config=None):
                     "city": choice.get("city"),
                 }
             else:
-                destination = geocode_address(
-                    parsed.get("address"), connection, parsed.get("city")) \
+                destination = fast_destination or (
+                    geocode_address(
+                        parsed.get("address"), connection, parsed.get("city"))
                     if parsed.get("address") else None
+                )
             if parsed.get("address") and destination is None:
                 trace["error_stage"] = "geocode"
                 trace["geocode_ms"] = round(

@@ -536,6 +536,31 @@ def test_address_query_uses_walking_routes_to_order_safe_lots(monkeypatch):
     assert body["recommendations"][0]["walking_duration_minutes"] == 6.0
 
 
+def test_simple_chat_landmark_uses_fast_geocoder_before_gemini(monkeypatch):
+    """西門町這類單純地標應直接定位，不受 Gemini 忙碌影響。"""
+    monkeypatch.setattr(app_module, "geocode_fast_landmark", lambda *_args: {
+        "display_address": "西門町商圈, Taipei, Taiwan",
+        "latitude": 25.044073, "longitude": 121.506637,
+        "city": "taipei", "district": None,
+    })
+    monkeypatch.setattr(
+        app_module, "parse_parking_query",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("快速定位成功後不應呼叫 Gemini")),
+    )
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(
+        app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_walking_routes", lambda *_args, **_kwargs: {})
+
+    response = make_client(OPENROUTESERVICE_API_KEY="test-key").post(
+        "/api/query", json={"mode": "chat", "message": "西門町"})
+
+    assert response.status_code == 200
+    assert response.get_json()["destination"]["display_address"] == \
+        "西門町商圈, Taipei, Taiwan"
+
+
 def test_address_query_returns_all_safe_lots_and_only_risk_counts(monkeypatch):
     """API 保留首選以外的安全場站，風險場站不再作為固定展示清單。"""
     rows = []

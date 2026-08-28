@@ -9,6 +9,7 @@ from database import get_cached_geocode, save_cached_geocode
 from city_config import CITIES, city_name
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+ORS_GEOCODE_URL = "https://api.openrouteservice.org/geocode/search"
 _last_request_at = 0.0
 
 # 期中專題只維護少量常見地標，避免發展成龐大的地標資料庫。
@@ -23,6 +24,79 @@ def resolve_known_landmark(name):
     """只把少量穩定展示地標換成門牌，其餘交給通用候選流程。"""
     key = re.sub(r"\s+", "", name.strip()).replace("台北市", "臺北市")
     return LANDMARK_ALIASES.get(key, name.strip())
+
+
+def _compact_place_name(value):
+    """建立地標名稱比對鍵，不把相似但不同的分店誤判成同一地點。"""
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]", "", str(value or "").lower()) \
+        .replace("台", "臺").removeprefix("臺北市").removeprefix("新北市")
+
+
+def _is_direct_place_match(query, candidate):
+    """只接受同名地標或少量通用地點後綴，避免擅選特定分館。"""
+    query_key = _compact_place_name(query)
+    candidate_key = _compact_place_name(candidate)
+    return bool(query_key) and (
+        candidate_key == query_key
+        or candidate_key in {query_key + suffix for suffix in ("商圈", "車站", "捷運站")}
+    )
+
+
+def geocode_fast_landmark(query, api_key, http_get=requests.get):
+    """以既有 ORS 金鑰快速解析單純地標；不確定時回傳 None 給 Gemini。"""
+    if not api_key or not str(query or "").strip():
+        return None
+    try:
+        response = http_get(
+            ORS_GEOCODE_URL,
+            params={"api_key": api_key, "text": query,
+                    "boundary.country": "TW", "size": 5},
+            headers={"Accept": "application/json"},
+            timeout=Config.GEOCODER_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return None
+        features = payload.get("features", [])
+        if not isinstance(features, list):
+            return None
+        compact_query = re.sub(r"\s+", "", str(query)).replace("台北市", "臺北市")
+        expected_city = (
+            "taipei" if compact_query.startswith("臺北市")
+            else "new_taipei" if compact_query.startswith("新北市")
+            else None
+        )
+        matches = []
+        seen_coordinates = set()
+        for feature in features:
+            try:
+                longitude, latitude = map(
+                    float, feature.get("geometry", {}).get("coordinates", []))
+                properties = feature.get("properties", {})
+                city = {"TC": "taipei", "TP": "new_taipei"}.get(
+                    properties.get("region_a"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if expected_city and city != expected_city:
+                continue
+            if city and _is_direct_place_match(query, properties.get("name")):
+                coordinate_key = (round(latitude, 5), round(longitude, 5))
+                if coordinate_key in seen_coordinates:
+                    continue
+                seen_coordinates.add(coordinate_key)
+                matches.append({
+                    "display_address": properties.get("label")
+                    or properties.get("name") or str(query),
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "city": city,
+                    "district": None,
+                })
+        return matches[0] if len(matches) == 1 else None
+    except (requests.RequestException, AttributeError, TypeError, ValueError,
+            KeyError):
+        return None
 
 
 def normalize_address(address, city=None):

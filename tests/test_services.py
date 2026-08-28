@@ -254,6 +254,87 @@ def test_gemini_all_models_busy_has_clear_retry_message():
     assert requested_models == [Config.GEMINI_MODEL, Config.GEMINI_FALLBACK_MODEL]
 
 
+def test_fast_landmark_geocoder_accepts_supported_exact_place():
+    """ORS 的直接地標結果可在 Gemini 前完成簡單目的地定位。"""
+    payload = {"features": [{
+        "geometry": {"coordinates": [121.506637, 25.044073]},
+        "properties": {
+            "name": "西門町商圈", "label": "西門町商圈, Taipei, Taiwan",
+            "region_a": "TC",
+        },
+    }]}
+
+    result = geocoder.geocode_fast_landmark(
+        "西門町", "test-key",
+        http_get=lambda *_args, **_kwargs: response(payload),
+    )
+
+    assert result == {
+        "display_address": "西門町商圈, Taipei, Taiwan",
+        "latitude": 25.044073,
+        "longitude": 121.506637,
+        "city": "taipei",
+        "district": None,
+    }
+
+
+def test_fast_landmark_geocoder_rejects_specific_or_out_of_area_result():
+    """名稱只是前綴或位於雙北外時不可擅自選取，必須交回 Gemini。"""
+    payload = {"features": [
+        {"geometry": {"coordinates": [121.191697, 24.967814]},
+         "properties": {"name": "資策會", "label": "資策會, 桃園市",
+                        "region_a": "TY"}},
+        {"geometry": {"coordinates": [121.548059, 25.022207]},
+         "properties": {"name": "資策會科技法律研究所",
+                        "label": "資策會科技法律研究所, 臺北市",
+                        "region_a": "TC"}},
+    ]}
+
+    assert geocoder.geocode_fast_landmark(
+        "資策會", "test-key",
+        http_get=lambda *_args, **_kwargs: response(payload),
+    ) is None
+
+
+def test_fast_landmark_geocoder_rejects_multiple_same_name_places():
+    """同名結果超過一處時不可直接選第一筆，應保留候選確認流程。"""
+    payload = {"features": [
+        {"geometry": {"coordinates": [121.54, 25.04]},
+         "properties": {"name": "SOGO", "label": "SOGO A",
+                        "region_a": "TC"}},
+        {"geometry": {"coordinates": [121.55, 25.05]},
+         "properties": {"name": "SOGO", "label": "SOGO B",
+                        "region_a": "TC"}},
+    ]}
+
+    assert geocoder.geocode_fast_landmark(
+        "SOGO", "test-key",
+        http_get=lambda *_args, **_kwargs: response(payload),
+    ) is None
+
+
+def test_fast_landmark_geocoder_respects_explicit_city():
+    """使用者寫明臺北市時，不得接受新北市的同名結果。"""
+    payload = {"features": [{
+        "geometry": {"coordinates": [121.46, 25.01]},
+        "properties": {"name": "測試商圈", "label": "測試商圈, 新北市",
+                       "region_a": "TP"},
+    }]}
+
+    assert geocoder.geocode_fast_landmark(
+        "臺北市測試", "test-key",
+        http_get=lambda *_args, **_kwargs: response(payload),
+    ) is None
+
+
+def test_fast_landmark_geocoder_malformed_success_response_falls_back():
+    """外部服務即使回 200，JSON 契約異常也只能降級，不能形成 500。"""
+    assert geocoder.geocode_fast_landmark(
+        "西門町", "test-key",
+        http_get=lambda *_args, **_kwargs: response([]),
+    ) is None
+
+
 def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):
     """地址先正規化；快取命中時不得再消耗公共 Nominatim 請求。"""
     assert geocoder.normalize_address(" 信義區 忠孝東路五段 7 號 ") == \

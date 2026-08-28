@@ -53,6 +53,22 @@ def test_local_chat_parser_preserves_complex_intent_for_gemini(message):
     assert app_module.parse_local_chat_query(message) is None
 
 
+@pytest.mark.parametrize(("message", "expected"), [
+    ("西門町", "西門町"),
+    ("我要去西門町", "西門町"),
+    ("我找 西門町", "西門町"),
+])
+def test_extract_simple_destination_for_fast_geocoding(message, expected):
+    """單純推薦句可先查通用地標服務，不必先等待 Gemini。"""
+    assert app_module.extract_simple_destination(message) == expected
+
+
+@pytest.mark.parametrize("message", ["西門町明天晚上", "查西門町歷史", "西門町和信義區比較"])
+def test_extract_simple_destination_rejects_time_history_and_compare(message):
+    """時間、歷史與比較意圖仍須由 Gemini 解讀。"""
+    assert app_module.extract_simple_destination(message) is None
+
+
 def test_local_chat_parser_leaves_ambiguous_landmark_to_gemini():
     """未知或可能多據點的地標仍交給 Gemini 產生可選候選。"""
     assert app_module.parse_local_chat_query("我要去資策會") is None
