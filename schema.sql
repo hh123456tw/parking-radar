@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS parking_lots (
     lot_id VARCHAR(32) PRIMARY KEY,
     lot_name VARCHAR(120) NOT NULL,
     district VARCHAR(20) NOT NULL,
+    -- 固定臺北來源欄位只為相容既有正式資料庫，不開放跨城市查詢。
     city VARCHAR(20) NOT NULL,
     source VARCHAR(20) NOT NULL,
     source_lot_id VARCHAR(64) NOT NULL,
@@ -21,8 +22,6 @@ CREATE TABLE IF NOT EXISTS parking_lots (
     longitude DECIMAL(10, 7),
     supports_realtime BOOLEAN NOT NULL DEFAULT FALSE,
     source_updated_at DATETIME NULL,
-    -- 靜態資料抓取標記：只有靜態抓取成功才寫入，動態-only 週期不得改寫。
-    static_fetched_at DATETIME NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_lots_district (district),

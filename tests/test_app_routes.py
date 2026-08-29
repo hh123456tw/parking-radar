@@ -1,8 +1,6 @@
 """Flask 路由整合測試：保留真實分析流程，只隔離 DB 與外部 API。"""
 
-import json
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -29,39 +27,6 @@ class CloseTrackingConnection:
 
     def close(self):
         self.closed = True
-
-
-class SpyCursor:
-    """記錄真實 database.fetch_current_lots 送出的 SQL 與參數。"""
-
-    def __init__(self, rows=None):
-        self.rows = rows or []
-        self.calls = []
-
-    def execute(self, sql, params=None):
-        self.calls.append((sql, params))
-
-    def fetchall(self):
-        return self.rows
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-
-class SpyConnection:
-    """提供 fetch_current_lots 所需的最小 cursor 介面。"""
-
-    def __init__(self, rows=None):
-        self.spy_cursor = SpyCursor(rows)
-
-    def cursor(self):
-        return self.spy_cursor
-
-    def close(self):
-        pass
 
 
 def make_client(**config):
@@ -129,24 +94,6 @@ def test_public_analytics_mode_keeps_original_opt_in_controls():
     assert 'id="analytics-choice"' in body
 
 
-def test_index_route_injects_server_owned_city_options():
-    """首頁城市選項必須由伺服器依旗標注入，前端不能自行猜測城市。"""
-    off_body = make_client(NEW_TAIPEI_ENABLED=False).get("/").get_data(as_text=True)
-    on_body = make_client(NEW_TAIPEI_ENABLED=True).get("/").get_data(as_text=True)
-
-    def city_codes(body):
-        match = re.search(
-            r'<script id="city-options" type="application/json">(.*?)</script>',
-            body, re.DOTALL)
-        assert match is not None
-        return [option["code"] for option in json.loads(match.group(1))]
-
-    assert city_codes(off_body) == ["taipei"]
-    assert "新北市" not in off_body
-    assert city_codes(on_body) == ["taipei", "new_taipei"]
-    assert "新北市" in on_body
-
-
 def test_history_route_returns_real_series_and_closes_connection(monkeypatch):
     """歷史端點成功時應使用真實時區轉換並關閉連線。"""
     connection = CloseTrackingConnection()
@@ -208,300 +155,6 @@ def test_public_candidate_keeps_decision_card_fields():
     assert result["reasons"] == row["reasons"]
 
 
-def test_taipei_station_characterization_keeps_top_order(monkeypatch):
-    """台北車站地址查詢必須維持近場站優先的既有排序合約。"""
-    near = lot_row()
-    near.update(lot_id="NEAR", latitude=25.0477, longitude=121.5169)
-    far = lot_row()
-    far.update(lot_id="FAR", latitude=25.0520, longitude=121.5230)
-    rows = [near, far]
-    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
-        "display_address": "臺北車站, 臺北市", "latitude": 25.0478,
-        "longitude": 121.5170, "city": "taipei", "district": "中正區"})
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: rows)
-    response = make_client().post("/api/query", json={
-        "mode": "manual", "address": "台北車站",
-        "arrival_time": "2026-08-26T18:00:00+08:00"})
-    body = response.get_json()
-    assert response.status_code == 200
-    assert [row["lot_id"] for row in body["recommendations"]][:2] == ["NEAR", "FAR"]
-
-
-class RotatingRowsConnection(SpyConnection):
-    """每次 cursor() 回傳下一組資料列，模擬逐來源查詢的結果。"""
-
-    def __init__(self, row_groups):
-        self.row_groups = list(row_groups)
-        self.spy_cursor = SpyCursor(self.row_groups.pop(0))
-
-    def cursor(self):
-        self.spy_cursor.rows = (
-            self.row_groups.pop(0) if self.row_groups else [])
-        return self.spy_cursor
-
-
-def test_address_query_can_return_cross_border_lots(monkeypatch):
-    """地址查詢的 1.5 公里圓可能跨市，必須能同時回傳雙北場站。"""
-    taipei = lot_row()
-    taipei.update(lot_id="TPE", city="臺北市", source="taipei",
-                  latitude=25.0150, longitude=121.4650,
-                  captured_at=datetime(2026, 8, 26, 10, tzinfo=timezone.utc))
-    taipei["snapshot_updated_at"] = datetime(
-        2026, 8, 26, 9, 55, tzinfo=timezone.utc)
-    new_taipei = lot_row()
-    new_taipei.update(lot_id="NTP:1", city="新北市", source="new_taipei",
-                      district="板橋區", latitude=25.0130, longitude=121.4620,
-                      captured_at=datetime(2026, 8, 26, 10, tzinfo=timezone.utc))
-    rows = [taipei, new_taipei]
-    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
-        "display_address": "板橋車站, 板橋區, 新北市", "latitude": 25.0143,
-        "longitude": 121.4638, "city": "new_taipei", "district": "板橋區"})
-    monkeypatch.setattr(app_module, "fetch_current_lots",
-                        lambda *_args, **_kwargs: rows)
-    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
-                        lambda _connection: {
-                            "taipei": datetime.now(timezone.utc),
-                            "new_taipei": datetime.now(timezone.utc)})
-    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
-
-    response = make_client(NEW_TAIPEI_ENABLED=True).post("/api/query", json={
-        "mode": "manual", "city": "new_taipei", "address": "板橋車站",
-        "arrival_time": "2026-08-26T18:00:00+08:00"})
-
-    body = response.get_json()
-    assert response.status_code == 200
-    visible = body["recommendations"] + body["other_recommended"]
-    assert {row["city"] for row in visible} == {"臺北市", "新北市"}
-    for row in visible:
-        assert row["city"] and row["source"] and row["data_time_label"]
-    taipei_lot = next(row for row in visible if row["source"] == "taipei")
-    assert taipei_lot["data_time_label"] == \
-        "臺北市官方資料時間 2026-08-26T17:55:00+08:00"
-    new_taipei_lot = next(row for row in visible if row["source"] == "new_taipei")
-    assert new_taipei_lot["data_time_label"] == \
-        "新北市系統取得時間 2026-08-26T18:00:00+08:00"
-    sources = {entry["source"]: entry for entry in body["data_sources"]}
-    assert sources["taipei"] == {
-        "source": "taipei", "city": "臺北市", "status": "fresh",
-        "time_kind": "official",
-        "collected_at": "2026-08-26T18:00:00+08:00",
-        "official_updated_at": "2026-08-26T17:55:00+08:00",
-    }
-    assert sources["new_taipei"] == {
-        "source": "new_taipei", "city": "新北市", "status": "fresh",
-        "time_kind": "collected",
-        "collected_at": "2026-08-26T18:00:00+08:00",
-        "official_updated_at": None,
-    }
-
-
-def test_address_query_bounds_freshness_per_source(monkeypatch):
-    """新鮮城市維持 45 分鐘門檻，過期城市才允許舊資料降級。"""
-    taipei = lot_row()
-    taipei.update(lot_id="TPE", city="臺北市", source="taipei",
-                  latitude=25.0150, longitude=121.4650)
-    stale_new_taipei = lot_row()
-    stale_new_taipei.update(lot_id="NTP:1", city="新北市", source="new_taipei",
-                            district="板橋區", latitude=25.0130,
-                            longitude=121.4620)
-    connection = RotatingRowsConnection([[taipei], [stale_new_taipei]])
-    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
-    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
-        "display_address": "板橋車站, 板橋區, 新北市", "latitude": 25.0143,
-        "longitude": 121.4638, "city": "new_taipei", "district": "板橋區"})
-    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
-                        lambda _connection: {
-                            "taipei": datetime.now(timezone.utc),
-                            "new_taipei": datetime.now(timezone.utc)
-                            - timedelta(hours=2)})
-    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
-
-    response = make_client(NEW_TAIPEI_ENABLED=True).post("/api/query", json={
-        "mode": "manual", "city": "new_taipei", "address": "板橋車站",
-        "arrival_time": "2026-08-26T18:00:00+08:00"})
-
-    calls = connection.spy_cursor.calls
-    assert calls[0][1] == (45, "臺北市")
-    assert "UTC_TIMESTAMP()" in calls[0][0]
-    assert calls[1][1] == ("新北市",)
-    assert "UTC_TIMESTAMP()" not in calls[1][0]
-    body = response.get_json()
-    assert response.status_code == 200
-    sources = {entry["source"]: entry for entry in body["data_sources"]}
-    assert sources["taipei"]["status"] == "fresh"
-    assert sources["new_taipei"]["status"] == "stale"
-    assert body["data_status"] == "stale"
-
-
-def test_address_query_omits_district_filter_with_gemini_district_present(
-        monkeypatch):
-    """Gemini 帶行政區時，地址查詢不得把行政區綁進雙城市 SQL。
-
-    1.5 公里排名圓就是地理邊界；真實 database.fetch_current_lots 的
-    兩次城市查詢都只能綁 city 與新鮮度，不能出現 AND district = %s。
-    """
-    taipei = lot_row()
-    taipei.update(lot_id="TPE", city="臺北市", source="taipei",
-                  latitude=25.0150, longitude=121.4650,
-                  captured_at=datetime(2026, 8, 26, 10, tzinfo=timezone.utc))
-    new_taipei = lot_row()
-    new_taipei.update(lot_id="NTP:1", city="新北市", source="new_taipei",
-                      district="板橋區", latitude=25.0130, longitude=121.4620,
-                      captured_at=datetime(2026, 8, 26, 10, tzinfo=timezone.utc))
-    # RotatingRowsConnection 的 __init__ 會先消耗一組；前方放空組，
-    # 讓第一次 fetch_current_lots（臺北）拿到 taipei、第二次（新北）
-    # 拿到 new_taipei。
-    connection = RotatingRowsConnection([[], [taipei], [new_taipei]])
-    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
-    monkeypatch.setattr(
-        app_module, "parse_parking_query",
-        lambda *_args, **_kwargs: ParkingIntent(
-            intent="recommend",
-            original_destination="新北市板橋區中山路一段152號",
-            address="新北市板橋區中山路一段152號",
-            city="new_taipei", district="板橋區",
-            arrival_time="2026-08-26T18:00:00+08:00",
-            missing_fields=[], location_candidates=[],
-        ),
-    )
-    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
-        "display_address": "板橋車站, 板橋區, 新北市, 臺灣",
-        "latitude": 25.0143, "longitude": 121.4638,
-        "city": "new_taipei", "district": "板橋區",
-    })
-    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
-                        lambda _connection: {
-                            "taipei": datetime.now(timezone.utc),
-                            "new_taipei": datetime.now(timezone.utc)})
-    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
-
-    response = make_client(NEW_TAIPEI_ENABLED=True).post(
-        "/api/query",
-        json={"mode": "chat", "message": "我要去新北市板橋區中山路一段152號"})
-
-    calls = connection.spy_cursor.calls
-    assert len(calls) == 2
-    for _sql, _params in calls:
-        assert "AND district = %s" not in _sql
-    assert calls[0][1] == (45, "臺北市")
-    assert calls[1][1] == (45, "新北市")
-    assert response.status_code == 200
-    visible = (response.get_json()["recommendations"]
-               + response.get_json()["other_recommended"])
-    assert {row["city"] for row in visible} == {"臺北市", "新北市"}
-
-
-def test_district_query_only_selected_city_and_district(monkeypatch):
-    """行政區查詢只送選定城市與行政區，不得跨市查詢。"""
-    connection = SpyConnection([lot_row()])
-    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
-    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
-                        lambda _connection: {
-                            "new_taipei": datetime.now(timezone.utc)})
-    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
-
-    response = make_client(NEW_TAIPEI_ENABLED=True).post("/api/query", json={
-        "mode": "manual", "city": "new_taipei", "district": "板橋區",
-        "arrival_time": "2026-08-26T18:00:00+08:00"})
-
-    sql, params = connection.spy_cursor.calls[0]
-    assert "AND l.city = %s" in sql
-    assert "AND l.district = %s" in sql
-    assert params == (45, "新北市", "板橋區")
-    body = response.get_json()
-    assert response.status_code == 200
-    sources = {entry["source"]: entry for entry in body["data_sources"]}
-    assert list(sources) == ["new_taipei"]
-
-
-def test_taipei_fresh_does_not_hide_stale_new_taipei(monkeypatch):
-    """單一來源新鮮不得讓另一來源的過期資料被標成新鮮。"""
-    connection = CloseTrackingConnection()
-    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
-    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
-                        lambda _connection: {
-                            "taipei": datetime.now(timezone.utc),
-                            "new_taipei": datetime.now(timezone.utc)
-                            - timedelta(hours=2)})
-
-    statuses = app_module.parking_data_status({"taipei", "new_taipei"})
-
-    assert statuses["taipei"]["status"] == "fresh"
-    assert statuses["new_taipei"]["status"] == "stale"
-    assert connection.closed is True
-
-
-def test_parking_data_status_marks_missing_source(monkeypatch):
-    """完全沒有快照的來源必須誠實標示 missing，不能偽裝成 fresh。"""
-    connection = CloseTrackingConnection()
-    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
-    monkeypatch.setattr(app_module, "fetch_latest_snapshot_times",
-                        lambda _connection: {
-                            "taipei": datetime.now(timezone.utc)})
-
-    statuses = app_module.parking_data_status({"taipei", "new_taipei"})
-
-    assert statuses["new_taipei"]["status"] == "missing"
-
-
-def test_flag_off_rejects_geocoder_inferred_new_taipei_before_query(monkeypatch):
-    """payload 沒帶 city 但地理服務驗證為新北時，旗標關閉必須在查詢前 400 拒絕。"""
-    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
-        "display_address": "板橋車站, 板橋區, 新北市", "latitude": 25.0143,
-        "longitude": 121.4638, "city": "new_taipei", "district": "板橋區"})
-    monkeypatch.setattr(
-        app_module, "fetch_current_lots",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("旗標關閉時不應查詢任何停車場")),
-    )
-
-    response = make_client(NEW_TAIPEI_ENABLED=False).post("/api/query", json={
-        "mode": "manual", "address": "新北市板橋區中山路一段152號",
-        "arrival_time": "2026-08-26T18:00:00+08:00"})
-
-    assert response.status_code == 400
-    assert response.get_json()["error"] == "新北市停車資料尚未開放"
-
-
-def test_flag_off_rejects_chosen_new_taipei_candidate_before_query(monkeypatch):
-    """聊天候選目的地驗證為新北時，旗標關閉必須沿用同一 400 守門。"""
-    monkeypatch.setattr(
-        app_module, "parse_parking_query",
-        lambda *_args, **_kwargs: ParkingIntent(
-            intent="recommend",
-            original_destination="新北市板橋區中山路一段152號",
-            address="新北市板橋區中山路一段152號",
-            city=None, district=None,
-            arrival_time="2026-08-26T18:00:00+08:00", missing_fields=[],
-            location_candidates=[{
-                "name": "板橋車站",
-                "address": "新北市板橋區中山路一段152號",
-            }],
-        ),
-    )
-    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "geocode_candidates", lambda *_args: [{
-        "name": "板橋車站", "address": "新北市板橋區中山路一段152號",
-        "city": "new_taipei", "district": "板橋區",
-        "display_address": "板橋車站, 板橋區, 新北市",
-        "latitude": 25.0143, "longitude": 121.4638,
-    }])
-    monkeypatch.setattr(
-        app_module, "fetch_current_lots",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("旗標關閉時不應查詢任何停車場")),
-    )
-
-    response = make_client(NEW_TAIPEI_ENABLED=False).post(
-        "/api/query", json={"mode": "chat", "message": "我要去板橋車站"})
-
-    assert response.status_code == 400
-    assert response.get_json()["error"] == "新北市停車資料尚未開放"
-
-
 def test_address_query_uses_walking_routes_to_order_safe_lots(monkeypatch):
     """有地址與金鑰時，安全場站要依步行時間排序並輸出步行欄位。"""
     straight_near = lot_row()
@@ -516,7 +169,7 @@ def test_address_query_uses_walking_routes_to_order_safe_lots(monkeypatch):
         "longitude": 121.5637,
     })
     monkeypatch.setattr(
-        app_module, "fetch_current_lots", lambda *_args, **_kwargs: [straight_near, walk_near])
+        app_module, "fetch_current_lots", lambda *_args: [straight_near, walk_near])
     monkeypatch.setattr(app_module, "fetch_walking_routes", lambda *_args, **_kwargs: {
         "STRAIGHT": {"walking_distance_m": 850.0,
                      "walking_duration_minutes": 11.0},
@@ -534,31 +187,6 @@ def test_address_query_uses_walking_routes_to_order_safe_lots(monkeypatch):
     assert response.status_code == 200
     assert [row["lot_id"] for row in body["recommendations"]] == ["WALK", "STRAIGHT"]
     assert body["recommendations"][0]["walking_duration_minutes"] == 6.0
-
-
-def test_simple_chat_landmark_uses_fast_geocoder_before_gemini(monkeypatch):
-    """西門町這類單純地標應直接定位，不受 Gemini 忙碌影響。"""
-    monkeypatch.setattr(app_module, "geocode_fast_landmark", lambda *_args: {
-        "display_address": "西門町商圈, Taipei, Taiwan",
-        "latitude": 25.044073, "longitude": 121.506637,
-        "city": "taipei", "district": None,
-    })
-    monkeypatch.setattr(
-        app_module, "parse_parking_query",
-        lambda *_args: (_ for _ in ()).throw(
-            AssertionError("快速定位成功後不應呼叫 Gemini")),
-    )
-    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(
-        app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
-    monkeypatch.setattr(app_module, "fetch_walking_routes", lambda *_args, **_kwargs: {})
-
-    response = make_client(OPENROUTESERVICE_API_KEY="test-key").post(
-        "/api/query", json={"mode": "chat", "message": "西門町"})
-
-    assert response.status_code == 200
-    assert response.get_json()["destination"]["display_address"] == \
-        "西門町商圈, Taipei, Taiwan"
 
 
 def test_address_query_returns_all_safe_lots_and_only_risk_counts(monkeypatch):
@@ -583,7 +211,7 @@ def test_address_query_returns_all_safe_lots_and_only_risk_counts(monkeypatch):
         "display_address": "臺北市政府", "latitude": 25.0375,
         "longitude": 121.5637,
     })
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: rows)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: rows)
 
     response = make_client().post("/api/query", json={
         "mode": "manual", "address": "臺北市信義區市府路1號",
@@ -608,7 +236,7 @@ def test_walking_route_failure_keeps_address_query_usable(monkeypatch):
         "display_address": "臺北市政府", "latitude": 25.0375,
         "longitude": 121.5637,
     })
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
     monkeypatch.setattr(
         app_module, "fetch_walking_routes",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -634,7 +262,7 @@ def test_address_query_without_route_key_never_calls_walking_api(monkeypatch):
         "display_address": "臺北市政府", "latitude": 25.0375,
         "longitude": 121.5637,
     })
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
     monkeypatch.setattr(
         app_module, "fetch_walking_routes",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -664,7 +292,7 @@ def test_query_enriches_every_result_with_local_decision_metadata(monkeypatch):
     })
     # Reuse the route's existing database, geocoder, and ranking fakes.
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
     monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
     response = client.post("/api/query", json={
         "mode": "manual", "district": "中正區",
@@ -681,7 +309,7 @@ def test_query_enriches_every_result_with_local_decision_metadata(monkeypatch):
 def test_successful_query_logs_stage_durations_without_destination(monkeypatch, caplog):
     """正常查詢必須留下各階段耗時，但不得把使用者目的地寫進日誌。"""
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
 
     with caplog.at_level(logging.INFO):
         response = make_client().post("/api/query", json={
@@ -706,7 +334,7 @@ def test_successful_query_logs_stage_durations_without_destination(monkeypatch, 
 def test_query_missing_calendar_file_uses_weekday_fallback(monkeypatch, tmp_path):
     """行事曆檔案缺失時仍以本機規則分類抵達日，並標記 fallback 來源。"""
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
     monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
     monkeypatch.setattr(
         app_module, "classify_arrival_day",
@@ -729,7 +357,7 @@ def test_query_malformed_fare_rules_shows_official_unknown(monkeypatch):
     row["fare_rules_json"] = "{broken-json"
     row["fee_info"] = None
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [row])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [row])
     monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
     monkeypatch.setattr(app_module, "classify_arrival_day", lambda _arrival: {
         "kind": "weekday", "label": "平日", "is_holiday": False,
@@ -752,7 +380,7 @@ def test_query_null_facility_metadata_degrades_to_unknown_type(monkeypatch):
     row["facility_type"] = None
     row["facility_source"] = None
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [row])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [row])
     monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
     monkeypatch.setattr(app_module, "classify_arrival_day", lambda _arrival: {
         "kind": "weekday", "label": "平日", "is_holiday": False,
@@ -776,7 +404,7 @@ def test_query_path_makes_no_calendar_or_osm_network_calls(monkeypatch):
 
     monkeypatch.setattr(requests, "get", raise_get)
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
     monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
 
     response = make_client().post("/api/query", json={
@@ -792,7 +420,7 @@ def test_district_only_query_uses_real_history_and_district_ranking(monkeypatch)
     """沒有地址時不得偽造距離，仍應完成行政區推薦。"""
     connection = CloseTrackingConnection()
     monkeypatch.setattr(app_module, "get_connection", lambda: connection)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
     monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
 
     response = make_client().post("/api/query", json={
@@ -808,30 +436,11 @@ def test_district_only_query_uses_real_history_and_district_ranking(monkeypatch)
     assert connection.closed is True
 
 
-def test_district_query_binds_real_fetch_current_lots_keywords(monkeypatch):
-    """真實呼叫端必須把行政區綁到 district、新鮮度綁到 freshness_minutes。"""
-    connection = SpyConnection([lot_row()])
-    monkeypatch.setattr(app_module, "get_connection", lambda: connection)
-    monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
-
-    response = make_client().post("/api/query", json={
-        "mode": "manual", "district": "信義區",
-        "arrival_time": "2026-08-04T18:00:00+08:00",
-    })
-
-    sql, params = connection.spy_cursor.calls[0]
-    assert "AND l.district = %s" in sql
-    assert params == (45, "臺北市", "信義區")
-    body = response.get_json()
-    assert response.status_code == 200
-    assert body["recommendations"][0]["lot_id"] == "TPE1"
-
-
 def test_regular_query_does_not_preload_history(monkeypatch):
     """一般查詢只使用即時資料；歷史留給使用者點擊後的專用端點。"""
     connection = CloseTrackingConnection()
     monkeypatch.setattr(app_module, "get_connection", lambda: connection)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
     monkeypatch.setattr(
         app_module,
         "fetch_matching_history",
@@ -863,7 +472,7 @@ def test_history_intent_loads_history_for_only_three_candidates(monkeypatch):
         row = lot_row()
         row["lot_id"] = f"TPE{index + 1}"
         rows.append(row)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: rows)
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: rows)
 
     def matching_history(_connection, lot_ids, start_utc, end_utc):
         requested_lot_ids.extend(lot_ids)
@@ -898,7 +507,7 @@ def test_query_reads_parking_data_from_connection_opened_after_refresh(monkeypat
 
     monkeypatch.setattr(app_module, "ensure_fresh_parking_data", refresh_data)
 
-    def current_lots(connection, *_args, **_kwargs):
+    def current_lots(connection, *_args):
         row = lot_row()
         row["available_spaces"] = 30 if connection.sees_fresh_data else 1
         return [row]
@@ -924,7 +533,7 @@ def test_query_returns_official_and_collection_times_in_taipei(monkeypatch):
     row = lot_row(datetime(2026, 8, 3, 10))
     row["snapshot_updated_at"] = datetime(2026, 8, 3, 9, 55)
     monkeypatch.setattr(app_module, "get_connection", lambda: connection)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [row])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [row])
     monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
 
     response = make_client().post("/api/query", json={
@@ -944,7 +553,7 @@ def test_query_updated_at_treats_naive_database_time_as_utc(monkeypatch):
     connection = CloseTrackingConnection()
     monkeypatch.setattr(app_module, "get_connection", lambda: connection)
     monkeypatch.setattr(app_module, "fetch_current_lots",
-                        lambda *_args, **_kwargs: [lot_row(datetime(2026, 8, 3, 10))])
+                        lambda *_args: [lot_row(datetime(2026, 8, 3, 10))])
     monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
 
     response = make_client().post("/api/query", json={
@@ -963,8 +572,7 @@ def test_geocode_miss_returns_district_fallback_before_parking_query(monkeypatch
     monkeypatch.setattr(app_module, "geocode_address", lambda *_args: None)
     monkeypatch.setattr(
         app_module, "fetch_current_lots",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("不應查停車場")),
+        lambda *_args: (_ for _ in ()).throw(AssertionError("不應查停車場")),
     )
 
     response = make_client().post("/api/query", json={
@@ -986,7 +594,7 @@ def test_chat_follow_up_receives_previous_session_context(monkeypatch):
     def fake_parse(message, context):
         contexts.append(dict(context))
         return ParkingIntent(
-            intent="compare",
+            intent="recommend" if len(contexts) == 1 else "compare",
             original_destination="臺北市政府",
             address="臺北市信義區市府路1號", district="信義區",
             arrival_time="2026-08-08T18:00:00+08:00", missing_fields=[],
@@ -996,7 +604,7 @@ def test_chat_follow_up_receives_previous_session_context(monkeypatch):
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
     monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
         "display_address": "臺北市政府", "latitude": 25.0375, "longitude": 121.5637})
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [lot_row()])
     monkeypatch.setattr(app_module, "fetch_matching_history", lambda *_args: [])
     client = make_client()
 
@@ -1006,11 +614,10 @@ def test_chat_follow_up_receives_previous_session_context(monkeypatch):
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.get_json()["intent"] == "compare"
-    # 第一個穩定地標由本機解析；只有追問才需要 Gemini 與上一輪狀態。
-    assert len(contexts) == 1
-    assert contexts[0]["destination"] == "臺北市信義區市府路1號"
-    assert contexts[0]["district"] == "信義區"
-    assert contexts[0]["lot_id"] == "TPE1"
+    assert contexts[0] == {}
+    assert contexts[1]["destination"] == "臺北市信義區市府路1號"
+    assert contexts[1]["district"] == "信義區"
+    assert contexts[1]["lot_id"] == "TPE1"
 
 
 def test_chat_naive_arrival_time_is_rejected():

@@ -17,7 +17,7 @@ class Config:
     MYSQL_DATABASE = os.getenv("MYSQL_DATABASE")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
-    # 兩個 Lite 模型互為備援；環境切換主要模型時不會重複呼叫同一模型。
+    # 兩個 Lite 模型互為備援，避免環境設定後重複呼叫同一模型。
     GEMINI_FALLBACK_MODEL = (
         "gemini-3.5-flash-lite"
         if GEMINI_MODEL == "gemini-3.1-flash-lite"
@@ -45,6 +45,4 @@ class Config:
     ANALYTICS_HMAC_SECRET = os.getenv("ANALYTICS_HMAC_SECRET", "")
     ANALYTICS_RETENTION_DAYS = 90
     ANALYTICS_SEGMENT_MIN_DEVICES = int(os.getenv("ANALYTICS_SEGMENT_MIN_DEVICES", "5"))
-    # 新北市路外停車：旗標關閉時不收集、不顯示、不查詢，但保留既有臺北行為。
-    NEW_TAIPEI_ENABLED = os.getenv("NEW_TAIPEI_ENABLED", "0") == "1"
     DEPLOY_VERSION = os.getenv("DEPLOY_VERSION", "unknown")

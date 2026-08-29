@@ -53,7 +53,7 @@ def make_analytics_app(monkeypatch, **config):
     settings.update(config)
     flask_app = app_module.create_app(settings)
     monkeypatch.setattr(
-        app_module, "fetch_current_lots", lambda *_args, **_kwargs: [lot_row()])
+        app_module, "fetch_current_lots", lambda *_args: [lot_row()])
     monkeypatch.setattr(
         app_module, "fetch_matching_history", lambda *_args: [])
     monkeypatch.setattr(
@@ -242,7 +242,7 @@ def test_no_ranked_candidates_records_failed_no_candidates(monkeypatch):
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
     written = []
     app.extensions["analytics_writer"] = written.append
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [])
 
     response = app.test_client().post(
         "/api/query", json=manual_payload(), headers=analytics_headers())
@@ -262,7 +262,7 @@ def test_no_candidates_query_keeps_200_empty_groups_contract(monkeypatch):
     """空結果必須維持原始 200 成功形狀，只加上 request_id。"""
     app = make_analytics_app(monkeypatch)
     monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(app_module, "fetch_current_lots", lambda *_args: [])
 
     response = app.test_client().post("/api/query", json=manual_payload())
 
@@ -579,8 +579,7 @@ def test_terminal_events_use_elapsed_helper_for_duration(monkeypatch):
         })
     monkeypatch.setattr(
         app_module, "fetch_current_lots",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("db down")),
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("db down")),
     )
     internal = app.test_client().post(
         "/api/query", json=manual_payload(), headers=analytics_headers())

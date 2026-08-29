@@ -6,24 +6,7 @@ const ANALYTICS_CONSENT_KEY = "parking_analytics_consent";
 const ANALYTICS_ID_KEY = "parking_analytics_id";
 const ANALYTICS_REQUIRE_CONSENT =
   document.body.dataset.analyticsRequireConsent === "1";
-
-const cityOptions = JSON.parse(
-  document.querySelector("#city-options").textContent);
-const citySelect = document.querySelector("#city");
-const districtSelect = document.querySelector("#district");
-cityOptions.forEach(option => citySelect.add(new Option(option.name, option.code)));
-
-// 行政區完全由伺服器注入的城市選項決定，切換城市時重新填入。
-function fillDistrictOptions(cityCode) {
-  const city = cityOptions.find(option => option.code === cityCode)
-    || cityOptions[0];
-  districtSelect.innerHTML = '<option value="">由地址判斷</option>';
-  (city?.districts || []).forEach(
-    name => districtSelect.add(new Option(name, name)));
-}
-
-citySelect.addEventListener("change", () => fillDistrictOptions(citySelect.value));
-fillDistrictOptions(citySelect.value);
+const districts = ["松山區","信義區","大安區","中山區","中正區","大同區","萬華區","文山區","南港區","內湖區","士林區","北投區"];
 
 const map = L.map("map").setView([25.0478, 121.5319], 12);
 const markerLayer = L.layerGroup().addTo(map);
@@ -35,6 +18,8 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution:"© OpenStreetMap contributors",
 }).addTo(map);
 
+const districtSelect = document.querySelector("#district");
+districts.forEach(name => districtSelect.add(new Option(name, name)));
 const localNow = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
   .toISOString().slice(0,16);
 document.querySelector("#arrival-time").value = localNow;
@@ -258,7 +243,6 @@ document.querySelector("#manual-form").addEventListener("submit", async event =>
   try {
     await submitQuery({
       mode:"manual",
-      city:citySelect.value,
       address:document.querySelector("#address").value,
       district:districtSelect.value,
       arrival_time:arrival,
@@ -298,7 +282,6 @@ function renderLocationChoices(data) {
                request_id:data.request_id});
         await submitQuery({
           mode:"manual",
-          city:choice.city || citySelect.value,
           address:choice.address,
           district:choice.district || "",
           arrival_time:data.arrival_time,
@@ -373,10 +356,9 @@ function displayValue(value, fallback = "官方未標示") {
 function formatFullAddress(lot) {
   const address = (lot.address || "").replaceAll("台北市", "臺北市").trim();
   if (!address) return "地址資料未提供";
-  if (address.startsWith("臺北市") || address.startsWith("新北市")) return address;
-  const city = lot.city || "臺北市";
-  if (lot.district && address.startsWith(lot.district)) return `${city}${address}`;
-  return `${city}${lot.district || ""}${address}`;
+  if (address.startsWith("臺北市")) return address;
+  if (lot.district && address.startsWith(lot.district)) return `臺北市${address}`;
+  return `臺北市${lot.district || ""}${address}`;
 }
 
 function googleMapsUrl(lot) {
@@ -420,8 +402,6 @@ function primaryCard(lot, index) {
     ${mapsUrl
       ? `<a class="parking-address" href="${escapeHtml(mapsUrl)}" target="_blank" rel="noopener noreferrer" data-navigation-rank="${index + 1}" data-lot-id="${escapeHtml(lot.lot_id)}" data-walking-minutes="${lot.walking_duration_minutes ?? ""}" data-availability-bucket="${availabilityBucket(lot.available_spaces)}">${escapeHtml(address)}</a>`
       : `<span class="parking-address">${escapeHtml(address)}</span>`}
-    ${lot.data_time_label
-      ? `<p class="data-time">${escapeHtml(lot.data_time_label)}</p>` : ""}
     <div class="capacity"><strong>${lot.available_spaces}</strong><span>格可停</span><small>共 ${lot.total_spaces} 格</small></div>
     <div class="capacity-bar" aria-label="空位比例 ${Math.round(freePercent)}%"><i style="width:${freePercent}%"></i></div>
     ${metaLine}
@@ -472,8 +452,6 @@ function compactLot(lot) {
     <span class="compact-status">${escapeHtml(lot.decision_label)}${cheapestBadge(lot)}</span>
     <div><strong>${escapeHtml(lot.lot_name)}</strong><small>${lot.available_spaces} / ${lot.total_spaces} 格可停</small></div>
     ${compactMetaLine(lot)}
-    ${lot.data_time_label
-      ? `<span class="data-time">${escapeHtml(lot.data_time_label)}</span>` : ""}
     <span>${escapeHtml(formatProximity(lot))}</span>
     ${mapAction}
   </article>`;
@@ -845,8 +823,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!("serviceWorker" in navigator)) return;
   // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
-  navigator.serviceWorker.register("/static/sw.js?v=city-select-v1", {scope:"/"})
-    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=city-select-v1"));
+  navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v3", {scope:"/"})
+    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v3"));
 
   let deferredPrompt = null;
   const installButton = document.querySelector("#install-app");

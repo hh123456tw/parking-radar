@@ -161,7 +161,9 @@ def test_fetch_status_times_returns_three_time_keys():
         "collector_at": now,
         "metadata_at": now,
     }
-    sql, _params = connection.executions[0]
-    assert "ORDER BY snapshot_id DESC LIMIT 1" in sql
+    sql, params = connection.executions[0]
+    assert "ORDER BY s.snapshot_id DESC LIMIT 1" in sql
     assert "MAX(source_updated_at)" not in sql
     assert "MAX(captured_at)" not in sql
+    assert sql.count("l.source = %s") == 3
+    assert params == ("taipei", "taipei", "taipei")

@@ -7,39 +7,13 @@ from zoneinfo import ZoneInfo
 import httpx
 from google import genai
 from google.genai import errors, types
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 from config import Config
-from city_config import CITIES, normalize_city, validate_city_district
 
-# app.py 的手動解析器在 Task 6 前仍使用這個相容別名；來源統一為 city_config。
-TAIPEI_DISTRICTS = set(CITIES["taipei"].districts)
-
-
-def _infer_city_for_district(district):
-    """行政區唯一屬於某一城市時回傳其代碼；跨市同名或未知時拋錯。"""
-    owners = [code for code, definition in CITIES.items()
-              if district in definition.districts]
-    if len(owners) == 1:
-        return owners[0]
-    if not owners:
-        raise ValueError(f"不支援行政區 {district}")
-    raise ValueError(f"{district} 同時存在於多個城市，請一併提供 city")
-
-
-def _validate_city_district_pair(city, district):
-    """city 與 district 一起驗證；只有 district 時可推論唯一擁有城市。"""
-    if district:
-        district = str(district).strip()
-        if not district:
-            district = None
-    if not district:
-        return city, None
-    if city:
-        city = normalize_city(city)
-        validate_city_district(city, district)
-    else:
-        city = _infer_city_for_district(district)
-    return city, district
+TAIPEI_DISTRICTS = {
+    "松山區", "信義區", "大安區", "中山區", "中正區", "大同區",
+    "萬華區", "文山區", "南港區", "內湖區", "士林區", "北投區",
+}
 
 
 class IntentServiceError(RuntimeError):
@@ -47,22 +21,17 @@ class IntentServiceError(RuntimeError):
 
 
 class LocationCandidate(BaseModel):
-    """Gemini 提出的雙北地點候選；地址仍須經 Nominatim 驗證。"""
+    """Gemini 提出的臺北地點候選；地址仍須經 Nominatim 驗證。"""
     name: str
     address: str
-    city: str | None = None
     district: str | None = None
 
-    @field_validator("city")
+    @field_validator("district")
     @classmethod
-    def validate_city(cls, value):
-        return normalize_city(value)
-
-    @model_validator(mode="after")
-    def validate_city_district(self):
-        self.city, self.district = _validate_city_district_pair(
-            self.city, self.district)
-        return self
+    def validate_district(cls, value):
+        if value is not None and value not in TAIPEI_DISTRICTS:
+            raise ValueError("只支援臺北市十二行政區")
+        return value
 
 
 class ParkingIntent(BaseModel):
@@ -70,29 +39,24 @@ class ParkingIntent(BaseModel):
     intent: Literal["recommend", "history", "compare"]
     original_destination: str | None
     address: str | None
-    city: str | None = None
     district: str | None
     arrival_time: datetime | None
     missing_fields: list[str]
     location_candidates: list[LocationCandidate] = Field(default_factory=list)
 
-    @field_validator("city")
+    @field_validator("district")
     @classmethod
-    def validate_city(cls, value):
-        return normalize_city(value)
-
-    @model_validator(mode="after")
-    def validate_city_district(self):
-        self.city, self.district = _validate_city_district_pair(
-            self.city, self.district)
-        return self
+    def validate_district(cls, value):
+        if value is not None and value not in TAIPEI_DISTRICTS:
+            raise ValueError("只支援臺北市十二行政區")
+        return value
 
 
 def _prompt(message, context):
     """建立窄範圍指令，明確禁止模型虛構停車資料。"""
     now = datetime.now(ZoneInfo("Asia/Taipei")).isoformat()
     return f"""你是停車查詢欄位解析器，只能判斷 recommend、history、compare。
-目前臺北時間：{now}。只接受臺北市與新北市地址；city 必須是 taipei 或 new_taipei。
+目前臺北時間：{now}。只接受臺北市地址與十二行政區。
 不得提供停車場、空位、距離、分數、SQL 或一般聊天答案。
 必要資訊不足時列入 missing_fields，不得猜測。
 original_destination 只是保留使用者原話的選填欄位，不得列入 missing_fields。
@@ -103,7 +67,7 @@ location_candidates 盡量列出最多 3 個不同實體據點，不得自行假
 分別列出可能據點。每個候選必須包含可供地址服務驗證的地面完整門牌與行政區，
 地址不要包含樓層。只有確定臺北市僅有一處時才可只提供 1 個；純行政區查詢
 則回傳空陣列。
-地標不唯一時列出最多 3 個候選，不得虛構停車資料或座標。
+不得虛構臺北市以外的候選，也不得把停車場當成目的地候選。
 若能辨識地標所在行政區，district 必須填入，協助地址服務排除同名地點。
 若使用者沒有提抵達時間，arrival_time 請回傳 null，且不要把 arrival_time
 列入 missing_fields；後端會自動使用 Asia/Taipei 的現在時間。
@@ -140,8 +104,7 @@ def parse_parking_query(message, context=None, client=None):
                 )
                 return ParkingIntent.model_validate_json(response.text)
             except (errors.ServerError, httpx.TimeoutException) as exc:
-                # 服務端高流量或讀取逾時才切換模型；格式或使用者輸入
-                # 錯誤不隱藏，避免把真正的資料契約問題誤判成忙碌。
+                # 服務端高流量或逾時才切換備援模型。
                 last_busy_error = exc
         raise IntentServiceError(
             "Gemini目前忙碌，請稍後重試或改用手動查詢"

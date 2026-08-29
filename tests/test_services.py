@@ -8,7 +8,6 @@ import pytest
 import ai_service
 import geocoder
 from ai_service import IntentServiceError, ParkingIntent, parse_parking_query
-from geocoder import geocode_address
 from config import Config
 
 
@@ -35,66 +34,24 @@ class CommitConnection:
         self.commits += 1
 
 
-@pytest.fixture
-def connection():
-    """回傳只記錄 commit 的連線，讓地址測試完全離線。"""
-    return CommitConnection()
-
-
-def response(items):
-    """回傳帶 Nominatim 結果清單的最小 HTTP response。"""
-    return JsonResponse(items)
-
-
 def valid_intent_json():
     """回傳完整的 Gemini 結構化意圖 fixture。"""
     return json.dumps({
         "intent": "compare",
         "original_destination": "臺北市政府",
         "address": "臺北市信義區市府路1號",
-        "city": "taipei",
         "district": "信義區",
         "arrival_time": "2026-08-08T18:00:00+08:00",
         "missing_fields": [],
     }, ensure_ascii=False)
 
 
-def test_intent_schema_rejects_unsupported_district():
-    """Gemini 即使輸出合法 JSON，也不能把雙北以外行政區交給後端。"""
-    with pytest.raises(ValueError, match="不支援行政區"):
-        ParkingIntent(
-            intent="recommend", original_destination="基隆廟口",
-            address=None, district="仁愛區", arrival_time=None, missing_fields=[])
-
-
-def test_intent_district_without_city_infers_owning_city():
-    """只有行政區時，可推論唯一擁有城市。"""
-    intent = ParkingIntent(
-        intent="recommend", original_destination="板橋車站",
-        address="板橋車站", district="板橋區",
-        arrival_time=None, missing_fields=[], location_candidates=[])
-    assert intent.city == "new_taipei"
-    taipei = ParkingIntent(
-        intent="recommend", original_destination="中正區",
-        address=None, district="中正區",
-        arrival_time=None, missing_fields=[])
-    assert taipei.city == "taipei"
-
-
-def test_new_taipei_intent_accepts_city_and_board_district():
-    intent = ParkingIntent(intent="recommend", original_destination="板橋車站",
-        address="板橋車站", city="new_taipei", district="板橋區",
-        arrival_time=None, missing_fields=[], location_candidates=[])
-    assert intent.city == "new_taipei"
-
-
-def test_intent_rejects_city_district_mismatch():
-    """行政區與城市不一致時，不得讓錯誤的行政區流入資料庫查詢。"""
-    with pytest.raises(ValueError, match="不屬於"):
+def test_intent_schema_rejects_non_taipei_district():
+    """Gemini 即使輸出合法 JSON，也不能把新北行政區交給後端。"""
+    with pytest.raises(ValueError, match="只支援臺北市十二行政區"):
         ParkingIntent(
             intent="recommend", original_destination="板橋車站",
-            address="板橋車站", city="new_taipei", district="信義區",
-            arrival_time=None, missing_fields=[], location_candidates=[])
+            address=None, district="板橋區", arrival_time=None, missing_fields=[])
 
 
 def test_gemini_request_includes_context_model_and_json_schema():
@@ -120,7 +77,6 @@ def test_gemini_request_includes_context_model_and_json_schema():
     assert captured["config"].response_mime_type == "application/json"
     schema = captured["config"].response_json_schema
     assert {"intent", "address", "district", "arrival_time"} <= set(schema["properties"])
-    assert "city" in schema["properties"]
     assert "location_candidates" in schema["properties"]
 
 
@@ -146,11 +102,9 @@ def test_default_gemini_client_has_bounded_request_timeout(monkeypatch):
     assert captured["http_options"].retry_options.attempts == 1
 
 
-def test_gemini_models_are_distinct_lite_fallbacks():
-    """主要與備援模型不得相同，否則服務異常時重試沒有意義。"""
+def test_gemini_primary_and_fallback_models_are_distinct():
+    """主要模型與備援不得相同，否則服務異常時重試沒有意義。"""
     assert Config.GEMINI_MODEL != Config.GEMINI_FALLBACK_MODEL
-    assert {Config.GEMINI_MODEL, Config.GEMINI_FALLBACK_MODEL} == {
-        "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"}
 
 
 def test_gemini_without_api_key_uses_manual_fallback(monkeypatch):
@@ -193,8 +147,8 @@ def test_gemini_high_demand_uses_flash_lite_fallback():
     assert requested_models == [Config.GEMINI_MODEL, Config.GEMINI_FALLBACK_MODEL]
 
 
-def test_gemini_read_timeout_uses_fallback(monkeypatch):
-    """主模型讀取逾時時必須嘗試備援，不能誤稱使用者問題無法理解。"""
+def test_gemini_read_timeout_uses_distinct_fallback(monkeypatch):
+    """主模型逾時必須切換另一個 Lite 模型，不能誤稱問題無法理解。"""
     requested_models = []
     response = type("Response", (), {"text": valid_intent_json()})()
 
@@ -210,29 +164,9 @@ def test_gemini_read_timeout_uses_fallback(monkeypatch):
     models = type("Models", (), {"generate_content": generate_content})()
     client = type("Client", (), {"models": models})()
 
-    result = parse_parking_query("我找臺北車站", client=client)
+    result = parse_parking_query("我要去信義區", client=client)
 
     assert result.district == "信義區"
-    assert requested_models == ["primary-lite", "fallback-lite"]
-
-
-def test_gemini_all_models_timeout_has_clear_retry_message(monkeypatch):
-    """兩個模型都逾時時應說服務忙碌，不得責怪使用者問題無法理解。"""
-    requested_models = []
-
-    def raise_timeout(_self, **kwargs):
-        requested_models.append(kwargs["model"])
-        raise httpx.ReadTimeout("timed out")
-
-    monkeypatch.setattr(ai_service.Config, "GEMINI_MODEL", "primary-lite")
-    monkeypatch.setattr(
-        ai_service.Config, "GEMINI_FALLBACK_MODEL", "fallback-lite")
-    models = type("Models", (), {"generate_content": raise_timeout})()
-    client = type("Client", (), {"models": models})()
-
-    with pytest.raises(IntentServiceError, match="Gemini目前忙碌"):
-        parse_parking_query("我找臺北車站", client=client)
-
     assert requested_models == ["primary-lite", "fallback-lite"]
 
 
@@ -254,87 +188,6 @@ def test_gemini_all_models_busy_has_clear_retry_message():
     assert requested_models == [Config.GEMINI_MODEL, Config.GEMINI_FALLBACK_MODEL]
 
 
-def test_fast_landmark_geocoder_accepts_supported_exact_place():
-    """ORS 的直接地標結果可在 Gemini 前完成簡單目的地定位。"""
-    payload = {"features": [{
-        "geometry": {"coordinates": [121.506637, 25.044073]},
-        "properties": {
-            "name": "西門町商圈", "label": "西門町商圈, Taipei, Taiwan",
-            "region_a": "TC",
-        },
-    }]}
-
-    result = geocoder.geocode_fast_landmark(
-        "西門町", "test-key",
-        http_get=lambda *_args, **_kwargs: response(payload),
-    )
-
-    assert result == {
-        "display_address": "西門町商圈, Taipei, Taiwan",
-        "latitude": 25.044073,
-        "longitude": 121.506637,
-        "city": "taipei",
-        "district": None,
-    }
-
-
-def test_fast_landmark_geocoder_rejects_specific_or_out_of_area_result():
-    """名稱只是前綴或位於雙北外時不可擅自選取，必須交回 Gemini。"""
-    payload = {"features": [
-        {"geometry": {"coordinates": [121.191697, 24.967814]},
-         "properties": {"name": "資策會", "label": "資策會, 桃園市",
-                        "region_a": "TY"}},
-        {"geometry": {"coordinates": [121.548059, 25.022207]},
-         "properties": {"name": "資策會科技法律研究所",
-                        "label": "資策會科技法律研究所, 臺北市",
-                        "region_a": "TC"}},
-    ]}
-
-    assert geocoder.geocode_fast_landmark(
-        "資策會", "test-key",
-        http_get=lambda *_args, **_kwargs: response(payload),
-    ) is None
-
-
-def test_fast_landmark_geocoder_rejects_multiple_same_name_places():
-    """同名結果超過一處時不可直接選第一筆，應保留候選確認流程。"""
-    payload = {"features": [
-        {"geometry": {"coordinates": [121.54, 25.04]},
-         "properties": {"name": "SOGO", "label": "SOGO A",
-                        "region_a": "TC"}},
-        {"geometry": {"coordinates": [121.55, 25.05]},
-         "properties": {"name": "SOGO", "label": "SOGO B",
-                        "region_a": "TC"}},
-    ]}
-
-    assert geocoder.geocode_fast_landmark(
-        "SOGO", "test-key",
-        http_get=lambda *_args, **_kwargs: response(payload),
-    ) is None
-
-
-def test_fast_landmark_geocoder_respects_explicit_city():
-    """使用者寫明臺北市時，不得接受新北市的同名結果。"""
-    payload = {"features": [{
-        "geometry": {"coordinates": [121.46, 25.01]},
-        "properties": {"name": "測試商圈", "label": "測試商圈, 新北市",
-                       "region_a": "TP"},
-    }]}
-
-    assert geocoder.geocode_fast_landmark(
-        "臺北市測試", "test-key",
-        http_get=lambda *_args, **_kwargs: response(payload),
-    ) is None
-
-
-def test_fast_landmark_geocoder_malformed_success_response_falls_back():
-    """外部服務即使回 200，JSON 契約異常也只能降級，不能形成 500。"""
-    assert geocoder.geocode_fast_landmark(
-        "西門町", "test-key",
-        http_get=lambda *_args, **_kwargs: response([]),
-    ) is None
-
-
 def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):
     """地址先正規化；快取命中時不得再消耗公共 Nominatim 請求。"""
     assert geocoder.normalize_address(" 信義區 忠孝東路五段 7 號 ") == \
@@ -344,7 +197,6 @@ def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):
     cached = {
         "normalized_address": "臺北市信義區市府路1號", "display_address": "臺北市政府",
         "latitude": 25.0375, "longitude": 121.5637,
-        "city": "taipei", "district": "信義區",
     }
     monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: cached)
 
@@ -355,61 +207,6 @@ def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):
     )
 
     assert result == cached
-
-
-def test_geocoder_accepts_verified_new_taipei_result(connection, monkeypatch):
-    """城市明確時，驗證過的新北結果必須帶回 city 與 district。"""
-    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
-    monkeypatch.setattr(geocoder, "save_cached_geocode",
-                        lambda _connection, row: None)
-    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
-
-    result = geocode_address("板橋車站", connection, city="new_taipei",
-        http_get=lambda *_args, **_kwargs: response([{
-            "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
-            "lat": "25.0143", "lon": "121.4638"}]))
-
-    assert result["city"] == "new_taipei"
-    assert result["district"] == "板橋區"
-    assert connection.commits == 1
-
-
-def test_geocoder_new_taipei_query_is_city_qualified(monkeypatch):
-    """指定新北市時，實際送出的 Nominatim 查詢不得再預設臺北市。"""
-    requested_queries = []
-    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
-    monkeypatch.setattr(geocoder, "save_cached_geocode",
-                        lambda _connection, row: None)
-    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
-
-    def fake_get(_url, **kwargs):
-        requested_queries.append(kwargs["params"]["q"])
-        return response([{
-            "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
-            "lat": "25.0143", "lon": "121.4638"}])
-
-    geocoder.geocode_address(
-        "板橋車站", CommitConnection(), city="new_taipei", http_get=fake_get)
-
-    assert requested_queries == ["新北市板橋車站"]
-
-
-def test_geocoder_cache_hit_returns_verified_city_and_district(monkeypatch):
-    """快取命中時仍須回傳可驗證的 city 與 district，不能遺失。"""
-    cached = {
-        "normalized_address": "新北市板橋車站",
-        "display_address": "板橋車站, 板橋區, 新北市, 臺灣",
-        "latitude": 25.0143, "longitude": 121.4638,
-    }
-    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: cached)
-
-    result = geocoder.geocode_address(
-        "板橋車站", object(), city="new_taipei",
-        http_get=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("快取命中不應呼叫 HTTP")))
-
-    assert result["city"] == "new_taipei"
-    assert result["district"] == "板橋區"
 
 
 def test_known_landmarks_use_fixed_addresses_and_other_names_stay_generic():
@@ -444,24 +241,6 @@ def test_geocode_candidates_validates_and_deduplicates(monkeypatch):
     assert [row["name"] for row in verified] == ["A"]
 
 
-def test_geocode_candidates_keeps_unverified_district_none(monkeypatch):
-    """驗證文字沒有可辨識行政區時，不得回退使用 Gemini 猜的行政區。"""
-    monkeypatch.setattr(
-        geocoder, "geocode_address",
-        lambda *_args, **_kwargs: {
-            "display_address": "板橋車站, 新北市, 臺灣",
-            "latitude": 25.0143, "longitude": 121.4638,
-            "city": "new_taipei", "district": None,
-        },
-    )
-
-    verified = geocoder.geocode_candidates([
-        {"name": "板橋車站", "address": "板橋車站", "district": "板橋區"},
-    ], object())
-
-    assert verified[0]["district"] is None
-
-
 def test_landmark_query_with_city_suffix_does_not_duplicate_taipei():
     """地標與行政區組合後已有臺北市，不得再在開頭重複補城市。"""
     assert geocoder.normalize_address("台北車站, 中正區, 臺北市") == \
@@ -474,124 +253,6 @@ def test_nominatim_queries_reorder_taipei_house_address():
         "1, 市府路, 西村里, 信義區, 臺北市",
         "臺北市信義區西村里市府路1號",
     ]
-
-
-def test_geocoder_accepts_verified_new_taipei_result(connection, monkeypatch):
-    """城市明確時，驗證過的新北結果必須帶回 city 與 district。"""
-    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
-    monkeypatch.setattr(geocoder, "save_cached_geocode",
-                        lambda _connection, row: None)
-    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
-
-    result = geocode_address("板橋車站", connection, city="new_taipei",
-        http_get=lambda *_args, **_kwargs: response([{
-            "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
-            "lat": "25.0143", "lon": "121.4638"}]))
-
-    assert result["city"] == "new_taipei"
-    assert result["district"] == "板橋區"
-    assert connection.commits == 1
-
-
-def test_geocoder_rejects_display_name_missing_requested_city(monkeypatch):
-    """指定 city 時，display_name 未包含該城市官方名稱必須拒絕。"""
-    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
-    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
-    monkeypatch.setattr(
-        geocoder, "save_cached_geocode",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("不應寫入快取")),
-    )
-
-    result = geocoder.geocode_address(
-        "板橋車站", object(), city="taipei",
-        http_get=lambda *_args, **_kwargs: response([{
-            "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
-            "lat": "25.0143", "lon": "121.4638"}]))
-
-    assert result is None
-
-
-def test_geocoder_city_conflict_parity_between_cache_hit_and_miss(
-        monkeypatch):
-    """地址文字已含新北市時，指定 city=taipei 也必須冷熱快取行為一致。
-
-    設計規則：地址已有城市時以地址城市為準，所以冷路徑與熱路徑都要
-    回傳 new_taipei，不能讓同一個請求依快取溫度而結果不同。
-    """
-    nominatim_payload = [{
-        "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
-        "lat": "25.0143", "lon": "121.4638",
-    }]
-    saved = []
-    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
-    monkeypatch.setattr(geocoder, "save_cached_geocode",
-                        lambda _connection, row: saved.append(row))
-    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
-
-    cold = geocoder.geocode_address(
-        "新北市板橋車站", CommitConnection(), city="taipei",
-        http_get=lambda *_args, **_kwargs: response(nominatim_payload))
-
-    assert cold is not None and cold["city"] == "new_taipei"
-    assert cold["district"] == "板橋區"
-    assert saved and saved[0]["normalized_address"] == "新北市板橋車站"
-
-    cached = {
-        "normalized_address": "新北市板橋車站",
-        "display_address": "板橋車站, 板橋區, 新北市, 臺灣",
-        "latitude": 25.0143, "longitude": 121.4638,
-    }
-    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: cached)
-
-    warm = geocoder.geocode_address(
-        "新北市板橋車站", object(), city="taipei",
-        http_get=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("有效快取命中不應呼叫 HTTP")))
-
-    assert warm["city"] == "new_taipei"
-    assert warm["district"] == "板橋區"
-
-
-def test_geocoder_cache_city_mismatch_is_treated_as_miss(monkeypatch):
-    """快取城市與有效城市不符時，不得靜默覆寫，必須視為 miss 重新查詢。"""
-    monkeypatch.setattr(
-        geocoder, "get_cached_geocode",
-        lambda *_args: {
-            "normalized_address": "新北市板橋車站",
-            "display_address": "某地, 臺北市",
-            "latitude": 25.04, "longitude": 121.54,
-        })
-    monkeypatch.setattr(geocoder, "save_cached_geocode",
-                        lambda _connection, row: None)
-    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
-
-    result = geocoder.geocode_address(
-        "新北市板橋車站", CommitConnection(), city="taipei",
-        http_get=lambda *_args, **_kwargs: response([{
-            "display_name": "板橋車站, 板橋區, 新北市, 臺灣",
-            "lat": "25.0143", "lon": "121.4638"}]))
-
-    assert result is not None
-    assert result["city"] == "new_taipei"
-    assert result["district"] == "板橋區"
-
-
-def test_geocoder_cache_hit_respects_requested_city_match(monkeypatch):
-    """正常快取命中時，有效城市與要求城市一致即可直接回傳且不呼叫 HTTP。"""
-    cached = {
-        "normalized_address": "臺北市信義區市府路1號",
-        "display_address": "臺北市政府, 信義區, 臺北市",
-        "latitude": 25.0375, "longitude": 121.5637,
-    }
-    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: cached)
-
-    result = geocoder.geocode_address(
-        "市府路1號", object(), city="taipei",
-        http_get=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("快取命中不應呼叫 HTTP")))
-
-    assert result["city"] == "taipei"
-    assert result["district"] == "信義區"
 
 
 def test_geocode_uses_reordered_taipei_house_address(monkeypatch):
@@ -652,11 +313,10 @@ def test_nominatim_request_uses_policy_headers_and_saves_cache(monkeypatch):
 
 @pytest.mark.parametrize("payload", [
     [],
-    [{"display_name": "基隆市信義區", "lat": "25.13", "lon": "121.74"}],
+    [{"display_name": "新北市板橋區", "lat": "25.01", "lon": "121.46"}],
 ])
-def test_nominatim_empty_or_unsupported_city_result_returns_none(
-        monkeypatch, payload):
-    """查無資料或結果不在雙北時，不得寫入地址快取。"""
+def test_nominatim_empty_or_non_taipei_result_returns_none(monkeypatch, payload):
+    """查無資料或結果不在臺北市時，不得寫入地址快取。"""
     monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
     monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
     monkeypatch.setattr(

@@ -5,73 +5,22 @@ from uuid import UUID
 
 import app as app_module
 import pytest
-from ai_service import ParkingIntent
 
 
-def make_client(**config):
+def make_client():
     """建立不向測試程序傳播例外的 Flask 測試客戶端。"""
-    settings = {
+    flask_app = app_module.create_app({
         "TESTING": False,
         "PROPAGATE_EXCEPTIONS": False,
         "SECRET_KEY": "test",
         "AUTO_REFRESH_ENABLED": False,
-    }
-    settings.update(config)
-    flask_app = app_module.create_app(settings)
+    })
     return flask_app.test_client()
 
 
 def fail_connection():
     """模擬 MySQL 在建立連線階段就無法使用。"""
     raise RuntimeError("mysql unavailable")
-
-
-def test_local_chat_parser_handles_known_landmark_without_gemini():
-    """穩定的已知地標應走本機解析，避免簡單查詢等待 Gemini。"""
-    parsed = app_module.parse_local_chat_query("我找臺北車站")
-
-    assert parsed == {
-        "intent": "recommend",
-        "original_destination": "臺北車站",
-        "address": "臺北車站",
-        "city": "taipei",
-        "district": "中正區",
-        "arrival_time": None,
-        "missing_fields": [],
-        "location_candidates": [],
-    }
-
-
-def test_local_chat_parser_handles_bare_known_landmark():
-    """只輸入固定地標名稱時也不需要等待 Gemini。"""
-    assert app_module.parse_local_chat_query("臺北車站")["district"] == "中正區"
-
-
-@pytest.mark.parametrize("message", ["臺北車站明天晚上", "查臺北車站歷史"])
-def test_local_chat_parser_preserves_complex_intent_for_gemini(message):
-    """包含時間或歷史意圖時不可被簡單推薦路徑攔截。"""
-    assert app_module.parse_local_chat_query(message) is None
-
-
-@pytest.mark.parametrize(("message", "expected"), [
-    ("西門町", "西門町"),
-    ("我要去西門町", "西門町"),
-    ("我找 西門町", "西門町"),
-])
-def test_extract_simple_destination_for_fast_geocoding(message, expected):
-    """單純推薦句可先查通用地標服務，不必先等待 Gemini。"""
-    assert app_module.extract_simple_destination(message) == expected
-
-
-@pytest.mark.parametrize("message", ["西門町明天晚上", "查西門町歷史", "西門町和信義區比較"])
-def test_extract_simple_destination_rejects_time_history_and_compare(message):
-    """時間、歷史與比較意圖仍須由 Gemini 解讀。"""
-    assert app_module.extract_simple_destination(message) is None
-
-
-def test_local_chat_parser_leaves_ambiguous_landmark_to_gemini():
-    """未知或可能多據點的地標仍交給 Gemini 產生可選候選。"""
-    assert app_module.parse_local_chat_query("我要去資策會") is None
 
 
 def test_query_database_connection_failure_returns_json_503(monkeypatch):
@@ -132,81 +81,6 @@ def test_manual_query_validation_returns_json_400(payload, message):
     body = response.get_json()
     UUID(body["request_id"])
     assert body["error"] == message
-
-
-def test_manual_parser_locks_taipei_only_district_contract():
-    """功能旗標開放前，手動表單解析器必須繼續拒絕新北行政區。"""
-    with pytest.raises(ValueError, match="只支援臺北市十二行政區"):
-        app_module.parse_manual_payload({
-            "district": "板橋區",
-            "arrival_time": "2026-08-26T18:00:00+08:00",
-        })
-
-
-def test_manual_parser_defaults_city_to_taipei_when_flag_off():
-    """旗標關閉時，未帶 city 的行政區查詢維持既有臺北行為。"""
-    parsed = app_module.parse_manual_payload({
-        "district": "信義區",
-        "arrival_time": "2026-08-26T18:00:00+08:00",
-    })
-
-    assert parsed["city"] == "taipei"
-
-
-def test_manual_parser_accepts_new_taipei_city_district_pair():
-    """旗標開啟時，city 與 district 必須屬於同一城市。"""
-    parsed = app_module.parse_manual_payload({
-        "city": "新北市", "district": "板橋區",
-        "arrival_time": "2026-08-26T18:00:00+08:00",
-    }, new_taipei_enabled=True)
-
-    assert parsed["city"] == "new_taipei"
-    with pytest.raises(ValueError, match="信義區 不屬於 新北市"):
-        app_module.parse_manual_payload({
-            "city": "new_taipei", "district": "信義區",
-            "arrival_time": "2026-08-26T18:00:00+08:00",
-        }, new_taipei_enabled=True)
-
-
-def test_flag_on_district_query_requires_city():
-    """旗標開啟後，行政區查詢必須明確選擇城市。"""
-    response = make_client(NEW_TAIPEI_ENABLED=True).post("/api/query", json={
-        "mode": "manual", "district": "板橋區",
-        "arrival_time": "2026-08-26T18:00:00+08:00"})
-
-    assert response.status_code == 400
-    body = response.get_json()
-    UUID(body["request_id"])
-    assert body["error"] == "請選擇城市"
-
-
-def test_flag_off_rejects_new_taipei_city_even_with_stale_rows():
-    """旗標關閉時，即使資料庫殘留新北資料也必須拒絕 city=new_taipei。"""
-    response = make_client(NEW_TAIPEI_ENABLED=False).post("/api/query", json={
-        "mode": "manual", "city": "new_taipei", "district": "板橋區",
-        "arrival_time": "2026-08-26T18:00:00+08:00"})
-
-    assert response.status_code == 400
-    body = response.get_json()
-    UUID(body["request_id"])
-    assert body["error"] == "新北市停車資料尚未開放"
-
-
-def test_flag_off_rejects_chat_new_taipei_intent(monkeypatch):
-    """聊天意圖指出新北時，旗標關閉同樣必須以 400 拒絕。"""
-    monkeypatch.setattr(
-        app_module, "parse_parking_query",
-        lambda *_args, **_kwargs: ParkingIntent(
-            intent="recommend", original_destination="板橋車站",
-            address="板橋車站", city="new_taipei", district="板橋區",
-            arrival_time="2026-08-26T18:00:00+08:00", missing_fields=[]),
-    )
-
-    response = make_client(NEW_TAIPEI_ENABLED=False).post(
-        "/api/query", json={"mode": "chat", "message": "我要去板橋車站"})
-
-    assert response.status_code == 400
-    assert response.get_json()["error"] == "新北市停車資料尚未開放"
 
 
 @pytest.mark.parametrize(("parsed", "message"), [
@@ -332,8 +206,7 @@ def test_fresh_snapshot_skips_on_demand_collector(monkeypatch):
     """45 分鐘內的快照直接使用，不得浪費官方 API 請求。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
-        app_module, "_latest_snapshot_times",
-        lambda: {"taipei": now - timedelta(minutes=10)})
+        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=10))
     monkeypatch.setattr(
         app_module, "collect_once",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("不應更新")),
@@ -346,8 +219,7 @@ def test_stale_snapshot_returns_immediately_without_collector(monkeypatch):
     """已有舊資料時不得讓使用者等待完整 collector，應立即誠實降級。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
-        app_module, "_latest_snapshot_times",
-        lambda: {"taipei": now - timedelta(minutes=60)})
+        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=60))
     monkeypatch.setattr(
         app_module, "collect_once",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("不應同步更新")),
@@ -361,8 +233,7 @@ def test_stale_snapshot_does_not_depend_on_official_api(monkeypatch):
     """已有舊資料時即使官方失敗，也不應在查詢路徑呼叫外部 API。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
-        app_module, "_latest_snapshot_times",
-        lambda: {"taipei": now - timedelta(minutes=67)})
+        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=67))
     monkeypatch.setattr(
         app_module, "collect_once",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("official down")),
@@ -376,7 +247,7 @@ def test_stale_snapshot_does_not_depend_on_official_api(monkeypatch):
 
 def test_failed_refresh_without_any_snapshot_is_unavailable(monkeypatch):
     """完全沒有可降級資料時，回傳明確錯誤而不是空白成功結果。"""
-    monkeypatch.setattr(app_module, "_latest_snapshot_times", lambda: {})
+    monkeypatch.setattr(app_module, "_latest_snapshot_time", lambda: None)
     monkeypatch.setattr(
         app_module, "collect_once",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("official down")),
@@ -385,30 +256,3 @@ def test_failed_refresh_without_any_snapshot_is_unavailable(monkeypatch):
     with pytest.raises(app_module.ParkingDataUnavailable,
                        match="暫時無法取得官方停車資料"):
         app_module.ensure_fresh_parking_data()
-
-
-def test_partial_refresh_with_missing_source_still_returns_stale(monkeypatch):
-    """部分補抓後某來源仍缺資料時，不得因 None 混入 max 而誤報 503。"""
-    now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
-    state = {"phase": "empty"}
-
-    def snapshot_times():
-        if state["phase"] == "empty":
-            return {}
-        return {"taipei": now - timedelta(minutes=120)}
-
-    collected = []
-    monkeypatch.setattr(app_module, "_latest_snapshot_times", snapshot_times)
-
-    def collect_once(**_kwargs):
-        state["phase"] = "refreshed"
-        collected.append(True)
-        return {"taipei": {"status": "ok"}}
-
-    monkeypatch.setattr(app_module, "collect_once", collect_once)
-
-    result = app_module.ensure_fresh_parking_data(
-        now=now, required_sources={"taipei", "new_taipei"})
-
-    assert result == ("stale", "官方尚未提供更新，目前顯示 120 分鐘前資料")
-    assert collected == [True]
