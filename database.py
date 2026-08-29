@@ -22,10 +22,8 @@ def upsert_parking_lots(connection, lots):
              total_spaces, fee_info, fare_rules_json,
              facility_type, facility_source, metadata_checked_at,
              service_time, latitude, longitude,
-             supports_realtime, source_updated_at,
-             city, source, source_lot_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s)
+             supports_realtime, source_updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             lot_name=VALUES(lot_name), district=VALUES(district),
             address=VALUES(address), operator_type=VALUES(operator_type),
@@ -63,8 +61,7 @@ def upsert_parking_lots(connection, lots):
             "facility_type", "facility_source", "metadata_checked_at",
             "service_time", "latitude", "longitude",
             "supports_realtime", "source_updated_at")
-    values = [tuple(row.get(key) for key in keys)
-              + ("臺北市", "taipei", row["lot_id"]) for row in lots]
+    values = [tuple(row.get(key) for key in keys) for row in lots]
     with connection.cursor() as cursor:
         cursor.executemany(sql, values)
         return cursor.rowcount
@@ -91,11 +88,8 @@ def fetch_latest_snapshot_time(connection):
     """回傳資料庫最後一次成功收集時間；完全沒有快照時回傳 None。"""
     with connection.cursor() as cursor:
         cursor.execute(
-            "SELECT s.captured_at FROM parking_snapshots s "
-            "JOIN parking_lots l ON l.lot_id = s.lot_id "
-            "WHERE l.source = %s "
-            "ORDER BY s.snapshot_id DESC LIMIT 1",
-            ("taipei",),
+            "SELECT captured_at FROM parking_snapshots "
+            "ORDER BY snapshot_id DESC LIMIT 1"
         )
         rows = list(cursor.fetchall())
         row = rows[0] if rows else None
@@ -105,7 +99,7 @@ def fetch_latest_snapshot_time(connection):
 def fetch_current_lots(connection, district=None, freshness_minutes=45):
     """取得每場站最新有效快照；freshness_minutes=None 時允許舊資料。"""
     freshness_sql = ""
-    params = ["taipei"]
+    params = []
     if freshness_minutes is not None:
         freshness_sql = (
             "AND s.captured_at >= UTC_TIMESTAMP() - INTERVAL %s MINUTE"
@@ -120,9 +114,8 @@ def fetch_current_lots(connection, district=None, freshness_minutes=45):
                        PARTITION BY l.lot_id ORDER BY s.captured_at DESC
                    ) AS row_num
             FROM parking_lots l
-            STRAIGHT_JOIN parking_snapshots s ON s.lot_id = l.lot_id
+            JOIN parking_snapshots s ON s.lot_id = l.lot_id
             WHERE l.supports_realtime = TRUE
-              AND l.source = %s
               {freshness_sql}
         ) latest
         WHERE row_num = 1
@@ -141,12 +134,11 @@ def fetch_history(connection, lot_id, start_utc, end_utc):
         SELECT s.lot_id, s.available_spaces, s.captured_at, l.total_spaces
         FROM parking_snapshots s
         JOIN parking_lots l ON l.lot_id = s.lot_id
-        WHERE s.lot_id = %s AND l.source = %s
-          AND s.captured_at BETWEEN %s AND %s
+        WHERE s.lot_id = %s AND s.captured_at BETWEEN %s AND %s
         ORDER BY s.captured_at
     """
     with connection.cursor() as cursor:
-        cursor.execute(sql, (lot_id, "taipei", start_utc, end_utc))
+        cursor.execute(sql, (lot_id, start_utc, end_utc))
         return list(cursor.fetchall())
 
 
@@ -160,11 +152,10 @@ def fetch_matching_history(connection, lot_ids, start_utc, end_utc):
         FROM parking_snapshots s
         JOIN parking_lots l ON l.lot_id = s.lot_id
         WHERE s.lot_id IN ({placeholders})
-          AND l.source = %s
           AND s.captured_at BETWEEN %s AND %s
         ORDER BY s.lot_id, s.captured_at
     """
-    params = tuple(lot_ids) + ("taipei", start_utc, end_utc)
+    params = tuple(lot_ids) + (start_utc, end_utc)
     with connection.cursor() as cursor:
         cursor.execute(sql, params)
         return list(cursor.fetchall())
@@ -204,10 +195,9 @@ def fetch_parking_metadata_candidates(connection):
         SELECT lot_id, lot_name, latitude, longitude,
                facility_type, facility_source
         FROM parking_lots
-        WHERE source = %s
     """
     with connection.cursor() as cursor:
-        cursor.execute(sql, ("taipei",))
+        cursor.execute(sql)
         return list(cursor.fetchall())
 
 

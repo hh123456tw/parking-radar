@@ -113,9 +113,6 @@ def test_upsert_parking_lots_binds_complete_row_as_parameters():
     for column in ("fare_rules_json", "facility_type", "facility_source",
                    "metadata_checked_at"):
         assert column in sql
-    for column in ("city", "source", "source_lot_id"):
-        assert column in sql
-    assert values[0][-3:] == ("臺北市", "taipei", "TPE0001")
     assert count == 1
 
 
@@ -148,8 +145,6 @@ def test_fetch_parking_metadata_candidates_selects_sync_columns():
     for column in ("lot_id", "lot_name", "latitude", "longitude",
                    "facility_type", "facility_source"):
         assert column in sql
-    assert "source = %s" in sql
-    assert connection.spy_cursor.calls[0][1] == ("taipei",)
 
 
 def test_update_parking_metadata_uses_one_parameterized_executemany():
@@ -192,18 +187,16 @@ def test_fetch_current_lots_supports_all_city_and_district_queries():
     database.fetch_current_lots(city_connection, freshness_minutes=45)
     city_sql, city_params = city_connection.spy_cursor.calls[0]
     assert "ROW_NUMBER()" in city_sql
-    assert "STRAIGHT_JOIN parking_snapshots" in city_sql
     assert "s.source_updated_at AS snapshot_updated_at" in city_sql
     assert "AND district = %s" not in city_sql
-    assert "l.source = %s" in city_sql
-    assert city_params == ("taipei", 45)
+    assert city_params == (45,)
 
     district_connection = SpyConnection([{"lot_id": "TPE0001"}])
     rows = database.fetch_current_lots(
         district_connection, "信義區", freshness_minutes=45)
     district_sql, district_params = district_connection.spy_cursor.calls[0]
     assert "AND district = %s" in district_sql
-    assert district_params == ("taipei", 45, "信義區")
+    assert district_params == (45, "信義區")
     assert rows == [{"lot_id": "TPE0001"}]
 
 
@@ -213,17 +206,15 @@ def test_latest_snapshot_and_stale_fallback_queries():
     time_connection = SpyConnection([{"captured_at": captured_at}])
     assert database.fetch_latest_snapshot_time(time_connection) == captured_at
     latest_sql = time_connection.spy_cursor.calls[0][0]
-    assert "ORDER BY s.snapshot_id DESC LIMIT 1" in latest_sql
+    assert "ORDER BY snapshot_id DESC LIMIT 1" in latest_sql
     assert "MAX(captured_at)" not in latest_sql
-    assert "l.source = %s" in latest_sql
-    assert time_connection.spy_cursor.calls[0][1] == ("taipei",)
 
     stale_connection = SpyConnection([{"lot_id": "TPE0001"}])
     rows = database.fetch_current_lots(
         stale_connection, "信義區", freshness_minutes=None)
     sql, params = stale_connection.spy_cursor.calls[0]
     assert "UTC_TIMESTAMP()" not in sql
-    assert params == ("taipei", "信義區")
+    assert params == ("信義區",)
     assert rows == [{"lot_id": "TPE0001"}]
 
 
@@ -237,8 +228,7 @@ def test_fetch_history_uses_lot_and_time_parameters():
 
     sql, params = connection.spy_cursor.calls[0]
     assert "TPE0001" not in sql
-    assert "l.source = %s" in sql
-    assert params == ("TPE0001", "taipei", start, end)
+    assert params == ("TPE0001", start, end)
     assert rows == [{"lot_id": "TPE0001"}]
 
 
@@ -252,8 +242,7 @@ def test_fetch_matching_history_handles_empty_and_multiple_ids():
     database.fetch_matching_history(connection, ["TPE1", "TPE2"], "start", "end")
     sql, params = connection.spy_cursor.calls[0]
     assert "IN(%s,%s)" in "".join(sql.split())
-    assert "l.source = %s" in sql
-    assert params == ("TPE1", "TPE2", "taipei", "start", "end")
+    assert params == ("TPE1", "TPE2", "start", "end")
 
 
 def test_geocode_cache_queries_and_saves_with_parameters():

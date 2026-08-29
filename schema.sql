@@ -3,10 +3,6 @@ CREATE TABLE IF NOT EXISTS parking_lots (
     lot_id VARCHAR(32) PRIMARY KEY,
     lot_name VARCHAR(120) NOT NULL,
     district VARCHAR(20) NOT NULL,
-    -- 固定臺北來源欄位只為相容既有正式資料庫，不開放跨城市查詢。
-    city VARCHAR(20) NOT NULL,
-    source VARCHAR(20) NOT NULL,
-    source_lot_id VARCHAR(64) NOT NULL,
     address VARCHAR(255) NOT NULL,
     operator_type VARCHAR(40) NOT NULL,
     total_spaces INT NOT NULL,
@@ -24,8 +20,7 @@ CREATE TABLE IF NOT EXISTS parking_lots (
     source_updated_at DATETIME NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_lots_district (district),
-    UNIQUE KEY uq_lots_source_id (source, source_lot_id)
+    INDEX idx_lots_district (district)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 每筆快照只保存官方格數與時間；負數特殊狀態不寫入此表。

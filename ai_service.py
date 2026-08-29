@@ -4,7 +4,6 @@ import json
 from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
-import httpx
 from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel, Field, field_validator
@@ -103,8 +102,8 @@ def parse_parking_query(message, context=None, client=None):
                     ),
                 )
                 return ParkingIntent.model_validate_json(response.text)
-            except (errors.ServerError, httpx.TimeoutException) as exc:
-                # 服務端高流量或逾時才切換備援模型。
+            except errors.ServerError as exc:
+                # 只有服務端高流量才切換模型；格式或使用者輸入錯誤不隱藏。
                 last_busy_error = exc
         raise IntentServiceError(
             "Gemini目前忙碌，請稍後重試或改用手動查詢"

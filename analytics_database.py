@@ -130,19 +130,14 @@ def fetch_status_times(connection):
     """一次取出儀表板需要的三個最新時間：官方資料、Collector 與後設資料。"""
     sql = """
         SELECT
-            (SELECT s.source_updated_at FROM parking_snapshots s
-             JOIN parking_lots l ON l.lot_id = s.lot_id
-             WHERE l.source = %s
-             ORDER BY s.snapshot_id DESC LIMIT 1) AS official_data_at,
-            (SELECT s.captured_at FROM parking_snapshots s
-             JOIN parking_lots l ON l.lot_id = s.lot_id
-             WHERE l.source = %s
-             ORDER BY s.snapshot_id DESC LIMIT 1) AS collector_at,
-            (SELECT MAX(l.metadata_checked_at) FROM parking_lots l
-             WHERE l.source = %s) AS metadata_at
+            (SELECT source_updated_at FROM parking_snapshots
+             ORDER BY snapshot_id DESC LIMIT 1) AS official_data_at,
+            (SELECT captured_at FROM parking_snapshots
+             ORDER BY snapshot_id DESC LIMIT 1) AS collector_at,
+            (SELECT MAX(metadata_checked_at) FROM parking_lots) AS metadata_at
     """
     with connection.cursor() as cursor:
-        cursor.execute(sql, ("taipei", "taipei", "taipei"))
+        cursor.execute(sql)
         rows = list(cursor.fetchall())
         row = rows[0] if rows else {}
         return {

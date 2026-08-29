@@ -2,7 +2,6 @@
 
 import json
 
-import httpx
 import pytest
 
 import ai_service
@@ -102,11 +101,6 @@ def test_default_gemini_client_has_bounded_request_timeout(monkeypatch):
     assert captured["http_options"].retry_options.attempts == 1
 
 
-def test_gemini_primary_and_fallback_models_are_distinct():
-    """主要模型與備援不得相同，否則服務異常時重試沒有意義。"""
-    assert Config.GEMINI_MODEL != Config.GEMINI_FALLBACK_MODEL
-
-
 def test_gemini_without_api_key_uses_manual_fallback(monkeypatch):
     """未設定 API key 時不得建立 client，應立即回傳可理解的錯誤。"""
     monkeypatch.setattr(ai_service.Config, "GEMINI_API_KEY", "")
@@ -144,30 +138,7 @@ def test_gemini_high_demand_uses_flash_lite_fallback():
     result = parse_parking_query("我要去信義區", client=client)
 
     assert result.district == "信義區"
-    assert requested_models == [Config.GEMINI_MODEL, Config.GEMINI_FALLBACK_MODEL]
-
-
-def test_gemini_read_timeout_uses_distinct_fallback(monkeypatch):
-    """主模型逾時必須切換另一個 Lite 模型，不能誤稱問題無法理解。"""
-    requested_models = []
-    response = type("Response", (), {"text": valid_intent_json()})()
-
-    def generate_content(_self, **kwargs):
-        requested_models.append(kwargs["model"])
-        if len(requested_models) == 1:
-            raise httpx.ReadTimeout("timed out")
-        return response
-
-    monkeypatch.setattr(ai_service.Config, "GEMINI_MODEL", "primary-lite")
-    monkeypatch.setattr(
-        ai_service.Config, "GEMINI_FALLBACK_MODEL", "fallback-lite")
-    models = type("Models", (), {"generate_content": generate_content})()
-    client = type("Client", (), {"models": models})()
-
-    result = parse_parking_query("我要去信義區", client=client)
-
-    assert result.district == "信義區"
-    assert requested_models == ["primary-lite", "fallback-lite"]
+    assert requested_models == [Config.GEMINI_MODEL, "gemini-3.1-flash-lite"]
 
 
 def test_gemini_all_models_busy_has_clear_retry_message():
@@ -185,7 +156,7 @@ def test_gemini_all_models_busy_has_clear_retry_message():
     with pytest.raises(IntentServiceError, match="Gemini目前忙碌"):
         parse_parking_query("我要去信義區", client=client)
 
-    assert requested_models == [Config.GEMINI_MODEL, Config.GEMINI_FALLBACK_MODEL]
+    assert requested_models == [Config.GEMINI_MODEL, "gemini-3.1-flash-lite"]
 
 
 def test_normalize_address_and_cache_hit_avoid_http(monkeypatch):
