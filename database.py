@@ -102,30 +102,43 @@ def fetch_current_lots(connection, district=None, freshness_minutes=45):
     params = []
     if freshness_minutes is not None:
         freshness_sql = (
-            "AND s.captured_at >= UTC_TIMESTAMP() - INTERVAL %s MINUTE"
+            "AND s2.captured_at >= UTC_TIMESTAMP() - INTERVAL %s MINUTE"
         )
         params.append(freshness_minutes)
     sql = """
-        SELECT * FROM (
-            SELECT l.*, s.available_spaces,
-                   s.source_updated_at AS snapshot_updated_at,
-                   s.captured_at,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY l.lot_id ORDER BY s.captured_at DESC
-                   ) AS row_num
-            FROM parking_lots l
-            JOIN parking_snapshots s ON s.lot_id = l.lot_id
-            WHERE l.supports_realtime = TRUE
+        SELECT l.*, s.available_spaces,
+               s.source_updated_at AS snapshot_updated_at,
+               s.captured_at
+        FROM parking_lots l
+        JOIN parking_snapshots s ON s.snapshot_id = (
+            SELECT s2.snapshot_id
+            FROM parking_snapshots s2
+            WHERE s2.lot_id = l.lot_id
               {freshness_sql}
-        ) latest
-        WHERE row_num = 1
+            ORDER BY s2.captured_at DESC, s2.snapshot_id DESC
+            LIMIT 1
+        )
+        WHERE l.supports_realtime = TRUE
     """.format(freshness_sql=freshness_sql)
     if district:
-        sql += " AND district = %s"
+        sql += " AND l.district = %s"
         params.append(district)
     with connection.cursor() as cursor:
         cursor.execute(sql, tuple(params))
         return list(cursor.fetchall())
+
+
+def delete_expired_snapshots_batch(connection, cutoff_utc, batch_size=10000):
+    """刪除截止時間前的一小批快照，避免單次長交易影響即時查詢。"""
+    sql = """
+        DELETE FROM parking_snapshots
+        WHERE captured_at < %s
+        ORDER BY captured_at
+        LIMIT %s
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(sql, (cutoff_utc, batch_size))
+        return cursor.rowcount
 
 
 def fetch_history(connection, lot_id, start_utc, end_utc):

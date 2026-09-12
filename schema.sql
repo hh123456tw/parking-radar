@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS parking_snapshots (
     CONSTRAINT fk_snapshots_lot FOREIGN KEY (lot_id)
         REFERENCES parking_lots(lot_id),
     CONSTRAINT uq_lot_source_time UNIQUE (lot_id, source_updated_at),
-    INDEX idx_snapshots_lot_captured (lot_id, captured_at)
+    INDEX idx_snapshots_lot_captured (lot_id, captured_at),
+    -- 供八天保留期限清理直接依時間定位舊資料。
+    INDEX idx_snapshots_captured_lot (captured_at, lot_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 相同正規化地址只向 Nominatim 查詢一次。

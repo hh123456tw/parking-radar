@@ -26,7 +26,7 @@ def test_ci_compiles_analytics_modules_and_checks_admin_js():
     )
     for module in (
         "analytics_service.py", "analytics_database.py",
-        "status_service.py", "analytics_cleanup.py",
+        "status_service.py", "analytics_cleanup.py", "snapshot_cleanup.py",
     ):
         assert module in compileall_line
     js_step = text.split("- name: Check JavaScript syntax", 1)[1]

@@ -182,22 +182,42 @@ def test_insert_snapshots_uses_bulk_parameterized_sql():
 
 
 def test_fetch_current_lots_supports_all_city_and_district_queries():
-    """行政區存在時才加入條件，兩種模式都必須保留新鮮度參數。"""
+    """每座場站以索引查最新快照，避免快照增加後掃描整張歷史表。"""
     city_connection = SpyConnection([])
     database.fetch_current_lots(city_connection, freshness_minutes=45)
     city_sql, city_params = city_connection.spy_cursor.calls[0]
-    assert "ROW_NUMBER()" in city_sql
+    assert "ROW_NUMBER()" not in city_sql
+    assert "JOIN parking_snapshots s ON s.snapshot_id = (" in city_sql
+    assert "s2.lot_id = l.lot_id" in city_sql
+    assert "ORDER BY s2.captured_at DESC, s2.snapshot_id DESC" in city_sql
     assert "s.source_updated_at AS snapshot_updated_at" in city_sql
-    assert "AND district = %s" not in city_sql
+    assert "AND l.district = %s" not in city_sql
     assert city_params == (45,)
 
     district_connection = SpyConnection([{"lot_id": "TPE0001"}])
     rows = database.fetch_current_lots(
         district_connection, "信義區", freshness_minutes=45)
     district_sql, district_params = district_connection.spy_cursor.calls[0]
-    assert "AND district = %s" in district_sql
+    assert "AND l.district = %s" in district_sql
     assert district_params == (45, "信義區")
     assert rows == [{"lot_id": "TPE0001"}]
+
+
+def test_delete_expired_snapshots_batch_uses_cutoff_and_bounded_limit():
+    """歷史清理必須使用 UTC 截止時間與有限批次，避免長交易鎖表。"""
+    connection = SpyConnection()
+    connection.spy_cursor.rowcount = 7
+    cutoff = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
+
+    removed = database.delete_expired_snapshots_batch(
+        connection, cutoff, batch_size=5000)
+
+    sql, params = connection.spy_cursor.calls[0]
+    assert "DELETE FROM parking_snapshots" in sql
+    assert "captured_at < %s" in sql
+    assert "LIMIT %s" in sql
+    assert params == (cutoff, 5000)
+    assert removed == 7
 
 
 def test_latest_snapshot_and_stale_fallback_queries():
