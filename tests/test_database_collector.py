@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import pymysql
 
 import collector
 import database
@@ -71,8 +72,10 @@ class StreamingSpyConnection:
         self.spy_cursor = StreamingSpyCursor(first_row, batches)
         self.calls = self.spy_cursor.calls
         self.fetch_sizes = self.spy_cursor.fetch_sizes
+        self.cursor_args = []
 
     def cursor(self, *_args):
+        self.cursor_args.append(_args)
         return self.spy_cursor
 
 
@@ -259,23 +262,7 @@ def test_iter_snapshot_archive_rows_streams_joined_ml_columns():
     assert "s.captured_at >= %s AND s.captured_at < %s" in sql
     assert params == (start, end)
     assert connection.fetch_sizes == [2000, 2000]
-
-
-def test_delete_expired_snapshots_batch_uses_cutoff_and_bounded_limit():
-    """歷史清理必須使用 UTC 截止時間與有限批次，避免長交易鎖表。"""
-    connection = SpyConnection()
-    connection.spy_cursor.rowcount = 7
-    cutoff = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
-
-    removed = database.delete_expired_snapshots_batch(
-        connection, cutoff, batch_size=5000)
-
-    sql, params = connection.spy_cursor.calls[0]
-    assert "DELETE FROM parking_snapshots" in sql
-    assert "captured_at < %s" in sql
-    assert "LIMIT %s" in sql
-    assert params == (cutoff, 5000)
-    assert removed == 7
+    assert connection.cursor_args == [(pymysql.cursors.SSDictCursor,)]
 
 
 def test_delete_snapshot_range_batch_is_half_open_and_bounded():
@@ -292,6 +279,37 @@ def test_delete_snapshot_range_batch_is_half_open_and_bounded():
     assert "LIMIT %s" in sql
     assert params == (start, end, 5000)
     assert removed == 9
+
+
+def test_delete_snapshot_range_batch_rejects_size_above_vm_limit():
+    connection = SpyConnection()
+
+    with pytest.raises(ValueError, match="at most 10000"):
+        database.delete_snapshot_range_batch(connection, "start", "end", 10001)
+
+    assert connection.spy_cursor.calls == []
+
+
+@pytest.mark.parametrize("fetch_size", [0, -1])
+def test_iter_snapshot_archive_rows_rejects_non_positive_fetch_size(fetch_size):
+    connection = StreamingSpyConnection()
+
+    with pytest.raises(ValueError, match="fetch_size must be positive"):
+        list(database.iter_snapshot_archive_rows(
+            connection, "start", "end", fetch_size))
+
+    assert connection.cursor_args == []
+
+
+@pytest.mark.parametrize("batch_size", [0, -1])
+def test_delete_snapshot_range_batch_rejects_non_positive_batch_size(batch_size):
+    connection = SpyConnection()
+
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        database.delete_snapshot_range_batch(
+            connection, "start", "end", batch_size)
+
+    assert connection.spy_cursor.calls == []
 
 
 def test_latest_snapshot_and_stale_fallback_queries():

@@ -179,6 +179,8 @@ def delete_snapshot_range_batch(connection, start_utc, end_utc,
     """分批刪除單一半開 UTC 日期區間，縮短每次交易持鎖時間。"""
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
+    if batch_size > 10000:
+        raise ValueError("batch_size must be at most 10000")
     sql = """
         DELETE FROM parking_snapshots
         WHERE captured_at >= %s AND captured_at < %s
