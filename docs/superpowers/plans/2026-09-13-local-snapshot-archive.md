@@ -300,14 +300,81 @@ def validate_archive(path):
 Add these independent behaviors:
 
 ```python
-def test_archive_day_reuses_valid_existing_archive_without_querying_database(...)
-def test_archive_day_rejects_corrupt_existing_archive_without_overwriting(...)
-def test_archive_day_low_disk_space_writes_nothing(...)
-def test_archive_day_stream_failure_removes_temp_and_leaves_no_final(...)
-def test_archive_day_with_no_rows_creates_no_empty_archive(...)
+def test_archive_day_reuses_valid_existing_archive_without_querying_database(
+        tmp_path, monkeypatch):
+    day = date(2026, 9, 1)
+    final = snapshot_archive.archive_path(tmp_path, day)
+    final.parent.mkdir(parents=True)
+    with gzip.open(final, "wt", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=snapshot_archive.CSV_FIELDS)
+        writer.writeheader()
+        writer.writerow(SAMPLE_ROW)
+    monkeypatch.setattr(
+        snapshot_archive, "iter_snapshot_archive_rows",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("既有檔驗證成功後不應查資料庫")))
+
+    result = snapshot_archive.archive_day(
+        object(), day, tmp_path, disk_usage=ample_disk)
+
+    assert result == {"path": final, "rows": 1, "created": False}
+
+
+def test_archive_day_rejects_corrupt_existing_archive_without_overwriting(
+        tmp_path):
+    final = snapshot_archive.archive_path(tmp_path, date(2026, 9, 1))
+    final.parent.mkdir(parents=True)
+    final.write_bytes(b"not-gzip")
+
+    with pytest.raises((gzip.BadGzipFile, EOFError)):
+        snapshot_archive.archive_day(
+            object(), date(2026, 9, 1), tmp_path, disk_usage=ample_disk)
+
+    assert final.read_bytes() == b"not-gzip"
+
+
+def test_archive_day_low_disk_space_writes_nothing(tmp_path):
+    low_disk = lambda _path: SimpleNamespace(free=1024 ** 3 - 1)
+
+    with pytest.raises(
+            RuntimeError, match="snapshot archive disk space below 1 GiB"):
+        snapshot_archive.archive_day(
+            object(), date(2026, 9, 1), tmp_path, disk_usage=low_disk)
+
+    assert not list(tmp_path.rglob("*.gz"))
+
+
+def test_archive_day_stream_failure_removes_temp_and_leaves_no_final(
+        tmp_path, monkeypatch):
+    def broken_rows(*_args, **_kwargs):
+        yield SAMPLE_ROW
+        raise OSError("database stream stopped")
+
+    monkeypatch.setattr(
+        snapshot_archive, "iter_snapshot_archive_rows", broken_rows)
+
+    with pytest.raises(OSError, match="database stream stopped"):
+        snapshot_archive.archive_day(
+            object(), date(2026, 9, 1), tmp_path, disk_usage=ample_disk)
+
+    assert not list(tmp_path.rglob("*.tmp"))
+    assert not list(tmp_path.rglob("*.gz"))
+
+
+def test_archive_day_with_no_rows_creates_no_empty_archive(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        snapshot_archive, "iter_snapshot_archive_rows",
+        lambda *_args, **_kwargs: iter(()))
+
+    result = snapshot_archive.archive_day(
+        object(), date(2026, 9, 1), tmp_path, disk_usage=ample_disk)
+
+    assert result == {"path": None, "rows": 0, "created": False}
+    assert not list(tmp_path.rglob("*.gz"))
 ```
 
-The low-space test supplies a disk-usage result with `free=1024**3 - 1` and expects `RuntimeError("snapshot archive disk space below 1 GiB")`. The corrupt-file test writes non-gzip bytes at the final path and expects gzip validation to fail while those bytes remain unchanged.
+Define `SAMPLE_ROW` with the seven literal values from Step 1 and `ample_disk` as a function returning `SimpleNamespace(free=2 * 1024 ** 3)`. Import `pytest` and `SimpleNamespace` at the top of the test file.
 
 - [ ] **Step 5: Run safety tests, complete minimal guards, and run all archive tests**
 
@@ -353,7 +420,7 @@ def test_complete_expired_days_keeps_partial_cutoff_day():
     now = datetime(2026, 9, 10, 19, 23, tzinfo=timezone.utc)
 
     assert snapshot_cleanup.complete_expired_days(oldest, now) == [
-        date(2026, 9, 1), date(2026, 9, 2),
+        date(2026, 9, 1),
     ]
 
 
@@ -361,7 +428,7 @@ def test_complete_expired_days_handles_empty_database():
     assert snapshot_cleanup.complete_expired_days(None, FIXED_NOW) == []
 ```
 
-Here the eight-day boundary is `2026-09-02 19:23 UTC`; only UTC days ending no later than the start of `2026-09-02` are complete and eligible, so September 1 and 2 eligibility must follow the implementation's documented half-open rule exactly. Before implementing, reconcile this example to the chosen rule: archive day `D` only when `D + 1 day <= floor_utc_day(now - 8 days)`. With that rule, the literal expected list is only `[date(2026, 9, 1)]`; use that literal in the actual test.
+Here the eight-day boundary is `2026-09-02 19:23 UTC`. The implementation floors that boundary to `2026-09-02 00:00 UTC`, so only September 1 is a complete eligible UTC day.
 
 - [ ] **Step 2: Run boundary tests and verify RED**
 
