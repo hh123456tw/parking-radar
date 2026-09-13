@@ -123,6 +123,10 @@ Gemini 負責將「我要去台北車站」等自然語言轉成結構化查詢�
 
 完整自動化測試套件涵蓋分析規則、API、資料收集、地址搜尋、步行路線、費率解析、PWA、Analytics 與管理儀表板。GitHub Actions 會在每次 push 與 pull request 執行離線測試。
 
+停車快照在 MySQL 保留近期資料；每日清理會先將完整 UTC 日期封存為
+`/opt/parking-archives/YYYY/MM/parking-snapshots-YYYY-MM-DD.csv.gz`，
+驗證成功後才分批刪除，網站查詢不讀取封存檔。
+
 ```powershell
 python -m pytest -q
 node --check static/app.js
