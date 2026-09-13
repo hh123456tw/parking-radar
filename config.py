@@ -5,6 +5,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+SNAPSHOT_ARCHIVE_DIR = os.getenv(
+    "SNAPSHOT_ARCHIVE_DIR", "/opt/parking-archives")
+
 
 class Config:
     """提供 Flask、MySQL、Gemini、地址搜尋與分析所需設定。"""

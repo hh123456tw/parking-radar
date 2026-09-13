@@ -161,19 +161,6 @@ def fetch_current_lots(connection, district=None, freshness_minutes=45):
         return list(cursor.fetchall())
 
 
-def delete_expired_snapshots_batch(connection, cutoff_utc, batch_size=10000):
-    """刪除截止時間前的一小批快照，避免單次長交易影響即時查詢。"""
-    sql = """
-        DELETE FROM parking_snapshots
-        WHERE captured_at < %s
-        ORDER BY captured_at
-        LIMIT %s
-    """
-    with connection.cursor() as cursor:
-        cursor.execute(sql, (cutoff_utc, batch_size))
-        return cursor.rowcount
-
-
 def delete_snapshot_range_batch(connection, start_utc, end_utc,
                                 batch_size=10000):
     """分批刪除單一半開 UTC 日期區間，縮短每次交易持鎖時間。"""
