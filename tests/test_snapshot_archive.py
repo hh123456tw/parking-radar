@@ -1,6 +1,6 @@
 import csv
 import gzip
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -42,6 +42,36 @@ def test_archive_day_writes_verified_unicode_csv_gz_atomically(
         archived = list(csv.DictReader(handle))
     assert archived[0]["lot_name"] == "臺北車站停車場"
     assert not list(expected.parent.glob("*.tmp"))
+
+
+def test_archive_day_queries_exact_utc_midnight_bounds(
+        tmp_path, monkeypatch):
+    day = date(2026, 9, 1)
+    captured = {}
+
+    def capture_rows(connection, start_utc, end_utc, fetch_size=2000):
+        captured.update({
+            "connection": connection,
+            "start_utc": start_utc,
+            "end_utc": end_utc,
+            "fetch_size": fetch_size,
+        })
+        return iter(())
+
+    connection = object()
+    monkeypatch.setattr(
+        snapshot_archive, "iter_snapshot_archive_rows", capture_rows)
+
+    result = snapshot_archive.archive_day(
+        connection, day, tmp_path, disk_usage=ample_disk)
+
+    assert result == {"path": None, "rows": 0, "created": False}
+    assert captured == {
+        "connection": connection,
+        "start_utc": datetime(2026, 9, 1, tzinfo=timezone.utc),
+        "end_utc": datetime(2026, 9, 2, tzinfo=timezone.utc),
+        "fetch_size": 2000,
+    }
 
 
 def test_archive_day_reuses_valid_existing_archive_without_querying_database(

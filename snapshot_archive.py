@@ -3,7 +3,7 @@ import gzip
 import os
 import shutil
 import tempfile
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from database import iter_snapshot_archive_rows
@@ -49,6 +49,8 @@ def archive_day(connection, day, archive_root, disk_usage=shutil.disk_usage):
 
     temp_path = None
     try:
+        start_utc = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+        end_utc = start_utc + timedelta(days=1)
         with tempfile.NamedTemporaryFile(
                 mode="wb", suffix=".tmp", dir=final_path.parent,
                 delete=False) as temporary:
@@ -59,7 +61,7 @@ def archive_day(connection, day, archive_root, disk_usage=shutil.disk_usage):
             writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
             writer.writeheader()
             for row in iter_snapshot_archive_rows(
-                    connection, day, day + timedelta(days=1), fetch_size=2000):
+                    connection, start_utc, end_utc, fetch_size=2000):
                 writer.writerow(row)
                 written_rows += 1
 
