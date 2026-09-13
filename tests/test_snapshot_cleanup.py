@@ -2,6 +2,7 @@
 
 from datetime import date, datetime, timezone
 import importlib
+import logging
 
 import pytest
 
@@ -184,6 +185,56 @@ def test_cleanup_rejects_invalid_batch_before_opening_database(monkeypatch):
         snapshot_cleanup.run_cleanup(now=FIXED_NOW, batch_size=0)
     with pytest.raises(ValueError, match="10000"):
         snapshot_cleanup.run_cleanup(now=FIXED_NOW, batch_size=10001)
+
+
+def test_cleanup_lock_contention_happens_before_opening_database(
+        monkeypatch, tmp_path):
+    snapshot_cleanup = importlib.import_module("snapshot_cleanup")
+
+    class BusyFcntl:
+        LOCK_EX = 1
+        LOCK_NB = 2
+        LOCK_UN = 8
+
+        @staticmethod
+        def flock(_fd, _operation):
+            raise BlockingIOError("busy")
+
+    monkeypatch.setattr(snapshot_cleanup, "fcntl", BusyFcntl)
+    monkeypatch.setattr(
+        snapshot_cleanup, "get_connection",
+        lambda: (_ for _ in ()).throw(AssertionError("connection opened")),
+    )
+
+    with pytest.raises(RuntimeError, match="already running"):
+        snapshot_cleanup.run_cleanup(now=FIXED_NOW, archive_root=tmp_path)
+
+
+def test_cleanup_logs_each_deleted_day(monkeypatch, tmp_path, caplog):
+    snapshot_cleanup = importlib.import_module("snapshot_cleanup")
+    connection = FakeConnection()
+    archive = tmp_path / "2026" / "09" / "archive.csv.gz"
+    monkeypatch.setattr(snapshot_cleanup, "get_connection", lambda: connection)
+    monkeypatch.setattr(
+        snapshot_cleanup, "fetch_oldest_snapshot_time",
+        lambda _: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        snapshot_cleanup, "archive_day",
+        lambda *_args: {"path": archive, "rows": 2, "created": True},
+    )
+    monkeypatch.setattr(snapshot_cleanup, "delete_snapshot_range_batch",
+                        lambda *_args: 1)
+
+    with caplog.at_level(logging.INFO, logger="snapshot_cleanup"):
+        snapshot_cleanup.run_cleanup(
+            now=datetime(2026, 9, 10, 19, 23, tzinfo=timezone.utc),
+            archive_root=tmp_path)
+
+    assert "utc_day=2026-09-01" in caplog.text
+    assert "archive=" + str(archive) in caplog.text
+    assert "archived_rows=2" in caplog.text
+    assert "deleted_rows=1" in caplog.text
 
 
 def test_cleanup_processes_all_batches_of_each_day_before_next_archive(
