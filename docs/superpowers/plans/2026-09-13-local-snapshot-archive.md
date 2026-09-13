@@ -506,7 +506,7 @@ Expected: FAIL because the old cleanup deletes directly and returns an integer.
 
 - [ ] **Step 6: Implement archive-before-delete orchestration**
 
-For each `complete_expired_days(...)` result:
+For each date returned by `complete_expired_days(oldest, now)`:
 
 ```python
 archive = archive_day(connection, day, archive_root)
@@ -636,7 +636,7 @@ Before mutation:
 
 - [ ] **Step 7: Prove archive safety in an isolated production directory**
 
-Use the deployed virtual environment and production database read access, but pass a temporary archive directory and a `now` value selecting at most one complete expired date. Do not call deletion in this probe; call `snapshot_archive.archive_day(...)` only. Verify:
+Use the deployed virtual environment and production database read access, but pass `/opt/parking-archive-smoke` and a UTC date selecting at most one complete expired day. Do not call the cleanup orchestrator in this probe; call `snapshot_archive.archive_day(connection, day, Path("/opt/parking-archive-smoke"))` only. Verify:
 
 ```bash
 gzip -t /opt/parking-archive-smoke/YYYY/MM/parking-snapshots-YYYY-MM-DD.csv.gz
@@ -650,7 +650,7 @@ The header must equal the seven fixed fields and the first data row must decode 
 1. Atomically switch the staged release into `/opt/parking-hell` and restart `parking-radar`.
 2. Require `curl -fsS http://127.0.0.1:8000/health` within 30 seconds; otherwise restore the old app and crontab.
 3. Keep exactly one cleanup cron line at `23 19 * * *`.
-4. Run `sudo -u parking .../python snapshot_cleanup.py` once.
+4. Run `sudo -u parking /opt/parking-hell/.venv/bin/python /opt/parking-hell/snapshot_cleanup.py` once from `/opt/parking-hell`.
 5. For every file created by that run, require `gzip -t`, exact CSV header and at least one data row.
 6. Query `COUNT(*)`, `MIN(captured_at)`, `MAX(captured_at)` and confirm no rows remain for each archived day.
 
