@@ -45,7 +45,8 @@ def run_cleanup(now=None, batch_size=DELETE_BATCH_SIZE, archive_root=None):
     if batch_size > DELETE_BATCH_SIZE:
         raise ValueError("batch_size must be at most 10000")
     now = now or datetime.now(timezone.utc)
-    archive_root = archive_root or SNAPSHOT_ARCHIVE_DIR
+    if archive_root is None:
+        archive_root = SNAPSHOT_ARCHIVE_DIR
     connection = get_connection()
     result = {"archived_files": 0, "archived_rows": 0,
               "deleted_snapshots": 0}
@@ -74,5 +75,10 @@ def run_cleanup(now=None, batch_size=DELETE_BATCH_SIZE, archive_root=None):
         connection.close()
 
 
+def main():
+    """執行清理並直接輸出完整結果。"""
+    print(run_cleanup())
+
+
 if __name__ == "__main__":
-    print({"deleted_snapshots": run_cleanup()})
+    main()
