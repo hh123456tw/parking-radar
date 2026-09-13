@@ -96,6 +96,39 @@ def fetch_latest_snapshot_time(connection):
         return row.get("captured_at") if row else None
 
 
+def fetch_oldest_snapshot_time(connection):
+    """依 captured_at 索引取得最早快照；空表回傳 None。"""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT captured_at FROM parking_snapshots "
+            "ORDER BY captured_at LIMIT 1"
+        )
+        row = cursor.fetchone()
+        return row.get("captured_at") if row else None
+
+
+def iter_snapshot_archive_rows(connection, start_utc, end_utc,
+                               fetch_size=2000):
+    """以伺服器端游標串流單日訓練欄位，避免一次載入全部資料。"""
+    if fetch_size <= 0:
+        raise ValueError("fetch_size must be positive")
+    sql = """
+        SELECT s.lot_id, l.lot_name, l.district, l.total_spaces,
+               s.available_spaces, s.source_updated_at, s.captured_at
+        FROM parking_snapshots s
+        JOIN parking_lots l ON l.lot_id = s.lot_id
+        WHERE s.captured_at >= %s AND s.captured_at < %s
+        ORDER BY s.captured_at, s.lot_id
+    """
+    with connection.cursor(pymysql.cursors.SSDictCursor) as cursor:
+        cursor.execute(sql, (start_utc, end_utc))
+        while True:
+            rows = cursor.fetchmany(fetch_size)
+            if not rows:
+                return
+            yield from rows
+
+
 def fetch_current_lots(connection, district=None, freshness_minutes=45):
     """取得每場站最新有效快照；freshness_minutes=None 時允許舊資料。"""
     freshness_sql = ""
@@ -138,6 +171,22 @@ def delete_expired_snapshots_batch(connection, cutoff_utc, batch_size=10000):
     """
     with connection.cursor() as cursor:
         cursor.execute(sql, (cutoff_utc, batch_size))
+        return cursor.rowcount
+
+
+def delete_snapshot_range_batch(connection, start_utc, end_utc,
+                                batch_size=10000):
+    """分批刪除單一半開 UTC 日期區間，縮短每次交易持鎖時間。"""
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    sql = """
+        DELETE FROM parking_snapshots
+        WHERE captured_at >= %s AND captured_at < %s
+        ORDER BY captured_at
+        LIMIT %s
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(sql, (start_utc, end_utc, batch_size))
         return cursor.rowcount
 
 

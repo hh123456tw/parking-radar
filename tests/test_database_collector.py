@@ -31,6 +31,9 @@ class SpyCursor:
     def fetchall(self):
         return self.rows
 
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
     def __enter__(self):
         return self
 
@@ -45,6 +48,31 @@ class SpyConnection:
         self.spy_cursor = SpyCursor(rows)
 
     def cursor(self):
+        return self.spy_cursor
+
+
+class StreamingSpyCursor(SpyCursor):
+    """記錄 fetchmany 大小並依序回傳預設批次。"""
+
+    def __init__(self, first_row=None, batches=None):
+        super().__init__([first_row] if first_row else [])
+        self.batches = list(batches or [])
+        self.fetch_sizes = []
+
+    def fetchmany(self, size):
+        self.fetch_sizes.append(size)
+        return self.batches.pop(0) if self.batches else []
+
+
+class StreamingSpyConnection:
+    """提供查詢與伺服器端游標測試所需的介面。"""
+
+    def __init__(self, first_row=None, batches=None):
+        self.spy_cursor = StreamingSpyCursor(first_row, batches)
+        self.calls = self.spy_cursor.calls
+        self.fetch_sizes = self.spy_cursor.fetch_sizes
+
+    def cursor(self, *_args):
         return self.spy_cursor
 
 
@@ -203,6 +231,36 @@ def test_fetch_current_lots_supports_all_city_and_district_queries():
     assert rows == [{"lot_id": "TPE0001"}]
 
 
+def test_fetch_oldest_snapshot_time_uses_captured_index_order():
+    oldest = datetime(2026, 9, 1, 0, 0)
+    connection = StreamingSpyConnection(first_row={"captured_at": oldest})
+
+    assert database.fetch_oldest_snapshot_time(connection) == oldest
+    sql, params = connection.calls[0]
+    assert "ORDER BY captured_at LIMIT 1" in " ".join(sql.split())
+    assert params is None
+
+
+def test_iter_snapshot_archive_rows_streams_joined_ml_columns():
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    rows = [{
+        "lot_id": "TPE0001", "lot_name": "測試停車場", "district": "信義區",
+        "total_spaces": 100, "available_spaces": 8,
+        "source_updated_at": datetime(2026, 9, 1, 0, 0),
+        "captured_at": datetime(2026, 9, 1, 0, 1),
+    }]
+    connection = StreamingSpyConnection(batches=[rows, []])
+
+    assert list(database.iter_snapshot_archive_rows(
+        connection, start, end, fetch_size=2000)) == rows
+    sql, params = connection.calls[0]
+    assert "JOIN parking_lots l ON l.lot_id = s.lot_id" in sql
+    assert "s.captured_at >= %s AND s.captured_at < %s" in sql
+    assert params == (start, end)
+    assert connection.fetch_sizes == [2000, 2000]
+
+
 def test_delete_expired_snapshots_batch_uses_cutoff_and_bounded_limit():
     """歷史清理必須使用 UTC 截止時間與有限批次，避免長交易鎖表。"""
     connection = SpyConnection()
@@ -218,6 +276,22 @@ def test_delete_expired_snapshots_batch_uses_cutoff_and_bounded_limit():
     assert "LIMIT %s" in sql
     assert params == (cutoff, 5000)
     assert removed == 7
+
+
+def test_delete_snapshot_range_batch_is_half_open_and_bounded():
+    connection = SpyConnection()
+    connection.spy_cursor.rowcount = 9
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 2, tzinfo=timezone.utc)
+
+    removed = database.delete_snapshot_range_batch(
+        connection, start, end, batch_size=5000)
+
+    sql, params = connection.spy_cursor.calls[0]
+    assert "captured_at >= %s AND captured_at < %s" in " ".join(sql.split())
+    assert "LIMIT %s" in sql
+    assert params == (start, end, 5000)
+    assert removed == 9
 
 
 def test_latest_snapshot_and_stale_fallback_queries():
