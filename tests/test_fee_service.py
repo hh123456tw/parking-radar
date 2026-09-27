@@ -305,3 +305,22 @@ def test_common_weekday_marker_variants_select_the_matching_price():
         weekend = build_fee_summary(None, fee_info, day(), "weekend")
         assert weekday["hourly_fee_label"] == "50 元／時"
         assert weekend["hourly_fee_label"] == "70 元／時"
+
+
+def test_hours_after_cap_phrase_are_not_a_money_cap():
+    """「當日最高上限20小時計」中的 20 是時數，不得顯示成 20 元上限。"""
+    result = build_fee_summary(
+        None, "小型車每小時60元，當日最高上限20小時計",
+        datetime.fromisoformat("2026-08-19T18:00:00+08:00"), "weekday")
+
+    assert result["daily_cap_label"] == "官方未標示"
+
+
+def test_makeup_workday_uses_weekday_text_price():
+    """補班日（例如補班的週六）收平日費率，不應顯示平假日區間。"""
+    result = build_fee_summary(
+        None, "平日每小時40元，假日每小時60元",
+        datetime.fromisoformat("2026-09-26T18:00:00+08:00"), "makeup_workday")
+
+    assert result["hourly_fee_label"] == "40 元／時"
+    assert result["hourly_fee_value"] == 40

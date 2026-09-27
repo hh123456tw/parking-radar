@@ -13,6 +13,8 @@ TAIPEI = ZoneInfo("Asia/Taipei")
 SMALL_CAR_TYPES = {"C", "CM"}
 CAP_PHRASES = ("當日最高", "每日最高", "24 小時最高", "24小時最高", "上限")
 # 費用數字若與這些字眼同一段，通常是月租／計次／溢時費率，不得視為每日上限。
+# 「當日最高上限20小時計」等數字是時數或次數，不能顯示成金額。
+NON_MONEY_UNITS = ("小時", "時", "次", "分", "天", "日", "格")
 SKIP_CAP_TOKENS = ("月租", "月票", "每月", "月繳", "月費", "雙月", "每次", "計次", "每小時", "半小時", "加收", "逾時")
 
 HALF_HOUR_RE = re.compile(r"每半小時\s*(\d+(?:\.\d+)?)\s*元?")
@@ -204,6 +206,14 @@ def _has_official_fee_description(fee_info):
     return bool(fee_info and OFFICIAL_FEE_HINT_RE.search(str(fee_info)))
 
 
+def _cap_amount(text):
+    """取上限詞後的第一個數字；後接小時、次數等非金額單位時不是每日上限。"""
+    match = NUMBER_RE.search(text)
+    if not match or text[match.end():].lstrip().startswith(NON_MONEY_UNITS):
+        return None
+    return _price_from_rate(match.group(0))
+
+
 def _daily_cap_from_text(fee_info):
     """只在小型車段且含認可上限詞時取上限金額；月租、計次、溢時等不得使用。
 
@@ -221,7 +231,7 @@ def _daily_cap_from_text(fee_info):
             before = segment[max(0, pos - before_window): pos]
             after = segment[pos + len(phrase): pos + len(phrase) + after_window]
             if not any(token in before or token in after for token in SKIP_CAP_TOKENS):
-                cap = _price_from_rate(after)
+                cap = _cap_amount(after)
                 if cap is not None:
                     return cap
             pos = segment.find(phrase, pos + 1)
@@ -243,6 +253,9 @@ def build_fee_summary(fare_rules_json: str | None, fee_info: str | None,
     結構化 FareInfo 規則有效時以規則為準，官方文字僅用於每日上限與歧異備註；
     day_kind 保留給後續推薦排序使用，本任務（純顯示）不納入推算。
     """
+    if day_kind == "makeup_workday":
+        # 補班日依平日費率收費，避免同時套用平日與假日條款而顯示區間。
+        day_kind = "weekday"
     structured = _structured_hourly_prices(fare_rules_json, arrival_time)
     text_prices = _hourly_prices_from_text(fee_info)
     day_prices = _hourly_prices_for_day_from_text(fee_info, day_kind)
