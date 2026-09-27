@@ -256,3 +256,17 @@ def test_failed_refresh_without_any_snapshot_is_unavailable(monkeypatch):
     with pytest.raises(app_module.ParkingDataUnavailable,
                        match="暫時無法取得官方停車資料"):
         app_module.ensure_fresh_parking_data()
+
+
+def test_naive_arrival_datetime_from_gemini_is_taipei_time():
+    """Gemini 回傳不含時區的 datetime 時視為臺北時間，不可讓查詢失敗成 503。"""
+    parsed = {
+        "missing_fields": [],
+        "address": "臺北車站",
+        "district": "中正區",
+        "arrival_time": app_module.datetime(2026, 9, 27, 18, 0),
+    }
+
+    result = app_module.validate_parsed_query(parsed)
+
+    assert result["arrival_time"].isoformat() == "2026-09-27T18:00:00+08:00"

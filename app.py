@@ -179,6 +179,10 @@ def validate_parsed_query(parsed, now=None):
         parsed["arrival_time"] = datetime.fromisoformat(parsed["arrival_time"])
         if parsed["arrival_time"].tzinfo is None:
             raise ValueError("抵達時間必須包含時區")
+    elif parsed["arrival_time"].tzinfo is None:
+        # Gemini 結構化輸出可能省略時區；使用者談的一律是臺北當地時間。
+        parsed["arrival_time"] = parsed["arrival_time"].replace(
+            tzinfo=ZoneInfo("Asia/Taipei"))
     return parsed
 
 
@@ -520,8 +524,15 @@ def create_app(test_config=None):
             trace["data_status"] = data_status
             database_started = time.perf_counter()
             connection = get_connection()
-            freshness = Config.FRESHNESS_MINUTES if data_status == "fresh" else None
-            rows = fetch_current_lots(connection, parsed.get("district"), freshness)
+            # 資料延遲時仍顯示舊資料，但不採用超過上限的快照，避免把數小時前的空位當成現況。
+            freshness = (Config.FRESHNESS_MINUTES if data_status == "fresh"
+                         else Config.STALE_MAX_MINUTES)
+            # 已有目的地座標時以半徑篩選，不再限制行政區，避免漏掉交界對面的場站。
+            rows = fetch_current_lots(
+                connection, None if destination else parsed.get("district"),
+                freshness)
+            if not rows and data_status != "fresh":
+                raise ParkingDataUnavailable("停車資料已超過 3 小時未更新，請稍後再試")
             if destination:
                 # 一般查詢只使用即時資料與距離；歷史由使用者點擊後的專用 API 載入。
                 ranked = rank_candidates(

@@ -734,3 +734,53 @@ def test_chat_service_failure_returns_manual_fallback(monkeypatch):
     UUID(body["request_id"])
     assert body["error"] == "失敗"
     assert body["fallback"] == "manual"
+
+
+def test_address_query_does_not_filter_by_district(monkeypatch):
+    """有目的地座標時以半徑篩選；行政區交界對面的場站不可被行政區條件排除。"""
+    calls = []
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "geocode_address", lambda *_args: {
+        "display_address": "臺北市政府", "latitude": 25.0375,
+        "longitude": 121.5637,
+    })
+
+    def current_lots(_connection, district, freshness):
+        calls.append(district)
+        return [lot_row()]
+
+    monkeypatch.setattr(app_module, "fetch_current_lots", current_lots)
+
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "address": "臺北市信義區市府路1號", "district": "大安區",
+        "arrival_time": "2026-08-04T18:00:00+08:00",
+    })
+
+    assert response.status_code == 200
+    assert calls == [None]
+
+
+def test_stale_query_caps_snapshot_age(monkeypatch):
+    """排程延遲時仍限制快照年齡，不把數小時前的空位當成現況。"""
+    calls = []
+    monkeypatch.setattr(app_module, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(app_module, "ensure_fresh_parking_data",
+                        lambda: ("stale", "目前顯示 300 分鐘前資料"))
+
+    def current_lots(_connection, district, freshness):
+        calls.append(freshness)
+        return []
+
+    monkeypatch.setattr(app_module, "fetch_current_lots", current_lots)
+    client = app_module.create_app({
+        "TESTING": True, "SECRET_KEY": "test", "AUTO_REFRESH_ENABLED": True,
+    }).test_client()
+
+    response = client.post("/api/query", json={
+        "mode": "manual", "district": "信義區",
+        "arrival_time": "2026-08-05T10:00:00+08:00",
+    })
+
+    assert calls == [app_module.Config.STALE_MAX_MINUTES]
+    assert response.status_code == 503
+    assert "3 小時" in response.get_json()["error"]
