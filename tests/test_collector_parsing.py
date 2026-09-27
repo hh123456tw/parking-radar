@@ -130,3 +130,27 @@ def test_fetch_json_uses_timeout_and_checks_http_status(monkeypatch):
     assert collector.fetch_json("https://example.test/data.json", timeout=7) == payload
     assert captured == {"url": "https://example.test/data.json", "timeout": 7}
     assert response.status_checked is True
+
+
+def test_malformed_numbers_skip_single_lot_instead_of_failing_batch():
+    """官方單筆 N/A 或空白數值只略過該場站，其餘快照照常保存。"""
+    captured_at = datetime(2026, 8, 3, 4, 0, tzinfo=timezone.utc)
+    payload = {"data": {"UPDATETIME": "2026-08-03T12:00:00", "park": [
+        {"id": "001", "availablecar": "N/A"},
+        {"id": "002", "availablecar": " "},
+        {"id": "003", "availablecar": "12"},
+    ]}}
+
+    rows = collector.parse_dynamic(payload, captured_at)
+
+    assert [(row["lot_id"], row["available_spaces"]) for row in rows] == [("003", 12)]
+
+
+def test_static_parser_treats_malformed_total_as_zero():
+    payload = {"data": {"UPDATETIME": "2026-08-03T12:00:00", "park": [
+        {"id": "001", "name": "測試停車場", "totalcar": "N/A"},
+    ]}}
+
+    lots = collector.parse_static(payload, {"001"})
+
+    assert lots[0]["total_spaces"] == 0

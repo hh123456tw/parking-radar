@@ -26,6 +26,14 @@ def parse_source_time(value):
     return parsed.astimezone(timezone.utc)
 
 
+def _to_int(value):
+    """官方數值偶爾是空白或 N/A；無法轉成整數時回傳 None，只略過單一場站。"""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _entrance_coordinates(raw):
     """讀取第一個入口 WGS84 座標；格式不完整時回傳兩個 None。"""
     items = raw.get("EntranceCoord", {}).get("EntrancecoordInfo", [])
@@ -53,7 +61,8 @@ def parse_static(payload, realtime_ids):
             "lot_id": str(raw["id"]), "lot_name": raw.get("name", "未命名停車場"),
             "district": raw.get("area", "未知"), "address": raw.get("address", ""),
             "operator_type": raw.get("type2", "未標示"),
-            "total_spaces": int(raw.get("totalcar") or 0),
+            # 無法解析的總格數記為 0，後續 clean_available 會排除該場站。
+            "total_spaces": _to_int(raw.get("totalcar")) or 0,
             "fee_info": raw.get("payex", ""), "service_time": raw.get("serviceTime", ""),
             "latitude": latitude, "longitude": longitude,
             "supports_realtime": str(raw["id"]) in realtime_ids,
@@ -73,13 +82,19 @@ def parse_static(payload, realtime_ids):
 def parse_dynamic(payload, captured_at):
     """保留非負汽車剩餘格數；總格數合理性在兩份資料合併後再次檢查。"""
     source_time = parse_source_time(payload["data"]["UPDATETIME"])
-    return [{
-        "lot_id": str(raw["id"]),
-        "available_spaces": int(raw["availablecar"]),
-        "source_updated_at": source_time,
-        "captured_at": captured_at,
-    } for raw in payload["data"]["park"]
-      if raw.get("availablecar") is not None and int(raw["availablecar"]) >= 0]
+    snapshots = []
+    for raw in payload["data"]["park"]:
+        # 單筆格式錯誤只略過該場站，不讓整批快照寫入失敗。
+        available = _to_int(raw.get("availablecar"))
+        if available is None or available < 0:
+            continue
+        snapshots.append({
+            "lot_id": str(raw["id"]),
+            "available_spaces": available,
+            "source_updated_at": source_time,
+            "captured_at": captured_at,
+        })
+    return snapshots
 
 
 def fetch_json(url, timeout=15):
