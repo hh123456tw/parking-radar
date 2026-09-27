@@ -141,17 +141,47 @@ def test_archive_day_rejects_mismatched_existing_manifest(
     assert final.exists()
 
 
-def test_archive_day_rejects_existing_archive_without_completion_manifest(tmp_path):
-    final = snapshot_archive.archive_path(tmp_path, date(2026, 9, 1))
+def write_archive_without_manifest(root, day, rows):
+    final = snapshot_archive.archive_path(root, day)
     final.parent.mkdir(parents=True)
     with gzip.open(final, "wt", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=snapshot_archive.CSV_FIELDS)
         writer.writeheader()
-        writer.writerow(SAMPLE_ROW)
+        writer.writerows(rows)
+    return final
+
+
+def test_archive_day_rejects_existing_archive_without_completion_manifest(
+        tmp_path, monkeypatch):
+    """資料庫內容與既有 CSV 不同時，不可補寫完成證明。"""
+    write_archive_without_manifest(tmp_path, date(2026, 9, 1), [SAMPLE_ROW])
+    extra = dict(SAMPLE_ROW, lot_id="TPE0002")
+    monkeypatch.setattr(snapshot_archive, "iter_snapshot_archive_rows",
+                        lambda *_args, **_kwargs: iter([SAMPLE_ROW, extra]))
 
     with pytest.raises(ValueError, match="manifest"):
         snapshot_archive.archive_day(
             object(), date(2026, 9, 1), tmp_path, disk_usage=ample_disk)
+    assert not list(tmp_path.rglob("*.manifest.json"))
+
+
+def test_archive_day_recovers_manifest_after_crash_before_manifest(
+        tmp_path, monkeypatch):
+    """CSV 已發布但完成證明未寫入時，內容與資料庫一致即可補寫，清理不會永久卡住。"""
+    day = date(2026, 9, 1)
+    final = write_archive_without_manifest(tmp_path, day, [SAMPLE_ROW])
+    monkeypatch.setattr(snapshot_archive, "iter_snapshot_archive_rows",
+                        lambda *_args, **_kwargs: iter([SAMPLE_ROW]))
+
+    result = snapshot_archive.archive_day(
+        object(), day, tmp_path, disk_usage=ample_disk)
+
+    assert result == {"path": final, "rows": 1, "created": False}
+    manifest = json.loads(
+        (final.parent / (final.name + ".manifest.json")).read_text(
+            encoding="utf-8"))
+    assert manifest["row_count"] == 1
+    assert manifest["sha256"] == hashlib.sha256(final.read_bytes()).hexdigest()
 
 
 def test_archive_day_rejects_wrong_day_and_malformed_existing_csv(tmp_path):

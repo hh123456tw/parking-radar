@@ -1,6 +1,7 @@
 import csv
 import gzip
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -120,6 +121,48 @@ def _remove_temp_files(directory):
             path.unlink()
 
 
+def _write_manifest(final_path, day, row_count):
+    """以 create-only 方式發布完成證明；暫存檔失敗時一併清除。"""
+    manifest = {"schema_version": 1, "utc_day": str(day),
+                "row_count": row_count,
+                "sha256": hashlib.sha256(final_path.read_bytes()).hexdigest()}
+    manifest_temp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".tmp",
+                                         dir=final_path.parent, delete=False) as temporary:
+            manifest_temp = Path(temporary.name)
+            json.dump(manifest, temporary, ensure_ascii=False, separators=(",", ":"))
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.link(manifest_temp, _manifest_path(final_path))
+        manifest_temp.unlink()
+        manifest_temp = None
+        _fsync_directory(final_path.parent)
+    finally:
+        if manifest_temp is not None:
+            try:
+                manifest_temp.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _recover_missing_manifest(connection, final_path, day, row_count):
+    """重新讀取資料庫單日快照；與既有 CSV 內容逐字相同時才補寫完成證明。"""
+    start_utc = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+    expected = io.StringIO(newline="")
+    writer = csv.DictWriter(expected, fieldnames=CSV_FIELDS)
+    writer.writeheader()
+    for row in iter_snapshot_archive_rows(connection, start_utc,
+                                          start_utc + timedelta(days=1),
+                                          fetch_size=2000):
+        writer.writerow(row)
+    with gzip.open(final_path, "rt", encoding="utf-8", newline="") as handle:
+        existing = handle.read()
+    if existing != expected.getvalue():
+        raise ValueError("snapshot archive completion manifest missing")
+    _write_manifest(final_path, day, row_count)
+
+
 def archive_day(connection, day, archive_root, disk_usage=shutil.disk_usage):
     """串流建立單日封存，完成證明與耐久化後才發布正式檔案。"""
     final_path = archive_path(archive_root, day)
@@ -131,12 +174,15 @@ def archive_day(connection, day, archive_root, disk_usage=shutil.disk_usage):
     if final_path.exists():
         # Read the archive first so a corrupt gzip is never masked by a missing
         # completion manifest.
-        _validate_csv(final_path, day)
+        rows = _validate_csv(final_path, day)
+        if not _manifest_path(final_path).exists():
+            # 發布 CSV 後、寫入完成證明前中斷：只有內容與資料庫完全一致才補寫證明，
+            # 否則維持拒絕，避免清理刪除未完整封存的快照。
+            _recover_missing_manifest(connection, final_path, day, rows)
         return {"path": final_path, "rows": _validate_complete(final_path, day),
                 "created": False}
 
-    temp_path = manifest_temp = None
-    manifest_path = _manifest_path(final_path)
+    temp_path = None
     try:
         start_utc = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
         end_utc = start_utc + timedelta(days=1)
@@ -163,25 +209,12 @@ def archive_day(connection, day, archive_root, disk_usage=shutil.disk_usage):
         temp_path = None
         _fsync_directory(final_path.parent)
 
-        manifest = {"schema_version": 1, "utc_day": str(day),
-                    "row_count": written_rows,
-                    "sha256": hashlib.sha256(final_path.read_bytes()).hexdigest()}
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".tmp",
-                                         dir=final_path.parent, delete=False) as temporary:
-            manifest_temp = Path(temporary.name)
-            json.dump(manifest, temporary, ensure_ascii=False, separators=(",", ":"))
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.link(manifest_temp, manifest_path)
-        manifest_temp.unlink()
-        manifest_temp = None
-        _fsync_directory(final_path.parent)
+        _write_manifest(final_path, day, written_rows)
         return {"path": final_path, "rows": written_rows, "created": True}
     except Exception:
-        for path in (temp_path, manifest_temp):
-            if path is not None:
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
         raise
