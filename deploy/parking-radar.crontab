@@ -1,0 +1,7 @@
+# parking 使用者的排程（伺服器時區為 UTC）。安裝：crontab -u parking deploy/parking-radar.crontab
+# 每 15 分鐘抓一次臺北市即時停車資料。
+*/15 * * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python collector.py --once >> /opt/parking-hell/collector.log 2>&1
+# 每天 11:17（臺北）刪除超過保留期的匿名分析資料。
+17 3 * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python analytics_cleanup.py >> /opt/parking-hell/analytics-cleanup.log 2>&1
+# 每天 03:23（臺北）先封存再刪除過期快照。
+23 19 * * * cd /opt/parking-hell && /opt/parking-hell/.venv/bin/python snapshot_cleanup.py >> /opt/parking-hell/snapshot-cleanup.log 2>&1
