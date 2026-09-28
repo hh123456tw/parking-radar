@@ -11,33 +11,57 @@ from threading import Lock
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from flask import (Flask, jsonify, make_response, render_template, request,
-                   session)
-from ai_service import IntentServiceError, TAIPEI_DISTRICTS, parse_parking_query
-from analytics_capture import (build_query_detail,
-                               build_recommendation_snapshots,
-                               infer_destination_district, new_query_trace)
-from analytics_database import (fetch_dashboard_events, fetch_events,
-                                fetch_insight_details,
-                                fetch_insight_recommendations,
-                                insert_event, insert_navigation_event,
-                                replace_recommendation_snapshots,
-                                update_query_feedback, upsert_query_detail)
-from analytics_service import (BROWSER_EVENT_TYPES, DASHBOARD_RANGES, SOURCES,
-                               analytics_identity, build_browser_event,
-                               build_query_event, parse_dashboard_range,
-                               summarize_events, summarize_insights)
-from analysis import (build_history_series, district_hell_score,
-                      rank_candidates, rank_district_candidates,
-                      select_walking_candidates, split_recommendation_groups,
-                      summarize_hour_comparison,
-                      summarize_matching_history)
+from flask import Flask, jsonify, make_response, render_template, request, session
+
+from ai_service import TAIPEI_DISTRICTS, IntentServiceError, parse_parking_query
+from analysis import (
+    build_history_series,
+    district_hell_score,
+    rank_candidates,
+    rank_district_candidates,
+    select_walking_candidates,
+    split_recommendation_groups,
+    summarize_hour_comparison,
+    summarize_matching_history,
+)
+from analytics_capture import (
+    build_query_detail,
+    build_recommendation_snapshots,
+    infer_destination_district,
+    new_query_trace,
+)
+from analytics_database import (
+    fetch_dashboard_events,
+    fetch_events,
+    fetch_insight_details,
+    fetch_insight_recommendations,
+    insert_event,
+    insert_navigation_event,
+    replace_recommendation_snapshots,
+    update_query_feedback,
+    upsert_query_detail,
+)
+from analytics_service import (
+    BROWSER_EVENT_TYPES,
+    DASHBOARD_RANGES,
+    SOURCES,
+    analytics_identity,
+    build_browser_event,
+    build_query_event,
+    parse_dashboard_range,
+    summarize_events,
+    summarize_insights,
+)
 from calendar_service import classify_arrival_day
-from config import Config
 from collector import collect_once
-from database import (fetch_current_lots, fetch_history,
-                      fetch_latest_snapshot_time, fetch_matching_history,
-                      get_connection)
+from config import Config
+from database import (
+    fetch_current_lots,
+    fetch_history,
+    fetch_latest_snapshot_time,
+    fetch_matching_history,
+    get_connection,
+)
 from fee_service import build_fee_summary
 from geocoder import geocode_address, geocode_candidates, resolve_known_landmark
 from status_service import build_status

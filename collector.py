@@ -4,7 +4,9 @@ import argparse
 import json
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+
 import requests
+
 from analysis import clean_available
 from database import get_connection, insert_snapshots, upsert_parking_lots
 from parking_metadata import infer_official_facility_type

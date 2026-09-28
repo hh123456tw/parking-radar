@@ -253,7 +253,8 @@ def rank_district_candidates(rows):
         if current is None:
             continue
         historical = row.get("historical_hell_score")
-        score = (100 - current) if historical is None else (100 - current) * 0.8 + (100 - historical) * 0.2
+        score = (100 - current) if historical is None else (
+            (100 - current) * 0.8 + (100 - historical) * 0.2)
         item = dict(row, distance_m=None, hell_score=current,
                     hell_label=hell_label(current), recommendation_score=round(score, 2))
         ranked.append(item)
@@ -274,7 +275,8 @@ def summarize_matching_history(rows, arrival_time, min_samples=3):
     if frame.empty:
         return {"hell_score": None, "sample_count": 0,
                 "day_type": target_type, "hour": target_hour}
-    frame["local_time"] = pd.to_datetime(frame["captured_at"], utc=True).dt.tz_convert("Asia/Taipei")
+    frame["local_time"] = pd.to_datetime(
+        frame["captured_at"], utc=True).dt.tz_convert("Asia/Taipei")
     frame["day_type"] = frame["local_time"].dt.weekday.map(
         lambda value: "weekday" if value < 5 else "weekend")
     frame["hour"] = frame["local_time"].dt.hour

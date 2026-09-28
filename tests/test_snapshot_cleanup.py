@@ -1,11 +1,10 @@
 """每日快照清理的 UTC 日期與封存先行契約測試。"""
 
-from datetime import date, datetime, timezone
 import importlib
 import logging
+from datetime import date, datetime, timezone
 
 import pytest
-
 
 FIXED_NOW = datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc)
 

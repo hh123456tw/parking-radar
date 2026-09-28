@@ -12,7 +12,6 @@ from pathlib import Path
 
 from database import iter_snapshot_archive_rows
 
-
 CSV_FIELDS = (
     "lot_id", "lot_name", "district", "total_spaces",
     "available_spaces", "source_updated_at", "captured_at",

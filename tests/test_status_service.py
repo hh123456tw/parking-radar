@@ -5,8 +5,13 @@ from datetime import datetime, timedelta, timezone
 
 import status_service
 from status_service import (
-    app_uptime_minutes, classify_data_age, classify_disk, classify_load,
-    classify_memory, classify_mysql_latency, read_linux_status,
+    app_uptime_minutes,
+    classify_data_age,
+    classify_disk,
+    classify_load,
+    classify_memory,
+    classify_mysql_latency,
+    read_linux_status,
 )
 
 NOW_UTC = datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc)

@@ -1,7 +1,7 @@
 """OpenRouteService 步行矩陣邊界測試；外部 HTTP 只在這一層替換。"""
 
-import requests
 import pytest
+import requests
 
 from walking_service import WalkingRouteError, fetch_walking_routes
 

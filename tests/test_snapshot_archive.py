@@ -11,7 +11,6 @@ import pytest
 
 import snapshot_archive
 
-
 SAMPLE_ROW = {
     "lot_id": "TPE0001",
     "lot_name": "臺北車站停車場",
@@ -293,7 +292,8 @@ def test_archive_day_rejects_corrupt_existing_archive_without_overwriting(
 
 
 def test_archive_day_low_disk_space_writes_nothing(tmp_path):
-    low_disk = lambda _path: SimpleNamespace(free=1024 ** 3 - 1)
+    def low_disk(_path):
+        return SimpleNamespace(free=1024 ** 3 - 1)
 
     with pytest.raises(
             RuntimeError, match="snapshot archive disk space below 1 GiB"):

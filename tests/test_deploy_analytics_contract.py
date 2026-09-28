@@ -5,7 +5,6 @@ from pathlib import Path
 
 import analytics_cleanup
 
-
 SITE = Path("deploy/nginx-parking-radar.conf")
 LOGGING = Path("deploy/nginx-parking-radar-log-format.conf")
 ENV_EXAMPLE = Path(".env.example")

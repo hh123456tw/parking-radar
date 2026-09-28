@@ -6,8 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from analytics_database import fetch_dashboard_events
-from analytics_service import (parse_dashboard_range, summarize_events,
-                               summarize_insights)
+from analytics_service import parse_dashboard_range, summarize_events, summarize_insights
 
 NOW_UTC = datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc)
 

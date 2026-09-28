@@ -282,7 +282,11 @@ def test_compact_navigation_links_use_rank_zero():
 def test_consent_banner_copy_is_exact():
     """同意橫幅文案必須如實說明 14 天文字保留與 90 天刪除。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
-    copy = "是否允許匿名使用分析？記錄查詢文字與完整目的地 14 天、其餘分析資料 90 天；只保存行政區、約 1 公里的粗略區域、成功／速度／導航點擊與不可逆裝置雜湊，不保存 IP 或手機位置。"
+    copy = (
+        "是否允許匿名使用分析？記錄查詢文字與完整目的地 14 天、其餘分析資料 90 天；"
+        "只保存行政區、約 1 公里的粗略區域、成功／速度／導航點擊與不可逆裝置雜湊，"
+        "不保存 IP 或手機位置。"
+    )
     assert copy in template
     assert "允許匿名分析" in template
     assert "不要分析" in template

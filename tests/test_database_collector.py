@@ -4,8 +4,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
 import pymysql
+import pytest
 
 import collector
 import database

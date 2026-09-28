@@ -3,20 +3,20 @@
 import logging
 import os
 from contextlib import contextmanager
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 try:
     import fcntl
 except ImportError:  # Windows has no fcntl; its scheduled jobs remain portable.
     fcntl = None
 
-from snapshot_archive import archive_day
 from config import SNAPSHOT_ARCHIVE_DIR
 from database import (
     delete_snapshot_range_batch,
     fetch_oldest_snapshot_time,
     get_connection,
 )
+from snapshot_archive import archive_day
 
 # 歷史圖只顯示七天，多保留一天避免時區邊界缺少資料。
 SNAPSHOT_RETENTION_DAYS = 8
@@ -97,7 +97,8 @@ def run_cleanup(now=None, batch_size=DELETE_BATCH_SIZE, archive_root=None):
                     result["deleted_snapshots"] += removed
                     if removed < batch_size:
                         break
-                logger.info("snapshot cleanup utc_day=%s archive=%s archived_rows=%s deleted_rows=%s",
+                logger.info("snapshot cleanup utc_day=%s archive=%s "
+                            "archived_rows=%s deleted_rows=%s",
                             day, archive.get("path"), archive["rows"], deleted_rows)
             return result
         except Exception:

@@ -3,8 +3,9 @@
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-import app as app_module
 import pytest
+
+import app as app_module
 
 
 def make_client():

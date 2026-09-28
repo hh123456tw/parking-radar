@@ -8,6 +8,8 @@ import pytest
 import requests
 
 import app as app_module
+from ai_service import IntentServiceError, ParkingIntent
+from calendar_service import classify_arrival_day
 
 
 def test_production_app_emits_info_performance_logs():
@@ -15,8 +17,6 @@ def test_production_app_emits_info_performance_logs():
     flask_app = app_module.create_app({"TESTING": False})
 
     assert flask_app.logger.isEnabledFor(logging.INFO)
-from ai_service import IntentServiceError, ParkingIntent
-from calendar_service import classify_arrival_day
 
 
 class CloseTrackingConnection:

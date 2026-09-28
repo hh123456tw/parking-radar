@@ -1,9 +1,9 @@
 """隱私安全的匿名分析領域輔助：同意、HMAC、粗略區域與固定事件結構。"""
 
-from collections import Counter
 import hashlib
 import hmac
 import statistics
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from math import ceil, floor
 from uuid import UUID

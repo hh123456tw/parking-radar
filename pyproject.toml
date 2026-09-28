@@ -1,0 +1,30 @@
+[project]
+name = "parking-radar"
+version = "1.2.0"
+description = "Taipei off-street parking decision tool: live availability, walking time and explainable rules."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".tmp", ".worktrees", "deploy-artifacts", "output", "docs"]
+
+[tool.ruff.lint]
+# pycodestyle、pyflakes、import 排序與 bugbear 常見錯誤。
+select = ["E", "F", "W", "I", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    ".*", ".tmp", ".worktrees", "browser-review-state", "deploy-artifacts",
+    ".qa-browser", ".gstack-review", ".superpowers",
+]
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*", ".venv/*", ".tmp/*", ".worktrees/*", "deploy-artifacts/*"]
+
+[tool.coverage.report]
+skip_empty = true

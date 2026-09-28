@@ -4,9 +4,11 @@ import json
 from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
+
 from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel, Field, field_validator
+
 from config import Config
 
 TAIPEI_DISTRICTS = {

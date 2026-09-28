@@ -9,7 +9,6 @@ import parking_metadata
 from parking_metadata import (
     infer_official_facility_type,
     match_osm_facilities,
-    sync_parking_metadata,
 )
 
 

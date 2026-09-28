@@ -1,6 +1,7 @@
 """集中讀取環境變數與專題固定規則，避免設定散落在各模組。"""
 
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()

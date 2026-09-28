@@ -1,6 +1,7 @@
 """集中管理 PyMySQL 連線與固定 SQL；所有外部值都以參數傳入。"""
 
 import pymysql
+
 from config import Config
 
 

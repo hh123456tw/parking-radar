@@ -3,7 +3,6 @@
 import json
 from datetime import datetime, timezone
 
-from analytics_database import QUERY_DETAIL_COLUMNS, RECOMMENDATION_COLUMNS
 from analytics_capture import (
     PARSED_FIELDS,
     build_query_detail,
@@ -11,6 +10,7 @@ from analytics_capture import (
     infer_destination_district,
     new_query_trace,
 )
+from analytics_database import QUERY_DETAIL_COLUMNS, RECOMMENDATION_COLUMNS
 
 REQUEST_ID = "550e8400-e29b-41d4-a716-446655440000"
 NOW = datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)
@@ -81,7 +81,8 @@ def test_query_detail_truncates_raw_input_and_whitelists_parsed_json():
 
 def test_new_query_trace_picks_raw_text_by_mode():
     chat = new_query_trace({"mode": "chat", "message": "今晚去台北車站"}, "chat", "direct", NOW)
-    manual = new_query_trace({"address": "北平西路3號", "district": "信義區"}, "manual", "shared", NOW)
+    manual = new_query_trace(
+        {"address": "北平西路3號", "district": "信義區"}, "manual", "shared", NOW)
     district_only = new_query_trace({"district": "中正區"}, "manual", "shared", NOW)
     assert chat["raw_query_text"] == "今晚去台北車站"
     assert manual["raw_query_text"] == "北平西路3號"
