@@ -98,6 +98,19 @@ Gemini 負責將「我要去台北車站」等自然語言轉成結構化查詢�
 
 公開使用者不需要登入；管理介面由反向代理層的身份驗證保護。正式部署必須使用強隨機密碼或受控身份驗證服務，任何憑證皆不得提交至版本庫。
 
+完整取捨記錄在 [docs/adr/](docs/adr/)。
+
+## 工程亮點
+
+| 問題 | 做法 |
+|---|---|
+| 連續查詢時舊回應晚到會蓋掉新結果 | 每次查詢中止上一筆 `AbortController`，並以遞增序號丟棄過期回應 |
+| PWA 快取讓手機一直跑舊版 JS | 以前端檔案內容的 SHA-256 當版本號，由 Flask 帶入 HTML 與 `/sw.js`，檔案一改就自動換新（[ADR 0004](docs/adr/0004-content-hash-asset-version.md)） |
+| 刪除舊快照前必須確保已完整封存 | 暫存檔驗證、`fsync`、create-only 發布與 SHA-256 完成證明；中斷後可比對資料庫自我修復（[ADR 0003](docs/adr/0003-archive-before-delete.md)） |
+| 免費 API 額度可能被惡意請求耗盡 | nginx 只信任 Cloudflare 的 `CF-Connecting-IP`，以真實 IP 對查詢限流；聊天輸入在呼叫 Gemini 前先限制長度 |
+| 官方資料格式不穩定 | 特殊值、`N/A` 與缺漏座標逐筆排除，單筆錯誤不影響整批寫入 |
+| 部署失敗不能讓網站停擺 | [deploy/deploy.sh](deploy/deploy.sh) 先備份資料庫，切換後跑健康檢查與實際查詢，任何一步失敗自動換回舊版 |
+
 ## 推薦規則摘要
 
 - 排除無效資料及搜尋範圍外的場站。
@@ -117,18 +130,19 @@ Gemini 負責將「我要去台北車站」等自然語言轉成結構化查詢�
 
 **Frontend:** Vanilla JavaScript · Leaflet · Chart.js · PWA
 
-**Engineering:** Pytest · GitHub Actions · Gunicorn · Nginx · Cloudflare · GCP
+**Engineering:** Pytest · Ruff · pip-audit · GitHub Actions · Gunicorn · Nginx · Cloudflare · GCP
 
 ## 自動測試與 CI
 
-完整自動化測試套件涵蓋分析規則、API、資料收集、地址搜尋、步行路線、費率解析、PWA、Analytics 與管理儀表板。GitHub Actions 會在每次 push 與 pull request 執行離線測試。
+自動化測試涵蓋分析規則、API、資料收集、地址搜尋、步行路線、費率解析、PWA、Analytics、管理儀表板與部署設定，行覆蓋率約 94%。GitHub Actions 會在每次 push 與 pull request 執行 ruff、pip-audit，以及含 90% 覆蓋率門檻的離線測試。
 
 停車快照在 MySQL 保留近期資料；每日清理會先將完整 UTC 日期封存為
 `/opt/parking-archives/YYYY/MM/parking-snapshots-YYYY-MM-DD.csv.gz`，
 驗證成功後才分批刪除，網站查詢不讀取封存檔。
 
 ```powershell
-python -m pytest -q
+ruff check .
+python -m pytest -q --cov
 node --check static/app.js
 ```
 
@@ -139,8 +153,8 @@ node --check static/app.js
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
+python -m pip install -r requirements-dev.txt
+Copy-Item .env.example .env   # 設定 FLASK_SECRET_KEY；本機 http 開發另設 SESSION_COOKIE_SECURE=0
 
 mysql -u root -p -e "CREATE DATABASE parking_hell CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 Get-Content -Raw schema.sql | mysql -u root -p parking_hell
@@ -155,6 +169,7 @@ flask --app app run --debug
 
 | 名稱 | 用途 |
 |---|---|
+| `FLASK_SECRET_KEY` | session 簽章金鑰；必填，未設定時拒絕啟動 |
 | `MYSQL_HOST`、`MYSQL_PORT` | MySQL 連線位置 |
 | `MYSQL_USER`、`MYSQL_PASSWORD`、`MYSQL_DATABASE` | 專案資料庫帳號與名稱 |
 | `GEMINI_API_KEY`、`GEMINI_MODEL` | 自然語言意圖解析；留空時停用 |
@@ -174,9 +189,23 @@ flask --app app run --debug
 - 系統無法可靠判斷費率或場站型態時會顯示未知，不以猜測值取代官方資訊。
 - 路線、地標與生成式 AI 服務皆可能受免費額度、網路或供應商狀態影響。
 
+## 部署
+
+正式環境為 GCP VM 上的 Nginx + Gunicorn，前方由 Cloudflare 提供 HTTPS。
+
+- [deploy/deploy.sh](deploy/deploy.sh)：備份資料庫、切換版本、健康檢查與冒煙測試，失敗自動回滾。
+- [deploy/install-nginx.sh](deploy/install-nginx.sh)：通過 `nginx -t` 才 reload，失敗還原舊設定。
+- [deploy/parking-radar.crontab](deploy/parking-radar.crontab)：資料收集與每日清理排程。
+
 ## Documentation
 
+- [Architecture Decision Records](docs/adr/)
 - [Changelog](CHANGELOG.md)
 - [QA Review](docs/QA_REVIEW_2026-08-21.md)
 - [Analytics QA Review](docs/QA_REVIEW_2026-08-23_ANALYTICS.md)
 - [Deployment Configurations](deploy/)
+- [開發過程封存（AI 協作規格與計畫）](docs/archive/)
+
+## License
+
+[MIT](LICENSE)
