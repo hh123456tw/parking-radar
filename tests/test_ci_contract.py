@@ -12,7 +12,7 @@ def test_ci_runs_required_offline_checks():
         "push:", "pull_request:", "python-version: \"3.13\"",
         "node-version: \"22\"", "python -m pytest -q",
         "python -m compileall -q", "node --check static/app.js",
-        "node --check static/sw.js",
+        "node --check templates/sw.js",
     ):
         assert required in text
 

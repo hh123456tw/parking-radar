@@ -52,7 +52,7 @@ def test_icon_files_are_valid_png_of_expected_size(name, size):
 
 def test_service_worker_excludes_network_only_targets_before_cache():
     """/api/、OSM 圖磚與 Google 地圖必須在快取找查前直接走網路。"""
-    sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
+    sw = (ROOT / "templates" / "sw.js").read_text(encoding="utf-8")
     fetch_handler = sw.split('addEventListener("fetch"', 1)[1]
     guard = fetch_handler.split("event.respondWith", 1)[0]
     for token in ("/api/", "/admin/", "tile.openstreetmap.org", "google.com/maps"):
@@ -60,12 +60,12 @@ def test_service_worker_excludes_network_only_targets_before_cache():
 
 
 def test_service_worker_precaches_application_shell():
-    sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
-    assert "parking-radar-shell-decision-ui-v3" in sw
+    sw = (ROOT / "templates" / "sw.js").read_text(encoding="utf-8")
+    assert "parking-radar-shell-${ASSET_VERSION}" in sw
     assert '"/"' in sw
-    assert "style.css?v=decision-ui-v3" in sw
-    assert "app.js?v=decision-ui-v3" in sw
-    assert "decision-ui-v2" not in sw
+    assert "style.css?v=${ASSET_VERSION}" in sw
+    assert "app.js?v=${ASSET_VERSION}" in sw
+    assert "leaflet.js?v=${ASSET_VERSION}" in sw
     assert "manifest.webmanifest" in sw
     assert "icon-192.png" in sw
     assert "icon-512.png" in sw

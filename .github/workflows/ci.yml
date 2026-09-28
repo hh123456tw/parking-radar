@@ -30,4 +30,4 @@ jobs:
         run: |
           node --check static/app.js
           node --check static/admin_analytics.js
-          node --check static/sw.js
+          node --check templates/sw.js

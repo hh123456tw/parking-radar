@@ -8,15 +8,74 @@ const ANALYTICS_REQUIRE_CONSENT =
   document.body.dataset.analyticsRequireConsent === "1";
 const districts = ["松山區","信義區","大安區","中山區","中正區","大同區","萬華區","文山區","南港區","內湖區","士林區","北投區"];
 
-const map = L.map("map").setView([25.0478, 121.5319], 12);
-const markerLayer = L.layerGroup().addTo(map);
+const ASSET_VERSION = document.body.dataset.assetVersion || "";
+// 地圖程式庫載入失敗時，查詢與圖卡仍要可用，只隱藏地圖功能。
+const map = window.L ? L.map("map").setView([25.0478, 121.5319], 12) : null;
+const markerLayer = map ? L.layerGroup().addTo(map) : null;
 const markerByLot = new Map();
 let historyChart = null;
 let activeRequestId = null;
+// 每次新查詢遞增序號並中止上一筆，晚到的舊回應一律丟棄。
+let querySequence = 0;
+let queryController = null;
+let historySequence = 0;
+let chartLoader = null;
 
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution:"© OpenStreetMap contributors",
-}).addTo(map);
+if (map) {
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution:"© OpenStreetMap contributors",
+  }).addTo(map);
+} else {
+  document.querySelector("#map").textContent = "地圖暫時無法載入，仍可使用下方清單與導航。";
+}
+
+// 伺服器或代理回傳 HTML 錯誤頁時，不把 SyntaxError 等英文訊息直接顯示給使用者。
+async function readJson(response) {
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(response.ok
+      ? "伺服器回應格式錯誤，請稍後再試"
+      : `伺服器暫時無法回應（${response.status}），請稍後再試`);
+  }
+}
+
+function friendlyError(error) {
+  if (error instanceof TypeError) return "網路連線中斷，請確認網路後重試";
+  return error.message || "查詢失敗，請稍後再試";
+}
+
+// 移到結果區並把焦點交給標題，手機不用自己往下滑，螢幕報讀器也會讀到新內容。
+function revealSection(selector) {
+  const target = document.querySelector(selector);
+  if (!target) return;
+  // 不用 smooth：背景分頁或「減少動態效果」設定下平滑捲動可能完全不執行。
+  target.scrollIntoView({block:"start"});
+  target.focus({preventScroll:true});
+}
+
+// Chart.js 只有在查看趨勢時才載入，減少首頁下載量。
+function loadChartLibrary() {
+  if (window.Chart) return Promise.resolve();
+  if (!chartLoader) {
+    chartLoader = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = `/static/vendor/chart.umd.min.js?v=${ASSET_VERSION}`;
+      script.onload = resolve;
+      script.onerror = () => {
+        chartLoader = null;
+        reject(new Error("圖表元件載入失敗，請稍後再試"));
+      };
+      document.head.append(script);
+    });
+  }
+  return chartLoader;
+}
+
+function setQueryBusy(busy) {
+  document.querySelector(".query-panel").setAttribute("aria-busy", String(busy));
+  document.querySelector("#chat-submit").textContent = busy ? "分析中…" : "分析";
+}
 
 const districtSelect = document.querySelector("#district");
 districts.forEach(name => districtSelect.add(new Option(name, name)));
@@ -116,7 +175,7 @@ document.addEventListener("click", event => {
   const mapButton = event.target.closest("[data-map-lot]");
   if (mapButton) {
     const marker = markerByLot.get(String(mapButton.dataset.mapLot));
-    if (!marker) return;
+    if (!map || !marker) return;
     track({
       event_type:"map_marker_clicked",
       request_id:activeRequestId,
@@ -178,11 +237,20 @@ async function sendFeedback(code) {
 async function submitQuery(payload) {
   // 每次新查詢先清空 request_id，避免失敗或等待期間的點擊連到上一筆成功查詢。
   activeRequestId = null;
+  if (queryController) queryController.abort();
+  const sequence = ++querySequence;
+  const isCurrent = () => sequence === querySequence;
   hideLocationChoices();
   resetFeedback();
+  setQueryBusy(true);
   showStatus("正在分析並確認官方停車資料…", "");
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), QUERY_TIMEOUT_MS);
+  queryController = controller;
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, QUERY_TIMEOUT_MS);
   try {
     const response = await fetch("/api/query", {
       method:"POST",
@@ -194,7 +262,8 @@ async function submitQuery(payload) {
       body:JSON.stringify(payload),
       signal:controller.signal,
     });
-    const data = await response.json();
+    const data = await readJson(response);
+    if (!isCurrent()) return;
     if (!response.ok) {
       if (data.fallback === "manual") document.querySelector("#manual-panel").open = true;
       throw new Error(data.error || "查詢失敗");
@@ -203,6 +272,7 @@ async function submitQuery(payload) {
       document.querySelector("#result-content").hidden = true;
       renderLocationChoices(data);
       showStatus(`找到 ${data.location_choices.length} 個可能地點，請先確認。`, "");
+      revealSection("#location-choice-heading");
       return;
     }
     document.querySelector("#result-content").hidden = false;
@@ -217,14 +287,22 @@ async function submitQuery(payload) {
     showStatus(data.data_status === "stale"
       ? "分析完成；目前使用最後一次可取得的停車資料。"
       : "分析完成；資料來自臺北市官方即時資訊。", "success");
+    if (map) map.invalidateSize();
+    revealSection("#recommendations-heading");
   } catch (error) {
-    if (error.name === "AbortError") {
+    // 被新查詢取代的舊請求靜默結束，不覆蓋新查詢的狀態訊息。
+    if (!isCurrent()) return;
+    if (error.name === "AbortError" && timedOut) {
       document.querySelector("#manual-panel").open = true;
       throw new Error("分析超過 20 秒，請重試或改用手動查詢");
     }
-    throw error;
+    throw new Error(friendlyError(error));
   } finally {
     clearTimeout(timeoutId);
+    if (isCurrent()) {
+      queryController = null;
+      setQueryBusy(false);
+    }
   }
 }
 
@@ -239,8 +317,8 @@ document.querySelector("#chat-form").addEventListener("submit", async event => {
 
 document.querySelector("#manual-form").addEventListener("submit", async event => {
   event.preventDefault();
-  const arrival = new Date(document.querySelector("#arrival-time").value).toISOString();
   try {
+    const arrival = new Date(document.querySelector("#arrival-time").value).toISOString();
     await submitQuery({
       mode:"manual",
       address:document.querySelector("#address").value,
@@ -538,6 +616,7 @@ function markerPopup(lot) {
 }
 
 function renderMap(data) {
+  if (!map) return;
   markerLayer.clearLayers();
   markerByLot.clear();
   const focusPoints = [];
@@ -595,6 +674,7 @@ function resetHistory() {
 }
 
 async function loadHistory(lotId, lotName) {
+  const sequence = ++historySequence;
   const section = document.querySelector("#history-section");
   const shell = document.querySelector("#history-chart-shell");
   const note = document.querySelector("#history-note");
@@ -602,9 +682,16 @@ async function loadHistory(lotId, lotName) {
   shell.hidden = true;
   document.querySelector("#history-title").textContent = `${lotName}空位變化`;
   note.textContent = "正在載入歷史資料…";
+  // 趨勢區在頁面下方，點擊後直接帶過去，避免使用者以為按鈕沒反應。
+  revealSection("#history-title");
   try {
-    const response = await fetch(`/api/parking/${encodeURIComponent(lotId)}/history`);
-    const data = await response.json();
+    const [response] = await Promise.all([
+      fetch(`/api/parking/${encodeURIComponent(lotId)}/history`),
+      loadChartLibrary(),
+    ]);
+    const data = await readJson(response);
+    // 連續點不同場站時只畫最後一次點擊的結果。
+    if (sequence !== historySequence) return;
     if (!response.ok) throw new Error(data.error || "暫時無法取得歷史資料");
     if (historyChart) {
       historyChart.destroy();
@@ -637,7 +724,8 @@ async function loadHistory(lotId, lotName) {
       },
     });
   } catch (error) {
-    note.textContent = error.message;
+    if (sequence !== historySequence) return;
+    note.textContent = friendlyError(error);
   }
 }
 
@@ -822,9 +910,8 @@ document.addEventListener("DOMContentLoaded", () => {
   recordPwaOpenedOnce();
 
   if (!("serviceWorker" in navigator)) return;
-  // 讓 /static/sw.js 管理整個站台；伺服器未回傳 Service-Worker-Allowed 時退回預設範圍。
-  navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v3", {scope:"/"})
-    .catch(() => navigator.serviceWorker.register("/static/sw.js?v=decision-ui-v3"));
+  // /sw.js 由伺服器依前端檔案內容帶入版本，檔案一改就自動換新快取。
+  navigator.serviceWorker.register("/sw.js", {scope:"/"}).catch(() => {});
 
   let deferredPrompt = null;
   const installButton = document.querySelector("#install-app");

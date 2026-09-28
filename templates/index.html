@@ -5,14 +5,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>停車地獄雷達</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='decision-ui-v3') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css', v=asset_version) }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=asset_version) }}">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
   <meta name="theme-color" content="#0b1118">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
 </head>
 
-<body data-analytics-require-consent="{{ '1' if analytics_require_consent else '0' }}">
+<body data-analytics-require-consent="{{ '1' if analytics_require_consent else '0' }}"
+      data-asset-version="{{ asset_version }}">
   <header class="hero">
     <p class="eyebrow">TAIPEI PARKING DECISION TOOL</p>
     <h1>台北停車地獄雷達</h1>
@@ -41,7 +42,7 @@
               </span>
               <span class="voice-label">語音</span>
             </button>
-            <button>分析</button>
+            <button id="chat-submit">分析</button>
           </div>
         </div>
       </form>
@@ -53,12 +54,12 @@
               <option value="">由地址判斷</option>
             </select></label>
           <label>抵達時間<input id="arrival-time" type="datetime-local" required></label>
-          <button>手動分析</button>
+          <button id="manual-submit">手動分析</button>
         </form>
       </details>
       <p id="status" role="status"></p>
       <section id="location-choice-section" class="location-choice-panel" hidden>
-        <h2>請確認目的地</h2>
+        <h2 id="location-choice-heading" tabindex="-1">請確認目的地</h2>
         <p>選擇正確地點後才會分析附近停車場；若都不是，請補充分館或地址。</p>
         <div id="location-choices" class="location-choice-grid"></div>
       </section>
@@ -76,7 +77,7 @@
       <section>
         <div class="section-heading">
           <div>
-            <h2>首選停車場</h2>
+            <h2 id="recommendations-heading" tabindex="-1">首選停車場</h2>
             <p class="section-note">優先顯示所有可以前往的場站；安全場站不足三座時才補入備選。</p>
           </div>
         </div>
@@ -101,7 +102,7 @@
         <div id="other-lots" class="compact-list" hidden></div>
       </section>
       <section id="history-section" class="history-section" hidden>
-        <h2 id="history-title">空位變化</h2>
+        <h2 id="history-title" tabindex="-1">空位變化</h2>
         <p id="history-note">選擇停車場後載入歷史參考。</p>
         <div id="history-chart-shell" class="history-chart-shell" hidden><canvas id="history-chart"></canvas></div>
       </section>
@@ -129,9 +130,8 @@
     {% endif %}
     <p>資料來源：臺北市資料大平臺｜步行路線 © openrouteservice.org by HeiGIT｜地圖資料 © OpenStreetMap contributors｜歷史資料僅供參考，非空位預測。</p>
   </footer>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='app.js', v='decision-ui-v3') }}"></script>
+  <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js', v=asset_version) }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v=asset_version) }}"></script>
 </body>
 
 </html>

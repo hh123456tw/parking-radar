@@ -1,15 +1,18 @@
 """Flask 入口；集中協調查詢流程，不在路由內重寫分析公式。"""
 
+import hashlib
 import logging
 import re
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from threading import Lock
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from flask import Flask, jsonify, render_template, request, session
+from flask import (Flask, jsonify, make_response, render_template, request,
+                   session)
 from ai_service import IntentServiceError, TAIPEI_DISTRICTS, parse_parking_query
 from analytics_capture import (build_query_detail,
                                build_recommendation_snapshots,
@@ -42,6 +45,23 @@ from walking_service import WalkingRouteError, fetch_walking_routes
 
 _refresh_lock = Lock()
 LOCATION_CHOICE_CLIENT_VERSION = "2"
+APP_ROOT = Path(__file__).resolve().parent
+# 前端外殼檔案；任何一個內容改變，版本號就跟著改變，手機 PWA 會自動換新快取。
+VERSIONED_ASSETS = (
+    "static/app.js", "static/style.css", "templates/index.html",
+    "templates/sw.js", "static/manifest.webmanifest",
+    "static/vendor/leaflet/leaflet.js", "static/vendor/leaflet/leaflet.css",
+    "static/vendor/chart.umd.min.js",
+)
+
+
+def compute_asset_version(root=APP_ROOT, paths=VERSIONED_ASSETS):
+    """以前端檔案內容雜湊產生版本號，取代手動維護的版本字串。"""
+    digest = hashlib.sha256()
+    for relative in paths:
+        digest.update(relative.encode("utf-8"))
+        digest.update((Path(root) / relative).read_bytes())
+    return digest.hexdigest()[:12]
 
 
 class ParkingDataUnavailable(RuntimeError):
@@ -263,6 +283,11 @@ def create_app(test_config=None):
     app.config.from_object(Config)
     if test_config:
         app.config.update(test_config)
+    asset_version = compute_asset_version()
+
+    @app.context_processor
+    def inject_asset_version():
+        return {"asset_version": asset_version}
 
     def run_analytics_write(operation, *args):
         """共用短交易：成功提交並回傳列數，失敗回滾並重拋，最後關閉連線。"""
@@ -386,10 +411,8 @@ def create_app(test_config=None):
         return jsonify(payload), status_code
 
     @app.after_request
-    def apply_scope_and_admin_headers(response):
-        """服務器腳本授權根目錄；所有 /admin/ 回應保持唯讀且不可快取。"""
-        if request.path == "/static/sw.js":
-            response.headers["Service-Worker-Allowed"] = "/"
+    def apply_admin_headers(response):
+        """所有 /admin/ 回應保持唯讀且不可快取。"""
         if request.path.startswith("/admin/"):
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Robots-Tag"] = "noindex"
@@ -408,6 +431,14 @@ def create_app(test_config=None):
             analytics_require_consent=app.config.get(
                 "ANALYTICS_REQUIRE_CONSENT", True),
         )
+
+    @app.get("/sw.js")
+    def service_worker():
+        """由根路徑提供服務器腳本並帶入內容版本；不可快取，讓瀏覽器每次檢查更新。"""
+        response = make_response(render_template("sw.js"))
+        response.headers["Content-Type"] = "application/javascript; charset=utf-8"
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.post("/api/query")
     def query_parking():

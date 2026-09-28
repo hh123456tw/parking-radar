@@ -218,7 +218,7 @@ def test_location_choices_are_clickable_and_reuse_manual_query():
     assert 'destination_label:`${choice.name}（${choice.address}）`' in script
     assert 'id="location-choice-section"' in template
     assert 'id="result-content"' in template
-    assert "decision-ui-v3" in template
+    assert "v=asset_version" in template
     assert 'document.querySelector("#result-content").hidden = true' in script
 
 
@@ -452,20 +452,45 @@ def test_new_interaction_events_use_delegated_handlers():
     assert "history_opened" in script
 
 
-def test_pwa_asset_versions_bumped_for_decision_ui():
-    """模板與服務器快取金鑰必須同步升版，避免手機沿用舊決策卡畫面。"""
+def test_pwa_assets_use_content_hash_version_instead_of_manual_strings():
+    """模板與服務器共用內容雜湊版本；不可再出現需要手動同步的版本字串。"""
     template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
-    sw = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
+    sw = (ROOT / "templates" / "sw.js").read_text(encoding="utf-8")
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-    assert "decision-ui-v3" in template
-    assert "analytics-v3" not in template
-    assert "parking-radar-shell-decision-ui-v3" in sw
-    assert "style.css?v=decision-ui-v3" in sw
-    assert "app.js?v=decision-ui-v3" in sw
-    assert 'register("/static/sw.js?v=decision-ui-v3"' in script
-    assert "decision-ui-v2" not in template
-    assert "decision-ui-v2" not in sw
+    assert "filename='app.js', v=asset_version" in template
+    assert "filename='style.css', v=asset_version" in template
+    assert 'ASSET_VERSION = "{{ asset_version }}"' in sw
+    assert 'register("/sw.js", {scope:"/"})' in script
+    for text in (template, sw, script):
+        assert "decision-ui-v" not in text
+
+
+def test_third_party_libraries_are_self_hosted():
+    """Leaflet 與 Chart.js 由本站提供；外部 CDN 失效時查詢仍可運作。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "unpkg.com" not in template
+    assert "cdn.jsdelivr.net" not in template
+    assert "filename='vendor/leaflet/leaflet.js'" in template
+    assert (ROOT / "static" / "vendor" / "leaflet" / "leaflet.js").is_file()
+    assert (ROOT / "static" / "vendor" / "chart.umd.min.js").is_file()
+    assert "window.L ?" in script
+    assert "loadChartLibrary()" in script
+
+
+def test_stale_query_responses_are_discarded_and_results_revealed():
+    """新查詢中止上一筆並以序號丟棄晚到回應；完成後捲到結果區。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "if (queryController) queryController.abort();" in script
+    assert "if (!isCurrent()) return;" in script
+    assert 'revealSection("#recommendations-heading")' in script
+    assert 'revealSection("#history-title")' in script
+    assert "await readJson(response)" in script
+    # 只有 readJson 內部可以直接解析 JSON，其餘呼叫都要經過友善錯誤轉換。
+    assert script.count("await response.json();") == 1
 
 
 def test_safari_voice_input_is_optional_accessible_and_never_auto_submits():
