@@ -14,7 +14,7 @@ from calendar_service import classify_arrival_day
 
 def test_production_app_emits_info_performance_logs():
     """正式環境必須允許 INFO，否則 query_complete 分段耗時不會出現在日誌。"""
-    flask_app = app_module.create_app({"TESTING": False})
+    flask_app = app_module.create_app({"TESTING": False, "SECRET_KEY": "test"})
 
     assert flask_app.logger.isEnabledFor(logging.INFO)
 

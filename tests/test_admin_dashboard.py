@@ -174,8 +174,9 @@ def test_admin_page_versions_static_assets_to_bypass_pwa_cache(monkeypatch):
     body = make_admin_client(monkeypatch).get(
         "/admin/analytics").get_data(as_text=True)
 
-    assert "/static/admin_analytics.css?v=admin-v3" in body
-    assert "/static/admin_analytics.js?v=admin-v3" in body
+    version = app_module.compute_asset_version()
+    assert f"/static/admin_analytics.css?v={version}" in body
+    assert f"/static/admin_analytics.js?v={version}" in body
 
 
 def test_admin_api_requests_use_unique_urls_to_escape_existing_pwa_cache():

@@ -13,7 +13,13 @@ SNAPSHOT_ARCHIVE_DIR = os.getenv(
 class Config:
     """提供 Flask、MySQL、Gemini、地址搜尋與分析所需設定。"""
 
-    SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "dev-only-change-me")
+    # 不提供預設值：未設定時 create_app 會拒絕啟動，避免 session 可被偽造。
+    SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
+    SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "1") == "1"
+    SESSION_COOKIE_SAMESITE = "Lax"
+    # 查詢 JSON 很小；限制請求大小，避免超大內容送進 Gemini。
+    MAX_CONTENT_LENGTH = 16 * 1024
+    MAX_CHAT_MESSAGE_LENGTH = 200
     MYSQL_HOST = os.getenv("MYSQL_HOST")
     MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
     MYSQL_USER = os.getenv("MYSQL_USER")
