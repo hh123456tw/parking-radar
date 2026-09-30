@@ -78,6 +78,7 @@ summary { color:#c7d1db; cursor:pointer; }
 .destination-summary { min-width:0; }
 .destination-summary span, .summary-metrics span { color:var(--muted); font-size:.9rem; }
 .destination-summary strong { display:block; margin-top:8px; font-size:1.25rem; overflow-wrap:anywhere; }
+.share-query { min-height:36px; margin-top:12px; padding:0 14px; color:#e5ebf1; background:#26313d; border:1px solid #374555; }
 .summary-metrics { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .summary-metrics article { padding:14px; border-radius:12px; background:var(--panel-2); }
 .summary-metrics strong { display:block; margin:5px 0; font-size:1.35rem; }

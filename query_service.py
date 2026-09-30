@@ -1,5 +1,6 @@
 """停車查詢流程：解析輸入、找目的地、套用固定規則；不依賴 Flask，路由只負責包裝回應。"""
 
+import math
 import re
 import time
 from collections import defaultdict
@@ -30,6 +31,9 @@ from walking_service import WalkingRouteError, fetch_walking_routes
 
 _refresh_lock = Lock()
 LOCATION_CHOICE_CLIENT_VERSION = "2"
+# 臺北市外框（南、北緯度與西、東經度）；只擋明顯錯誤，邊界附近由半徑篩選處理。
+TAIPEI_BOUNDS = (24.96, 25.21, 121.45, 121.67)
+SHARED_LABEL_MAX_LENGTH = 60
 
 FACILITY_LABELS = {
     "mechanical": "機械式", "surface": "平面式",
@@ -136,11 +140,37 @@ def ensure_fresh_parking_data(now=None):
     return "stale", f"{reason}，目前顯示 {age} 分鐘前資料"
 
 
+def shared_coordinates(payload):
+    """分享連結的座標必須成對、為有限數字且位於臺北市範圍；沒帶座標回傳 None。"""
+    latitude, longitude = payload.get("latitude"), payload.get("longitude")
+    if latitude is None and longitude is None:
+        return None
+    for value in (latitude, longitude):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value):
+            raise ValueError("分享連結的座標格式不正確")
+    min_lat, max_lat, min_lng, max_lng = TAIPEI_BOUNDS
+    if not (min_lat <= latitude <= max_lat and min_lng <= longitude <= max_lng):
+        raise ValueError("分享連結的地點不在臺北市")
+    return float(latitude), float(longitude)
+
+
 def parse_manual_payload(payload):
     """驗證手動表單並回傳與 Gemini 相同概念的普通字典。"""
     district = (payload.get("district") or "").strip()
     address = (payload.get("address") or "").strip()
     destination_label = (payload.get("destination_label") or "").strip()
+    coordinates = shared_coordinates(payload)
+    if coordinates:
+        # 分享連結已帶確認過的座標，直接查詢，不再經過地址搜尋。
+        arrival = datetime.fromisoformat(payload["arrival_time"])
+        if arrival.tzinfo is None:
+            raise ValueError("抵達時間必須包含時區")
+        return {"intent": "recommend", "address": None, "district": None,
+                "arrival_time": arrival, "coordinates": coordinates,
+                "destination_label":
+                    destination_label[:SHARED_LABEL_MAX_LENGTH] or "分享的地點",
+                "original_destination": None}
     if not district and not address:
         raise ValueError("請輸入地址或選擇行政區")
     if district and district not in TAIPEI_DISTRICTS:
@@ -193,7 +223,8 @@ def validate_parsed_query(parsed, now=None):
     if missing_fields:
         names = "、".join(missing_fields)
         raise ValueError(f"還需要：{names}")
-    if not parsed.get("address") and not parsed.get("district"):
+    if not parsed.get("address") and not parsed.get("district") \
+            and not parsed.get("coordinates"):
         raise ValueError("請提供臺北市地址或行政區")
     if parsed.get("arrival_time") is None:
         parsed["arrival_time"] = now or datetime.now(ZoneInfo("Asia/Taipei"))
@@ -303,7 +334,7 @@ def run_query(payload, trace, started, *, session_state, client_version,
         # 抵達日分類只讀本機行事曆，任何異常都與資料查詢相同以 JSON 回傳。
         day_info = classify_arrival_day(parsed["arrival_time"])
         connection = database.get_connection()
-        verified_choices = geocode_candidates(
+        verified_choices = [] if parsed.get("coordinates") else geocode_candidates(
             parsed.get("location_candidates", []), connection)
         needs_choice = len(verified_choices) > 1 or (
             verified_choices and requires_location_confirmation(parsed))
@@ -322,7 +353,11 @@ def run_query(payload, trace, started, *, session_state, client_version,
                  "intent": parsed["intent"]},
                 200, "location_choice_required", trace=trace, terminal=False)
 
-        if verified_choices:
+        if parsed.get("coordinates"):
+            latitude, longitude = parsed["coordinates"]
+            destination = {"display_address": parsed["destination_label"],
+                           "latitude": latitude, "longitude": longitude}
+        elif verified_choices:
             choice = verified_choices[0]
             parsed["address"] = choice["address"]
             parsed["district"] = choice["district"] or parsed.get("district")

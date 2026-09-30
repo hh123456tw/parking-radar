@@ -787,3 +787,58 @@ def test_stale_query_caps_snapshot_age(monkeypatch):
     assert calls == [query_service.Config.STALE_MAX_MINUTES]
     assert response.status_code == 503
     assert "3 小時" in response.get_json()["error"]
+
+
+def no_geocoding(*_args):
+    raise AssertionError("分享座標查詢不應呼叫地址服務")
+
+
+def test_shared_coordinates_query_skips_geocoding(monkeypatch):
+    """分享連結帶座標時直接用座標查詢，不經 Gemini 與 Nominatim。"""
+    monkeypatch.setattr(database, "get_connection", CloseTrackingConnection)
+    monkeypatch.setattr(query_service, "geocode_address", no_geocoding)
+    monkeypatch.setattr(query_service, "geocode_candidates", no_geocoding)
+    monkeypatch.setattr(query_service, "parse_parking_query", no_geocoding)
+    monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [lot_row()])
+
+    response = make_client().post("/api/query", json={
+        "mode": "manual", "latitude": 25.0375, "longitude": 121.5637,
+        "destination_label": "臺北市政府",
+        "arrival_time": "2026-08-04T18:00:00+08:00",
+    })
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["destination"] == {
+        "display_address": "臺北市政府", "latitude": 25.0375,
+        "longitude": 121.5637,
+    }
+    assert body["recommendations"][0]["lot_id"] == "TPE1"
+
+
+@pytest.mark.parametrize("coordinates", [
+    {"latitude": 22.6273, "longitude": 120.3014},
+    {"latitude": 25.0375},
+    {"latitude": "25.0375", "longitude": "121.5637"},
+    {"latitude": True, "longitude": 121.5637},
+    {"latitude": float("nan"), "longitude": 121.5637},
+])
+def test_shared_coordinates_outside_taipei_or_malformed_are_rejected(coordinates):
+    """座標必須成對、為數字且位於臺北市範圍，否則不查詢。"""
+    parsed = {"mode": "manual", "destination_label": "某處",
+              "arrival_time": "2026-08-04T18:00:00+08:00", **coordinates}
+
+    with pytest.raises(ValueError):
+        query_service.parse_manual_payload(parsed)
+
+
+def test_shared_destination_label_is_trimmed_to_display_length():
+    """分享名稱來自網址，只保留顯示所需長度。"""
+    parsed = query_service.parse_manual_payload({
+        "latitude": 25.0375, "longitude": 121.5637,
+        "destination_label": "長" * 200,
+        "arrival_time": "2026-08-04T18:00:00+08:00",
+    })
+
+    assert len(parsed["destination_label"]) == query_service.SHARED_LABEL_MAX_LENGTH
+    assert parsed["coordinates"] == (25.0375, 121.5637)

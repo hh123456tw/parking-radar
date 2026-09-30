@@ -724,3 +724,18 @@ def test_dashboard_tables_are_wrapped_in_table_scroll():
         prefix = html.split(f'<tbody id="{body_id}">', 1)[0]
         before_table = prefix.rsplit("<table", 1)[0]
         assert before_table.rstrip().endswith('<div class="table-scroll">')
+
+
+def test_share_link_carries_coordinates_and_runs_after_identity_setup():
+    """分享連結只帶座標與名稱；自動查詢須排在建立分析身分的 DOMContentLoaded 之後。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="share-query"' in template
+    assert 'src:"share"' in script
+    assert "navigator.share" in script
+    assert "navigator.clipboard.writeText" in script
+    assert "function sharedQueryFromUrl()" in script
+    identity_setup = script.index("ensureAnalyticsIdentity();\n  }")
+    auto_query = script.index("const sharedQuery = sharedQueryFromUrl();")
+    assert identity_setup < auto_query
