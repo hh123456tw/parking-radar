@@ -3,6 +3,7 @@
 import pytest
 
 import app as app_module
+import query_service
 
 
 def test_production_app_refuses_to_start_without_secret_key():
@@ -46,7 +47,7 @@ def test_json_responses_get_base_headers_without_csp():
 def test_overlong_chat_message_is_rejected_before_gemini(monkeypatch):
     """超長聊天內容直接回 400，不呼叫 Gemini 消耗額度。"""
     called = []
-    monkeypatch.setattr(app_module, "parse_parking_query",
+    monkeypatch.setattr(query_service, "parse_parking_query",
                         lambda *args: called.append(args))
     client = app_module.create_app({"TESTING": True, "SECRET_KEY": "test"}).test_client()
 

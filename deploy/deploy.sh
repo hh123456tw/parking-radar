@@ -69,7 +69,8 @@ chown -R parking:www-data "$RELEASE"
 sudo -u parking "$RELEASE/.venv/bin/pip" install --disable-pip-version-check -q \
   -r "$RELEASE/requirements.txt"
 sudo -u parking "$RELEASE/.venv/bin/python" -m py_compile \
-  "$RELEASE/app.py" "$RELEASE/collector.py" "$RELEASE/fee_service.py" \
+  "$RELEASE/app.py" "$RELEASE/query_service.py" "$RELEASE/analytics_recorder.py" \
+  "$RELEASE"/routes/*.py "$RELEASE/collector.py" "$RELEASE/fee_service.py" \
   "$RELEASE/snapshot_archive.py" "$RELEASE/config.py"
 test -f "$RELEASE/templates/sw.js"
 test -f "$RELEASE/static/vendor/leaflet/leaflet.js"
