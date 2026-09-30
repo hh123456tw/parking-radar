@@ -950,11 +950,18 @@ document.addEventListener("DOMContentLoaded", () => {
 const TAIPEI_BOUNDS = {minLat:24.96, maxLat:25.21, minLng:121.45, maxLng:121.67};
 const SHARED_LABEL_MAX_LENGTH = 60;
 
+// Nominatim 地址是「名稱, 門牌, 路名, 里, 區, …」；分享只取開頭，門牌在前時組回「路名＋號」。
+function shortPlaceName(displayAddress) {
+  const parts = displayAddress.split(/\s*[,，]\s*/).filter(Boolean);
+  if (/^\d+(-\d+)?$/.test(parts[0] || "") && parts[1]) return `${parts[1]}${parts[0]}號`;
+  return parts[0] || displayAddress;
+}
+
 function shareUrl(destination) {
   const params = new URLSearchParams({
     lat:destination.latitude.toFixed(5),
     lng:destination.longitude.toFixed(5),
-    name:destination.display_address.slice(0, SHARED_LABEL_MAX_LENGTH),
+    name:shortPlaceName(destination.display_address).slice(0, SHARED_LABEL_MAX_LENGTH),
     src:"share",
   });
   return `${location.origin}/?${params}`;
@@ -968,7 +975,7 @@ async function shareQuery() {
     try {
       await navigator.share({
         title:"停車地獄雷達",
-        text:`${lastDestination.display_address} 附近現在哪裡好停？`,
+        text:`${shortPlaceName(lastDestination.display_address)} 附近現在哪裡好停？`,
         url,
       });
     } catch (error) {

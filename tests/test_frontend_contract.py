@@ -736,6 +736,7 @@ def test_share_link_carries_coordinates_and_runs_after_identity_setup():
     assert "navigator.share" in script
     assert "navigator.clipboard.writeText" in script
     assert "function sharedQueryFromUrl()" in script
+    assert "shortPlaceName(lastDestination.display_address)" in script
     identity_setup = script.index("ensureAnalyticsIdentity();\n  }")
     auto_query = script.index("const sharedQuery = sharedQueryFromUrl();")
     assert identity_setup < auto_query
