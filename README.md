@@ -4,7 +4,7 @@
 
 Gemini 只負責理解自然語言；停車場篩選、風險判斷與推薦排序皆由可測試的 Python 規則決定。
 
-[Live Demo](https://aipe04.zebra-ai-gateway.com/) · [![CI](https://github.com/hh123456tw/parking-radar/actions/workflows/ci.yml/badge.svg)](https://github.com/hh123456tw/parking-radar/actions/workflows/ci.yml)
+[Live Demo](https://aipe04.zebra-ai-gateway.com/) · [English](#english-summary) · [![CI](https://github.com/hh123456tw/parking-radar/actions/workflows/ci.yml/badge.svg)](https://github.com/hh123456tw/parking-radar/actions/workflows/ci.yml)
 
 ![停車地獄雷達查詢結果](docs/images/parking-radar-demo.png)
 
@@ -205,6 +205,20 @@ flask --app app run --debug
 - [Analytics QA Review](docs/QA_REVIEW_2026-08-23_ANALYTICS.md)
 - [Deployment Configurations](deploy/)
 - [開發過程封存（AI 協作規格與計畫）](docs/archive/)
+
+## English Summary
+
+**Parking Radar** answers one question for drivers in Taipei: *where should I park right now?* It combines live off-street parking availability from Taipei City open data, real walking time from OpenRouteService, and parsed fee rules into a short list of explained recommendations.
+
+- **AI parses, rules decide.** Gemini only turns free-text questions into a structured query. Filtering, risk classification and ranking are deterministic Python rules, so every result is reproducible, testable and explainable. When Gemini is unavailable, the manual form still works ([ADR 0001](docs/adr/0001-ai-parses-rules-decide.md)).
+- **Risk before distance.** Lots with invalid data or only a few spaces left are excluded or demoted before walking time is compared, so "closest but almost full" never ranks first ([ADR 0002](docs/adr/0002-risk-before-distance.md)).
+- **Graceful degradation.** Each external dependency (Gemini, Nominatim, OpenRouteService, the official feed) has a fallback, and stale data is shown with its age instead of being hidden.
+- **Safe data retention.** Old snapshots are archived to verified, fsync'd gzip files with SHA-256 proofs before any row is deleted ([ADR 0003](docs/adr/0003-archive-before-delete.md)).
+- **Production hardening.** Content-hash asset versioning for the PWA, per-IP rate limiting behind Cloudflare, strict security headers, and a deploy script that backs up the database, smoke-tests the new release and rolls back automatically on failure.
+
+**Stack:** Python 3.13, Flask (blueprints), MySQL, Pandas · Gemini, Nominatim, OpenRouteService · Vanilla JS, Leaflet, Chart.js, PWA · Pytest (~95% line coverage, 90% CI floor), Ruff, pip-audit, GitHub Actions · Gunicorn, Nginx, Cloudflare, GCP.
+
+**Code map:** `app.py` builds the app; `routes/` holds the HTTP blueprints; `query_service.py` runs the query pipeline without Flask; `analysis.py` contains the ranking rules; `collector.py` ingests the official feed every 15 minutes.
 
 ## License
 

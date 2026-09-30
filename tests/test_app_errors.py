@@ -6,6 +6,8 @@ from uuid import UUID
 import pytest
 
 import app as app_module
+import database
+import query_service
 
 
 def make_client():
@@ -26,7 +28,7 @@ def fail_connection():
 
 def test_query_database_connection_failure_returns_json_503(monkeypatch):
     """查詢 API 的 DB 連線失敗不得落入 Flask HTML 500。"""
-    monkeypatch.setattr(app_module, "get_connection", fail_connection)
+    monkeypatch.setattr(database, "get_connection", fail_connection)
 
     response = make_client().post("/api/query", json={
         "mode": "manual",
@@ -43,7 +45,7 @@ def test_query_database_connection_failure_returns_json_503(monkeypatch):
 
 def test_history_database_connection_failure_returns_json_503(monkeypatch):
     """歷史 API 的 DB 連線失敗也必須使用同一種 JSON 錯誤格式。"""
-    monkeypatch.setattr(app_module, "get_connection", fail_connection)
+    monkeypatch.setattr(database, "get_connection", fail_connection)
 
     response = make_client().get("/api/parking/TPE0001/history")
 
@@ -94,12 +96,12 @@ def test_manual_query_validation_returns_json_400(payload, message):
 def test_chat_structured_fields_are_validated_before_database(parsed, message):
     """Gemini 結構合法仍可能缺必要值，必須在 DB 查詢前拒絕。"""
     with pytest.raises(ValueError, match=message):
-        app_module.validate_parsed_query(parsed)
+        query_service.validate_parsed_query(parsed)
 
 
 def test_chat_missing_arrival_time_defaults_to_taipei_now():
     """只說目的地時，以台北現在時間查詢，不要求使用者再補 arrival_time。"""
-    now = app_module.datetime.fromisoformat("2026-08-04T19:20:00+08:00")
+    now = query_service.datetime.fromisoformat("2026-08-04T19:20:00+08:00")
     parsed = {
         "missing_fields": ["arrival_time"],
         "address": "臺北市政府",
@@ -107,7 +109,7 @@ def test_chat_missing_arrival_time_defaults_to_taipei_now():
         "arrival_time": None,
     }
 
-    result = app_module.validate_parsed_query(parsed, now=now)
+    result = query_service.validate_parsed_query(parsed, now=now)
 
     assert result["arrival_time"] == now
     assert result["missing_fields"] == []
@@ -115,7 +117,7 @@ def test_chat_missing_arrival_time_defaults_to_taipei_now():
 
 def test_chat_still_rejects_other_missing_fields_when_time_defaults():
     """自動補現在時間後，地址等真正必要欄位仍不可略過。"""
-    now = app_module.datetime.fromisoformat("2026-08-04T19:20:00+08:00")
+    now = query_service.datetime.fromisoformat("2026-08-04T19:20:00+08:00")
     parsed = {
         "missing_fields": ["address", "arrival_time"],
         "address": None,
@@ -124,7 +126,7 @@ def test_chat_still_rejects_other_missing_fields_when_time_defaults():
     }
 
     with pytest.raises(ValueError, match="還需要：address"):
-        app_module.validate_parsed_query(parsed, now=now)
+        query_service.validate_parsed_query(parsed, now=now)
 
 
 def test_original_destination_is_optional_when_district_exists():
@@ -137,7 +139,7 @@ def test_original_destination_is_optional_when_district_exists():
         "arrival_time": None,
     }
 
-    result = app_module.validate_parsed_query(parsed)
+    result = query_service.validate_parsed_query(parsed)
 
     assert result["district"] == "信義區"
     assert result["address"] is None
@@ -154,7 +156,7 @@ def test_unlisted_landmark_original_destination_becomes_geocoding_query():
         "arrival_time": None,
     }
 
-    result = app_module.validate_parsed_query(parsed)
+    result = query_service.validate_parsed_query(parsed)
 
     assert result["address"] == "華山文創園區"
 
@@ -169,7 +171,7 @@ def test_chat_combines_district_with_partial_street_address():
         "arrival_time": None,
     }
 
-    result = app_module.validate_parsed_query(parsed)
+    result = query_service.validate_parsed_query(parsed)
 
     assert result["address"] == "臺北市信義區市府路1號"
 
@@ -184,19 +186,19 @@ def test_chat_known_landmark_uses_fixed_house_address():
         "arrival_time": None,
     }
 
-    result = app_module.validate_parsed_query(parsed)
+    result = query_service.validate_parsed_query(parsed)
 
     assert result["address"] == "臺北市信義區市府路1號"
 
 
 def test_manual_known_landmark_shares_fixed_address_cache():
     """手動輸入已知地標時，也要轉成固定門牌以共用地址快取。"""
-    parsed = app_module.parse_manual_payload({
+    parsed = query_service.parse_manual_payload({
         "address": "台北車站",
         "arrival_time": "2026-08-23T12:00:00+08:00",
     })
 
-    result = app_module.validate_parsed_query(parsed)
+    result = query_service.validate_parsed_query(parsed)
 
     assert result["address"] == "臺北市中正區北平西路3號"
     assert result["destination_label"] == \
@@ -207,26 +209,26 @@ def test_fresh_snapshot_skips_on_demand_collector(monkeypatch):
     """45 分鐘內的快照直接使用，不得浪費官方 API 請求。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
-        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=10))
+        query_service, "_latest_snapshot_time", lambda: now - timedelta(minutes=10))
     monkeypatch.setattr(
-        app_module, "collect_once",
+        query_service, "collect_once",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("不應更新")),
     )
 
-    assert app_module.ensure_fresh_parking_data(now) == ("fresh", None)
+    assert query_service.ensure_fresh_parking_data(now) == ("fresh", None)
 
 
 def test_stale_snapshot_returns_immediately_without_collector(monkeypatch):
     """已有舊資料時不得讓使用者等待完整 collector，應立即誠實降級。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
-        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=60))
+        query_service, "_latest_snapshot_time", lambda: now - timedelta(minutes=60))
     monkeypatch.setattr(
-        app_module, "collect_once",
+        query_service, "collect_once",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("不應同步更新")),
     )
 
-    assert app_module.ensure_fresh_parking_data(now) == (
+    assert query_service.ensure_fresh_parking_data(now) == (
         "stale", "資料更新排程尚未完成，目前顯示 60 分鐘前資料")
 
 
@@ -234,13 +236,13 @@ def test_stale_snapshot_does_not_depend_on_official_api(monkeypatch):
     """已有舊資料時即使官方失敗，也不應在查詢路徑呼叫外部 API。"""
     now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
-        app_module, "_latest_snapshot_time", lambda: now - timedelta(minutes=67))
+        query_service, "_latest_snapshot_time", lambda: now - timedelta(minutes=67))
     monkeypatch.setattr(
-        app_module, "collect_once",
+        query_service, "collect_once",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("official down")),
     )
 
-    status, notice = app_module.ensure_fresh_parking_data(now)
+    status, notice = query_service.ensure_fresh_parking_data(now)
 
     assert status == "stale"
     assert notice == "資料更新排程尚未完成，目前顯示 67 分鐘前資料"
@@ -248,15 +250,15 @@ def test_stale_snapshot_does_not_depend_on_official_api(monkeypatch):
 
 def test_failed_refresh_without_any_snapshot_is_unavailable(monkeypatch):
     """完全沒有可降級資料時，回傳明確錯誤而不是空白成功結果。"""
-    monkeypatch.setattr(app_module, "_latest_snapshot_time", lambda: None)
+    monkeypatch.setattr(query_service, "_latest_snapshot_time", lambda: None)
     monkeypatch.setattr(
-        app_module, "collect_once",
+        query_service, "collect_once",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("official down")),
     )
 
-    with pytest.raises(app_module.ParkingDataUnavailable,
+    with pytest.raises(query_service.ParkingDataUnavailable,
                        match="暫時無法取得官方停車資料"):
-        app_module.ensure_fresh_parking_data()
+        query_service.ensure_fresh_parking_data()
 
 
 def test_naive_arrival_datetime_from_gemini_is_taipei_time():
@@ -265,9 +267,9 @@ def test_naive_arrival_datetime_from_gemini_is_taipei_time():
         "missing_fields": [],
         "address": "臺北車站",
         "district": "中正區",
-        "arrival_time": app_module.datetime(2026, 9, 27, 18, 0),
+        "arrival_time": query_service.datetime(2026, 9, 27, 18, 0),
     }
 
-    result = app_module.validate_parsed_query(parsed)
+    result = query_service.validate_parsed_query(parsed)
 
     assert result["arrival_time"].isoformat() == "2026-09-27T18:00:00+08:00"

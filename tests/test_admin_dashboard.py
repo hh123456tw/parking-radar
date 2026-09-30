@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import app as app_module
+import database
+import routes.admin as admin_routes
 import status_service
 
 ROOT = Path(__file__).parents[1]
@@ -146,9 +148,9 @@ def make_admin_client(monkeypatch, database_error=False,
         connections.append(connection)
         return connection
 
-    monkeypatch.setattr(app_module, "datetime", FixedNow)
+    monkeypatch.setattr(admin_routes, "datetime", FixedNow)
     monkeypatch.setattr(status_service, "datetime", FixedNow)
-    monkeypatch.setattr(app_module, "get_connection", fake_connection)
+    monkeypatch.setattr(database, "get_connection", fake_connection)
     monkeypatch.setattr(
         status_service, "read_linux_status", lambda **_: dict(FIXED_SYSTEM))
     client = flask_app.test_client()
@@ -215,7 +217,7 @@ def test_status_api_reports_healthy_system_and_data(monkeypatch):
 def test_status_api_handles_database_connection_failure(monkeypatch):
     app = app_module.create_app({"TESTING": True, "SECRET_KEY": "test"})
     monkeypatch.setattr(
-        app_module, "get_connection",
+        database, "get_connection",
         lambda: (_ for _ in ()).throw(RuntimeError("db down")),
     )
     monkeypatch.setattr(

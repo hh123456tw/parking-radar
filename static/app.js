@@ -20,6 +20,7 @@ let querySequence = 0;
 let queryController = null;
 let historySequence = 0;
 let chartLoader = null;
+let lastDestination = null;
 
 if (map) {
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -398,6 +399,9 @@ function districtStatus(score) {
 function renderSummary(data) {
   document.querySelector("#destination").textContent =
     data.destination?.display_address || "行政區查詢";
+  // 行政區查詢沒有座標，無法產生穩定的分享連結。
+  lastDestination = data.destination || null;
+  document.querySelector("#share-query").hidden = !lastDestination;
   const score = data.current.district_score;
   document.querySelector("#district-status").textContent = districtStatus(score);
   document.querySelector("#district-score").textContent =
@@ -940,4 +944,78 @@ document.addEventListener("DOMContentLoaded", () => {
   if (iosHint && iosSafari && !window.matchMedia("(display-mode: standalone)").matches) {
     iosHint.hidden = false;
   }
+});
+
+// 分享連結只帶已確認的座標與名稱；朋友打開時以當下即時資料重新查詢，不經 Gemini 與地址搜尋。
+const TAIPEI_BOUNDS = {minLat:24.96, maxLat:25.21, minLng:121.45, maxLng:121.67};
+const SHARED_LABEL_MAX_LENGTH = 60;
+
+// Nominatim 地址是「名稱, 門牌, 路名, 里, 區, …」；分享只取開頭，門牌在前時組回「路名＋號」。
+function shortPlaceName(displayAddress) {
+  const parts = displayAddress.split(/\s*[,，]\s*/).filter(Boolean);
+  if (/^\d+(-\d+)?$/.test(parts[0] || "") && parts[1]) return `${parts[1]}${parts[0]}號`;
+  return parts[0] || displayAddress;
+}
+
+function shareUrl(destination) {
+  const params = new URLSearchParams({
+    lat:destination.latitude.toFixed(5),
+    lng:destination.longitude.toFixed(5),
+    name:shortPlaceName(destination.display_address).slice(0, SHARED_LABEL_MAX_LENGTH),
+    src:"share",
+  });
+  return `${location.origin}/?${params}`;
+}
+
+// 手機優先叫出原生分享選單（可直接分享到 LINE）；不支援時改為複製連結。
+async function shareQuery() {
+  if (!lastDestination) return;
+  const url = shareUrl(lastDestination);
+  if (typeof navigator.share === "function") {
+    try {
+      await navigator.share({
+        title:"停車地獄雷達",
+        text:`${shortPlaceName(lastDestination.display_address)} 附近現在哪裡好停？`,
+        url,
+      });
+    } catch (error) {
+      // 使用者自己關掉分享選單不算錯誤。
+      if (error.name !== "AbortError") showStatus("分享失敗，請再試一次", "error");
+    }
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    showStatus("已複製分享連結", "success");
+  } catch {
+    window.prompt("複製這個分享連結", url);
+  }
+}
+
+// 網址座標不合法或不在臺北市時回傳 null，頁面維持一般首頁。
+function sharedQueryFromUrl() {
+  const params = new URLSearchParams(location.search);
+  if (!params.has("lat") || !params.has("lng")) return null;
+  const latitude = Number(params.get("lat"));
+  const longitude = Number(params.get("lng"));
+  const bounds = TAIPEI_BOUNDS;
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
+      || latitude < bounds.minLat || latitude > bounds.maxLat
+      || longitude < bounds.minLng || longitude > bounds.maxLng) return null;
+  return {
+    mode:"manual",
+    latitude,
+    longitude,
+    destination_label:(params.get("name") || "").slice(0, SHARED_LABEL_MAX_LENGTH),
+    arrival_time:new Date().toISOString(),
+  };
+}
+
+document.querySelector("#share-query").addEventListener("click", shareQuery);
+
+// 必須排在前面的 DOMContentLoaded 之後：團隊測試模式在那裡建立匿名身分，分享來的新訪客才會被統計。
+document.addEventListener("DOMContentLoaded", () => {
+  const sharedQuery = sharedQueryFromUrl();
+  if (!sharedQuery) return;
+  submitQuery(sharedQuery).catch(error => showStatus(error.message, "error"));
 });
