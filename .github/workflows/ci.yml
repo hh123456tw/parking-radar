@@ -33,3 +33,35 @@ jobs:
           node --check static/app.js
           node --check static/admin_analytics.js
           node --check templates/sw.js
+
+  # master 通過所有檢查後自動部署；deploy 使用者只能上傳打包檔並觸發 VM 上預先安裝的 deploy.sh。
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build release archive
+        run: |
+          echo "SHORT_SHA=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_ENV"
+          git archive --format=tar.gz -o release.tar.gz HEAD
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Deploy to production
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "deploy@${DEPLOY_HOST}" "$SHORT_SHA" < release.tar.gz | tee deploy.log
+          grep -q "DEPLOY_OK sha=${SHORT_SHA}" deploy.log

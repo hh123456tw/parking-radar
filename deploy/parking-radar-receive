@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# deploy 使用者的 SSH 強制指令：唯一能做的事是「收下某個 commit 的打包檔並部署」。
+# 用法（GitHub Actions）：ssh deploy@<vm> <短 sha> < parking-radar.tar.gz
+set -Eeuo pipefail
+
+SHA="${SSH_ORIGINAL_COMMAND:-}"
+if [[ ! "$SHA" =~ ^[0-9a-f]{7,40}$ ]]; then
+  echo "REJECTED: expected a commit sha" >&2
+  exit 2
+fi
+
+ARCHIVE="/tmp/parking-radar-${SHA}.tar.gz"
+# 打包檔上限 50 MB，避免外洩的金鑰被拿來塞爆磁碟。
+head -c 52428800 > "$ARCHIVE"
+gzip -t "$ARCHIVE"
+# sudoers 只允許這一支 root 擁有、事先安裝的部署腳本；打包檔內的 deploy.sh 不會以 root 執行。
+exec sudo /usr/local/sbin/parking-radar-deploy "$SHA"

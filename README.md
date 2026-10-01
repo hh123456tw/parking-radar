@@ -193,8 +193,11 @@ flask --app app run --debug
 
 正式環境為 GCP VM 上的 Nginx + Gunicorn，前方由 Cloudflare 提供 HTTPS。
 
+合併到 `master` 且 CI 全部通過後，GitHub Actions 會自動部署。部署用的 SSH 金鑰只能執行一支接收腳本：它收下該 commit 的打包檔，再以 sudo 執行 VM 上事先安裝的 `deploy.sh`。即使金鑰外洩，也無法登入 shell、轉送連線或以 root 執行打包檔內的程式。
+
 - [deploy/deploy.sh](deploy/deploy.sh)：備份資料庫、切換版本、健康檢查與冒煙測試，失敗自動回滾。
 - [deploy/install-nginx.sh](deploy/install-nginx.sh)：通過 `nginx -t` 才 reload，失敗還原舊設定。
+- [deploy/install-deploy-user.sh](deploy/install-deploy-user.sh)：建立 CD 專用的 `deploy` 使用者與 sudo 白名單；`deploy.sh` 修改後需重新執行。
 - [deploy/parking-radar.crontab](deploy/parking-radar.crontab)：資料收集與每日清理排程。
 
 ## Documentation
@@ -214,7 +217,7 @@ flask --app app run --debug
 - **Risk before distance.** Lots with invalid data or only a few spaces left are excluded or demoted before walking time is compared, so "closest but almost full" never ranks first ([ADR 0002](docs/adr/0002-risk-before-distance.md)).
 - **Graceful degradation.** Each external dependency (Gemini, Nominatim, OpenRouteService, the official feed) has a fallback, and stale data is shown with its age instead of being hidden.
 - **Safe data retention.** Old snapshots are archived to verified, fsync'd gzip files with SHA-256 proofs before any row is deleted ([ADR 0003](docs/adr/0003-archive-before-delete.md)).
-- **Production hardening.** Content-hash asset versioning for the PWA, per-IP rate limiting behind Cloudflare, strict security headers, and a deploy script that backs up the database, smoke-tests the new release and rolls back automatically on failure.
+- **Production hardening.** Content-hash asset versioning for the PWA, per-IP rate limiting behind Cloudflare, strict security headers, and continuous deployment from `master`: the deploy key is forced to a single receive script, and the pre-installed deploy script backs up the database, smoke-tests the new release and rolls back automatically on failure.
 
 **Stack:** Python 3.13, Flask (blueprints), MySQL, Pandas · Gemini, Nominatim, OpenRouteService · Vanilla JS, Leaflet, Chart.js, PWA · Pytest (~95% line coverage, 90% CI floor), Ruff, pip-audit, GitHub Actions · Gunicorn, Nginx, Cloudflare, GCP.
 

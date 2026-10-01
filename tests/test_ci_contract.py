@@ -27,3 +27,27 @@ def test_test_tools_stay_out_of_production_requirements():
     assert "ruff" not in production
     assert "-r requirements.txt" in development
     assert "pytest-cov" in development
+
+
+def test_deploy_runs_only_after_tests_on_master():
+    """自動部署必須等測試通過、只在 master push 觸發，且嚴格驗證主機指紋。"""
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "needs: test" in text
+    assert "github.ref == 'refs/heads/master'" in text
+    assert "cancel-in-progress: false" in text
+    assert "StrictHostKeyChecking=yes" in text
+    assert "DEPLOY_OK sha=${SHORT_SHA}" in text
+
+
+def test_deploy_key_is_forced_to_receive_script_only():
+    """deploy 金鑰只能執行接收腳本，sudo 只能執行事先安裝的 deploy.sh。"""
+    installer = (ROOT / "deploy" / "install-deploy-user.sh").read_text(encoding="utf-8")
+    receive = (ROOT / "deploy" / "parking-radar-receive").read_text(encoding="utf-8")
+
+    assert 'restrict,command="/usr/local/sbin/parking-radar-receive"' in installer
+    # sudoers 行寫在 printf 格式字串內，結尾是字面的 \n。
+    assert r"NOPASSWD: /usr/local/sbin/parking-radar-deploy\n" in installer
+    assert "visudo -cf" in installer
+    assert "^[0-9a-f]{7,40}$" in receive
+    assert "exec sudo /usr/local/sbin/parking-radar-deploy" in receive
