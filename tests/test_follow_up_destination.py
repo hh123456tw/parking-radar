@@ -128,3 +128,21 @@ def test_chat_follow_up_end_to_end_keeps_destination_and_saves_session(monkeypat
     with client.session_transaction() as session:
         assert session["destination"] == "臺北市信義區市府路1號"
         assert "destination_at" in session
+
+
+@pytest.mark.parametrize("field, value", [
+    ("original_destination", "臺北市政府"),
+    ("address", "臺北市信義區市府路1號"),
+])
+def test_gemini_repeating_the_previous_destination_reuses_confirmed_result(field, value):
+    """Gemini 自己從上一輪補回同一地點時，沿用已確認的結果，不再要求重新確認地點。"""
+    parsed = dict(empty_follow_up(), **{field: value}, missing_fields=[],
+                  location_candidates=[{"name": "臺北市政府", "address": "市府路1號",
+                                        "district": "信義區"}])
+
+    result = query_service.apply_previous_destination(parsed, SESSION, now=NOW)
+
+    assert result["address"] == "臺北市信義區市府路1號"
+    assert result["destination_label"] == "臺北市政府（臺北市信義區市府路1號）"
+    assert result["location_candidates"] == []
+    assert query_service.requires_location_confirmation(result) is False
