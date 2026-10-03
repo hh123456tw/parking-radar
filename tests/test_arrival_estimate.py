@@ -113,8 +113,8 @@ class FakeConnection:
         pass
 
 
-def test_estimates_attach_only_for_arrivals_at_least_thirty_minutes_away(monkeypatch):
-    """馬上出發時即時空位就是最好的答案；只有之後才抵達才查歷史並附上預估。"""
+def test_estimates_attach_for_now_and_future_arrivals(monkeypatch):
+    """沒指定時間的查詢以現在計算，也要附上「平常這個時段」的預估作為對照。"""
     now = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
     calls = []
 
@@ -124,11 +124,10 @@ def test_estimates_attach_only_for_arrivals_at_least_thirty_minutes_away(monkeyp
         return rows + [snapshot(day, 18, 15, 35) for day in WEEKDAYS]
 
     monkeypatch.setattr(query_service, "fetch_matching_history", history)
-    soon = [{"lot_id": "TPE1"}]
-    query_service.attach_arrival_estimates(
-        FakeConnection(), soon, now + timedelta(minutes=20), now=now)
-    assert calls == []
-    assert "arrival_estimate" not in soon[0]
+    right_now = [{"lot_id": "TPE1"}]
+    query_service.attach_arrival_estimates(FakeConnection(), right_now, now, now=now)
+    assert right_now[0]["arrival_estimate"]["time_label"] == "17:00"
+    calls.clear()
 
     later = [{"lot_id": "TPE1"}]
     query_service.attach_arrival_estimates(
