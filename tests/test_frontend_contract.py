@@ -386,7 +386,7 @@ def test_active_request_id_updates_only_from_terminal_result():
 def test_active_request_id_resets_before_each_query():
     """新查詢開始要先清空 activeRequestId，失敗或進行中點擊不能連到上一筆。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-    submit = script.split("async function submitQuery(payload)", 1)[1].split(
+    submit = script.split("async function submitQuery(", 1)[1].split(
         'document.querySelector("#chat-form")', 1)[0]
 
     assert "activeRequestId = null" in submit
@@ -430,7 +430,7 @@ def test_feedback_buttons_lock_before_fetch_and_restore_only_on_failure():
     """按鈕必須在 fetch 前原子停用；只有失敗分支（非 204／網路錯誤）才恢復。"""
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
     feedback = script.split("async function sendFeedback(code)", 1)[1].split(
-        "async function submitQuery(payload)", 1)[0]
+        "async function submitQuery(", 1)[0]
 
     assert feedback.index("disabled = true") < feedback.index(
         'fetch("/api/analytics/feedback"')
@@ -740,3 +740,34 @@ def test_share_link_carries_coordinates_and_runs_after_identity_setup():
     identity_setup = script.index("ensureAnalyticsIdentity();\n  }")
     auto_query = script.index("const sharedQuery = sharedQueryFromUrl();")
     assert identity_setup < auto_query
+
+
+def test_current_location_button_queries_by_coordinates():
+    """目前位置按鈕在支援定位時才顯示，取得座標後沿用座標查詢，不經地址搜尋。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="locate-me"' in template
+    assert 'id="locate-me" class="locate-me" type="button" hidden' in template
+    assert '"geolocation" in navigator' in script
+    assert "navigator.geolocation.getCurrentPosition" in script
+    assert 'destination_label:"目前位置"' in script
+
+
+def test_current_location_handles_denial_and_out_of_taipei():
+    """拒絕權限、逾時與不在臺北市都要給中文說明，並提示改輸入目的地。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "error.PERMISSION_DENIED" in script
+    assert "error.TIMEOUT" in script
+    assert "請允許使用位置資訊，或直接輸入目的地" in script
+    assert "目前位置不在臺北市，請改輸入目的地" in script
+    assert "insideTaipei(latitude, longitude)" in script
+
+
+def test_current_location_results_are_never_shared():
+    """用目前位置查詢時隱藏分享按鈕，避免使用者不小心把自己的精確位置傳出去。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "lastQueryUsedCurrentLocation" in script
+    assert 'hidden = !lastDestination || lastQueryUsedCurrentLocation' in script
