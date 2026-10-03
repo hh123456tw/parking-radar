@@ -258,6 +258,10 @@ def attach_history(connection, rows, arrival_time):
     return rows
 
 
+# 馬上出發時即時空位就是最好的答案；之後才抵達才需要歷史預估。
+ESTIMATE_MIN_LEAD = timedelta(minutes=30)
+
+
 def calendar_day_group(day):
     """依臺灣行事曆把日期歸成平日或假日組；補班日算平日，國定假日算假日。"""
     noon = datetime(day.year, day.month, day.day, 12, tzinfo=ZoneInfo("Asia/Taipei"))
@@ -266,13 +270,9 @@ def calendar_day_group(day):
 
 
 def attach_arrival_estimates(connection, rows, arrival_time, now=None):
-    """以最近 7 天同時段歷史替首選場站附上空位預估。
-
-    多數查詢沒有指定時間、以現在時刻計算；此時預估是「平常這個時段」的對照，
-    讓使用者看出即時空位比平常擠還是鬆。
-    """
+    """抵達時間至少 30 分鐘後，才以最近 7 天同時段歷史替首選場站附上空位預估。"""
     now = now or datetime.now(timezone.utc)
-    if not rows:
+    if not rows or arrival_time - now < ESTIMATE_MIN_LEAD:
         return rows
     history_rows = fetch_matching_history(
         connection, [row["lot_id"] for row in rows],
