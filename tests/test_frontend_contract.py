@@ -736,7 +736,7 @@ def test_share_link_carries_coordinates_and_runs_after_identity_setup():
     assert "navigator.share" in script
     assert "navigator.clipboard.writeText" in script
     assert "function sharedQueryFromUrl()" in script
-    assert "shortPlaceName(lastDestination.display_address)" in script
+    assert "placeName(lastDestination)" in script
     identity_setup = script.index("ensureAnalyticsIdentity();\n  }")
     auto_query = script.index("const sharedQuery = sharedQueryFromUrl();")
     assert identity_setup < auto_query
@@ -782,3 +782,13 @@ def test_primary_card_shows_arrival_estimate_with_sample_size():
     assert "常見 ${estimate.low}–${estimate.high} 格" in script
     assert "筆資料，僅供參考" in script
     assert "抵達時段的歷史資料累積中" in script
+
+
+def test_destination_summary_shows_name_and_formatted_address():
+    """目的地名稱大字、整理後地址小字；純地址查詢只顯示一行。"""
+    template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="destination-address" hidden' in template
+    assert "destination.name || destination.address || destination.display_address" in script
+    assert "addressLine.hidden = !subtitle" in script

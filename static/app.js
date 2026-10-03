@@ -400,8 +400,16 @@ function districtStatus(score) {
 }
 
 function renderSummary(data) {
-  document.querySelector("#destination").textContent =
-    data.destination?.display_address || "行政區查詢";
+  // 名稱大字、整理過的地址小字；純地址查詢沒有名稱時只顯示一行地址。
+  const destination = data.destination;
+  const title = destination
+    ? destination.name || destination.address || destination.display_address
+    : "行政區查詢";
+  const subtitle = destination?.name && destination.address ? destination.address : "";
+  document.querySelector("#destination").textContent = title;
+  const addressLine = document.querySelector("#destination-address");
+  addressLine.textContent = subtitle;
+  addressLine.hidden = !subtitle;
   // 行政區查詢沒有座標，無法產生穩定的分享連結。
   lastDestination = data.destination || null;
   document.querySelector("#share-query").hidden = !lastDestination || lastQueryUsedCurrentLocation;
@@ -965,18 +973,16 @@ document.addEventListener("DOMContentLoaded", () => {
 const TAIPEI_BOUNDS = {minLat:24.96, maxLat:25.21, minLng:121.45, maxLng:121.67};
 const SHARED_LABEL_MAX_LENGTH = 60;
 
-// Nominatim 地址是「名稱, 門牌, 路名, 里, 區, …」；分享只取開頭，門牌在前時組回「路名＋號」。
-function shortPlaceName(displayAddress) {
-  const parts = displayAddress.split(/\s*[,，]\s*/).filter(Boolean);
-  if (/^\d+(-\d+)?$/.test(parts[0] || "") && parts[1]) return `${parts[1]}${parts[0]}號`;
-  return parts[0] || displayAddress;
+// 分享用的短名稱：後端已整理好名稱與地址，優先用名稱。
+function placeName(destination) {
+  return destination.name || destination.address || destination.display_address;
 }
 
 function shareUrl(destination) {
   const params = new URLSearchParams({
     lat:destination.latitude.toFixed(5),
     lng:destination.longitude.toFixed(5),
-    name:shortPlaceName(destination.display_address).slice(0, SHARED_LABEL_MAX_LENGTH),
+    name:placeName(destination).slice(0, SHARED_LABEL_MAX_LENGTH),
     src:"share",
   });
   return `${location.origin}/?${params}`;
@@ -990,7 +996,7 @@ async function shareQuery() {
     try {
       await navigator.share({
         title:"停車地獄雷達",
-        text:`${shortPlaceName(lastDestination.display_address)} 附近現在哪裡好停？`,
+        text:`${placeName(lastDestination)} 附近現在哪裡好停？`,
         url,
       });
     } catch (error) {

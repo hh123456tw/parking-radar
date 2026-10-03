@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import requests
 
+from ai_service import TAIPEI_DISTRICTS
 from config import Config
 from database import get_cached_geocode, save_cached_geocode
 
@@ -125,3 +126,31 @@ def geocode_candidates(candidates, connection, http_get=requests.get, limit=3):
             "longitude": float(result["longitude"]),
         })
     return verified
+
+
+# OpenStreetMap 地址由小到大排列；路名以路、街、大道、段、巷、弄結尾，門牌為純數字或「12-1」。
+ROAD_RE = re.compile(r"(路|街|大道|段|巷|弄)$")
+HOUSE_NUMBER_RE = re.compile(r"^\d+(-\d+)?$")
+
+
+def format_place(display_address):
+    """把「名稱, 門牌, 路, 里, 區, 商圈, 臺北市, 郵遞區號, 臺灣」整理成名稱＋臺灣習慣地址。
+
+    回傳 {"name", "address"}：純路段查詢沒有名稱時 name 為 None；
+    認不出行政區與路名時不硬拼地址，address 為 None、name 保留第一段。
+    """
+    parts = [part.strip() for part in str(display_address or "").split(",") if part.strip()]
+    if not parts:
+        return {"name": None, "address": None}
+    district = next((part for part in parts if part in TAIPEI_DISTRICTS), None)
+    road_index = next((index for index, part in enumerate(parts)
+                       if ROAD_RE.search(part)), None)
+    road = parts[road_index] if road_index is not None else None
+    number = next((part for part in parts[:road_index or 0]
+                   if HOUSE_NUMBER_RE.match(part)), None)
+    first = parts[0]
+    name = None if first in {road, number} else first
+    if district is None and road is None:
+        return {"name": first, "address": None}
+    address = "臺北市" + (district or "") + (road or "") + (f"{number}號" if number else "")
+    return {"name": name, "address": address}
