@@ -461,6 +461,17 @@ function cheapestBadge(lot) {
     ? `<span class="cheapest-badge">每小時最便宜</span>` : "";
 }
 
+// 抵達時段預估：只在之後才抵達時由後端提供；數字一律附上樣本數，避免被當成保證。
+function arrivalEstimateLine(lot) {
+  const estimate = lot.arrival_estimate;
+  if (!estimate) return "";
+  const groupLabel = estimate.day_group === "weekday" ? "平日" : "假日";
+  if (estimate.status !== "ok") {
+    return `<p class="arrival-estimate pending">抵達時段的歷史資料累積中</p>`;
+  }
+  return `<p class="arrival-estimate">${groupLabel} ${escapeHtml(estimate.time_label)} 前後通常剩 <strong>約 ${estimate.median} 格</strong>（常見 ${estimate.low}–${estimate.high} 格）<small>依最近 ${estimate.day_count} 個${groupLabel} ${estimate.sample_count} 筆資料，僅供參考</small></p>`;
+}
+
 function primaryCard(lot, index) {
   const address = formatFullAddress(lot);
   const mapsUrl = googleMapsUrl(lot);
@@ -490,6 +501,7 @@ function primaryCard(lot, index) {
     <div class="capacity"><strong>${lot.available_spaces}</strong><span>格可停</span><small>共 ${lot.total_spaces} 格</small></div>
     <div class="capacity-bar" aria-label="空位比例 ${Math.round(freePercent)}%"><i style="width:${freePercent}%"></i></div>
     ${metaLine}
+    ${arrivalEstimateLine(lot)}
     <p class="decision-summary">${escapeHtml(primaryReason)}</p>
     <details class="parking-details">
       <summary>費率與營業時間</summary>

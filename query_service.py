@@ -13,6 +13,7 @@ import database
 from ai_service import TAIPEI_DISTRICTS, IntentServiceError, parse_parking_query
 from analysis import (
     district_hell_score,
+    estimate_arrival_availability,
     rank_candidates,
     rank_district_candidates,
     select_walking_candidates,
@@ -257,6 +258,42 @@ def attach_history(connection, rows, arrival_time):
     return rows
 
 
+# 馬上出發時即時空位就是最好的答案；之後才抵達才需要歷史預估。
+ESTIMATE_MIN_LEAD = timedelta(minutes=30)
+
+
+def calendar_day_group(day):
+    """依臺灣行事曆把日期歸成平日或假日組；補班日算平日，國定假日算假日。"""
+    noon = datetime(day.year, day.month, day.day, 12, tzinfo=ZoneInfo("Asia/Taipei"))
+    kind = classify_arrival_day(noon)["kind"]
+    return "weekday" if kind in {"weekday", "makeup_workday"} else "weekend"
+
+
+def attach_arrival_estimates(connection, rows, arrival_time, now=None):
+    """抵達時間至少 30 分鐘後，才以最近 7 天同時段歷史替首選場站附上空位預估。"""
+    now = now or datetime.now(timezone.utc)
+    if not rows or arrival_time - now < ESTIMATE_MIN_LEAD:
+        return rows
+    history_rows = fetch_matching_history(
+        connection, [row["lot_id"] for row in rows],
+        now - timedelta(days=Config.HISTORY_LOOKBACK_DAYS), now)
+    grouped = defaultdict(list)
+    for row in history_rows:
+        grouped[row["lot_id"]].append(row)
+    day_groups = {}
+
+    def day_group_of(day):
+        # 7 天歷史只有少數日期，快取避免每筆快照都重讀行事曆。
+        if day not in day_groups:
+            day_groups[day] = calendar_day_group(day)
+        return day_groups[day]
+
+    for row in rows:
+        row["arrival_estimate"] = estimate_arrival_availability(
+            grouped[row["lot_id"]], arrival_time, day_group_of)
+    return rows
+
+
 def taipei_iso(value):
     """把 MySQL 的 naive UTC datetime 轉成台北 ISO 字串。"""
     if value is None:
@@ -293,6 +330,7 @@ def public_candidate(row):
         "hourly_fee_label", "hourly_fee_value", "daily_cap_label",
         "fee_note", "fee_confidence",
         "facility_type", "facility_type_label", "facility_source",
+        "arrival_estimate",
     )
     result = {key: row.get(key) for key in keys}
     for key in ("latitude", "longitude", "distance_m", "walking_distance_m",
@@ -442,6 +480,9 @@ def run_query(payload, trace, started, *, session_state, client_version,
             # 只有明確詢問歷史時才載入前三座的最近 7 天資料。
             attach_history(connection, ranked[:3], parsed["arrival_time"])
         raw_groups = split_recommendation_groups(ranked)
+        # 只替最多三張首選卡片查歷史，控制每次查詢的資料庫負擔。
+        attach_arrival_estimates(
+            connection, raw_groups["recommendations"], parsed["arrival_time"])
         # 清單欄位轉成公開格式；統計數字保持整數，避免混用同一種序列化流程。
         groups = {
             name: [public_candidate(row) for row in raw_groups[name]]

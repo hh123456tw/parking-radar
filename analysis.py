@@ -1,5 +1,6 @@
 """純分析函式：負責清洗、地獄指數、距離、推薦與歷史統計。"""
 
+import statistics
 from datetime import datetime, timezone
 from math import asin, cos, radians, sin, sqrt
 from zoneinfo import ZoneInfo
@@ -320,3 +321,46 @@ def build_history_series(rows):
             "available_spaces": int(row["available_spaces"]),
         })
     return points
+
+
+def _minutes_apart(first, second):
+    """兩個一天內時刻的分鐘差，跨午夜時取較短的一邊。"""
+    gap = abs((first.hour * 60 + first.minute) - (second.hour * 60 + second.minute))
+    return min(gap, 24 * 60 - gap)
+
+
+def estimate_arrival_availability(rows, arrival_time, day_group_of, *,
+                                  window_minutes=30, min_samples=8, min_days=2):
+    """以同日別、抵達時刻前後 window_minutes 的歷史空位估計抵達時的常見狀況。
+
+    day_group_of(date) 回傳 "weekday" 或 "weekend"，由呼叫端依臺灣行事曆決定，
+    國定假日因此歸入假日組。樣本少於 min_samples 筆或不足 min_days 天時不給數字，
+    避免單一天的偶然狀況誤導使用者。
+    """
+    local_arrival = arrival_time.astimezone(TAIPEI_TZ)
+    target_group = day_group_of(local_arrival.date())
+    base = {"day_group": target_group,
+            "time_label": local_arrival.strftime("%H:%M")}
+    values = []
+    days = set()
+    for row in rows:
+        available = clean_available(row.get("total_spaces"), row.get("available_spaces"))
+        if available is None:
+            continue
+        captured = row["captured_at"]
+        if captured.tzinfo is None:
+            captured = captured.replace(tzinfo=timezone.utc)
+        local = captured.astimezone(TAIPEI_TZ)
+        if _minutes_apart(local, local_arrival) > window_minutes:
+            continue
+        if day_group_of(local.date()) != target_group:
+            continue
+        values.append(available)
+        days.add(local.date())
+    if len(values) < min_samples or len(days) < min_days:
+        return {**base, "status": "insufficient", "sample_count": len(values),
+                "day_count": len(days)}
+    low, _, high = statistics.quantiles(values, n=4, method="inclusive")
+    return {**base, "status": "ok", "sample_count": len(values),
+            "day_count": len(days), "median": round(statistics.median(values)),
+            "low": round(low), "high": round(high)}
