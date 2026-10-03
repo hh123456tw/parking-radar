@@ -810,6 +810,7 @@ def test_shared_coordinates_query_skips_geocoding(monkeypatch):
     assert response.status_code == 200
     body = response.get_json()
     assert body["destination"] == {
+        "name": "臺北市政府", "address": None,
         "display_address": "臺北市政府", "latitude": 25.0375,
         "longitude": 121.5637,
     }

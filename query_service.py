@@ -27,7 +27,7 @@ from collector import collect_once
 from config import Config
 from database import fetch_current_lots, fetch_latest_snapshot_time, fetch_matching_history
 from fee_service import build_fee_summary
-from geocoder import geocode_address, geocode_candidates, resolve_known_landmark
+from geocoder import format_place, geocode_address, geocode_candidates, resolve_known_landmark
 from walking_service import WalkingRouteError, fetch_walking_routes
 
 _refresh_lock = Lock()
@@ -81,6 +81,23 @@ def requires_location_confirmation(parsed):
     if not original or parsed.get("destination_label"):
         return False
     return re.search(r"\d+(?:-\d+)?號", original) is None
+
+
+LABEL_RE = re.compile(r"(.+?)（(.+)）")
+
+
+def destination_names(parsed, destination):
+    """回傳畫面用的（名稱, 地址）。
+
+    我們自己組的標籤「地標（地址）」直接拆開；其餘來自地址服務的原始字串
+    交給 format_place 整理成臺灣習慣的寫法。
+    """
+    label = (parsed.get("destination_label") or "").strip()
+    if label:
+        match = LABEL_RE.fullmatch(label)
+        return (match.group(1), match.group(2)) if match else (label, None)
+    place = format_place(destination["display_address"])
+    return place["name"], place["address"]
 
 
 def snapshot_age_minutes(captured_at, now=None):
@@ -496,12 +513,19 @@ def run_query(payload, trace, started, *, session_state, client_version,
             recommended_count=raw_groups["recommended_count"],
             excluded_count=raw_groups["excluded_count"],
         )
-        destination_json = None if destination is None else {
-            "display_address": parsed.get("destination_label")
-            or destination["display_address"],
-            "latitude": float(destination["latitude"]),
-            "longitude": float(destination["longitude"]),
-        }
+        destination_json = None
+        if destination is not None:
+            name, address = destination_names(parsed, destination)
+            destination_json = {
+                "name": name,
+                "address": address,
+                # 舊欄位保留給分享文字與既有前端：名稱與地址合成一行。
+                "display_address": (f"{name}（{address}）" if name and address
+                                    else name or address
+                                    or destination["display_address"]),
+                "latitude": float(destination["latitude"]),
+                "longitude": float(destination["longitude"]),
+            }
         first = ranked[0] if ranked else None
         session_update = dict(
             destination=parsed.get("address"), district=parsed.get("district"),

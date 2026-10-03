@@ -78,6 +78,7 @@ summary { color:#c7d1db; cursor:pointer; }
 .destination-summary { min-width:0; }
 .destination-summary span, .summary-metrics span { color:var(--muted); font-size:.9rem; }
 .destination-summary strong { display:block; margin-top:8px; font-size:1.25rem; overflow-wrap:anywhere; }
+.destination-summary small { display:block; margin-top:4px; color:var(--muted); overflow-wrap:anywhere; }
 .locate-me {
   width:100%; min-height:44px; margin-top:12px;
   color:#e5ebf1; background:#26313d; border:1px solid #374555;
