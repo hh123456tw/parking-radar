@@ -481,8 +481,12 @@ def run_query(payload, trace, started, *, session_state, client_version,
             attach_history(connection, ranked[:3], parsed["arrival_time"])
         raw_groups = split_recommendation_groups(ranked)
         # 只替最多三張首選卡片查歷史，控制每次查詢的資料庫負擔。
-        attach_arrival_estimates(
-            connection, raw_groups["recommendations"], parsed["arrival_time"])
+        # 預估只是附加資訊：出錯時記錄後略過，推薦照常回傳。
+        try:
+            attach_arrival_estimates(
+                connection, raw_groups["recommendations"], parsed["arrival_time"])
+        except Exception:
+            logger.exception("抵達時段預估失敗，略過預估")
         # 清單欄位轉成公開格式；統計數字保持整數，避免混用同一種序列化流程。
         groups = {
             name: [public_candidate(row) for row in raw_groups[name]]

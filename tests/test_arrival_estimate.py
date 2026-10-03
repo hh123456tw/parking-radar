@@ -172,3 +172,30 @@ def query_service_client():
         "TESTING": True, "SECRET_KEY": "test", "AUTO_REFRESH_ENABLED": False,
         "OPENROUTESERVICE_API_KEY": "",
     }).test_client()
+
+
+def test_estimate_failure_never_breaks_the_query(monkeypatch):
+    """預估只是附加資訊；歷史查詢出錯時照常回傳推薦，只是不附預估。"""
+    monkeypatch.setattr(database, "get_connection", FakeConnection)
+    monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [{
+        "lot_id": "TPE1", "lot_name": "A場", "district": "信義區",
+        "address": "市府路", "operator_type": "民營停車場",
+        "total_spaces": 100, "available_spaces": 40,
+        "fee_info": "每小時30元", "service_time": "24小時",
+        "fare_rules_json": None, "facility_type": "underground",
+        "facility_source": "official", "latitude": 25.0376, "longitude": 121.5638,
+        "captured_at": datetime.now(timezone.utc),
+    }])
+
+    def broken_history(*_args):
+        raise RuntimeError("history table unavailable")
+
+    monkeypatch.setattr(query_service, "fetch_matching_history", broken_history)
+    future = (datetime.now(TAIPEI) + timedelta(days=1)).replace(
+        hour=18, minute=0, second=0, microsecond=0)
+
+    response = query_service_client().post("/api/query", json={
+        "mode": "manual", "district": "信義區", "arrival_time": future.isoformat()})
+
+    assert response.status_code == 200
+    assert response.get_json()["recommendations"][0]["arrival_estimate"] is None
