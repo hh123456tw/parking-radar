@@ -21,6 +21,8 @@ let queryController = null;
 let historySequence = 0;
 let chartLoader = null;
 let lastDestination = null;
+// 用目前位置查詢的結果不提供分享，避免把使用者的精確位置傳出去。
+let lastQueryUsedCurrentLocation = false;
 
 if (map) {
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -235,7 +237,7 @@ async function sendFeedback(code) {
   }
 }
 
-async function submitQuery(payload) {
+async function submitQuery(payload, {currentLocation = false} = {}) {
   // 每次新查詢先清空 request_id，避免失敗或等待期間的點擊連到上一筆成功查詢。
   activeRequestId = null;
   if (queryController) queryController.abort();
@@ -277,6 +279,7 @@ async function submitQuery(payload) {
       return;
     }
     document.querySelector("#result-content").hidden = false;
+    lastQueryUsedCurrentLocation = currentLocation;
     renderSummary(data);
     renderCards(data);
     renderMap(data);
@@ -401,7 +404,7 @@ function renderSummary(data) {
     data.destination?.display_address || "行政區查詢";
   // 行政區查詢沒有座標，無法產生穩定的分享連結。
   lastDestination = data.destination || null;
-  document.querySelector("#share-query").hidden = !lastDestination;
+  document.querySelector("#share-query").hidden = !lastDestination || lastQueryUsedCurrentLocation;
   const score = data.current.district_score;
   document.querySelector("#district-status").textContent = districtStatus(score);
   document.querySelector("#district-score").textContent =
@@ -992,16 +995,20 @@ async function shareQuery() {
   }
 }
 
+function insideTaipei(latitude, longitude) {
+  const bounds = TAIPEI_BOUNDS;
+  return Number.isFinite(latitude) && Number.isFinite(longitude)
+    && latitude >= bounds.minLat && latitude <= bounds.maxLat
+    && longitude >= bounds.minLng && longitude <= bounds.maxLng;
+}
+
 // 網址座標不合法或不在臺北市時回傳 null，頁面維持一般首頁。
 function sharedQueryFromUrl() {
   const params = new URLSearchParams(location.search);
   if (!params.has("lat") || !params.has("lng")) return null;
   const latitude = Number(params.get("lat"));
   const longitude = Number(params.get("lng"));
-  const bounds = TAIPEI_BOUNDS;
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
-      || latitude < bounds.minLat || latitude > bounds.maxLat
-      || longitude < bounds.minLng || longitude > bounds.maxLng) return null;
+  if (!insideTaipei(latitude, longitude)) return null;
   return {
     mode:"manual",
     latitude,
@@ -1012,6 +1019,44 @@ function sharedQueryFromUrl() {
 }
 
 document.querySelector("#share-query").addEventListener("click", shareQuery);
+
+function locationErrorMessage(error) {
+  if (error.code === error.PERMISSION_DENIED) return "請允許使用位置資訊，或直接輸入目的地";
+  if (error.code === error.TIMEOUT) return "取得位置逾時，請到訊號較好的地方再試一次";
+  return "暫時無法取得目前位置，請直接輸入目的地";
+}
+
+// 開車找車位時最常見的情況：以目前位置為目的地，沿用分享連結的座標查詢路徑。
+// 座標只用於這次查詢，不寫入瀏覽器儲存空間。
+function queryCurrentLocation() {
+  const button = document.querySelector("#locate-me");
+  button.disabled = true;
+  showStatus("正在取得目前位置…", "");
+  navigator.geolocation.getCurrentPosition(position => {
+    button.disabled = false;
+    const {latitude, longitude} = position.coords;
+    if (!insideTaipei(latitude, longitude)) {
+      showStatus("目前位置不在臺北市，請改輸入目的地", "error");
+      return;
+    }
+    submitQuery({
+      mode:"manual",
+      latitude,
+      longitude,
+      destination_label:"目前位置",
+      arrival_time:new Date().toISOString(),
+    }, {currentLocation:true}).catch(error => showStatus(error.message, "error"));
+  }, error => {
+    button.disabled = false;
+    showStatus(locationErrorMessage(error), "error");
+  }, {enableHighAccuracy:true, timeout:10000, maximumAge:60000});
+}
+
+if ("geolocation" in navigator) {
+  const locateButton = document.querySelector("#locate-me");
+  locateButton.hidden = false;
+  locateButton.addEventListener("click", queryCurrentLocation);
+}
 
 // 必須排在前面的 DOMContentLoaded 之後：團隊測試模式在那裡建立匿名身分，分享來的新訪客才會被統計。
 document.addEventListener("DOMContentLoaded", () => {
