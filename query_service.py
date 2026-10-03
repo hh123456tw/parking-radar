@@ -373,10 +373,28 @@ FOLLOW_UP_WINDOW = timedelta(hours=2)
 LOCATION_FIELDS = ("address", "district", "original_destination")
 
 
+def previous_place_names(session_state):
+    """上一輪目的地的各種寫法：地址，以及標籤「名稱（地址）」裡的名稱。"""
+    names = {session_state.get("destination")}
+    match = LABEL_RE.fullmatch(session_state.get("destination_label") or "")
+    if match:
+        names.add(match.group(1))
+    return {name for name in names if name}
+
+
 def apply_previous_destination(parsed, session_state, now=None):
-    """這句話完全沒有地點時，沿用最近一次成功查詢的目的地（規則決定，不靠 Gemini 記得）。"""
-    if any(parsed.get(field) for field in LOCATION_FIELDS) \
-            or parsed.get("location_candidates"):
+    """追問時沿用最近一次成功查詢的目的地（規則決定，不靠 Gemini 記得）。
+
+    兩種情況會沿用：這句話完全沒有地點；或 Gemini 自己從上一輪補回的就是同一地點，
+    此時直接用已確認的結果，不再要求使用者重新確認地點。
+    """
+    mentioned = [parsed.get(field) for field in LOCATION_FIELDS if parsed.get(field)]
+    repeats_previous = bool(mentioned) and all(
+        value in previous_place_names(session_state)
+        or value == session_state.get("district") for value in mentioned)
+    if mentioned and not repeats_previous:
+        return parsed
+    if not mentioned and parsed.get("location_candidates"):
         return parsed
     previous_at = session_state.get("destination_at")
     if not previous_at or not (session_state.get("destination")
@@ -388,6 +406,8 @@ def apply_previous_destination(parsed, session_state, now=None):
     parsed["address"] = session_state.get("destination")
     parsed["district"] = session_state.get("district")
     parsed["destination_label"] = session_state.get("destination_label")
+    parsed["original_destination"] = None
+    parsed["location_candidates"] = []
     parsed["missing_fields"] = [
         name for name in parsed.get("missing_fields", [])
         if name not in {"address", "district"}]
