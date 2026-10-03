@@ -88,7 +88,7 @@ def test_manual_query_validation_returns_json_400(payload, message):
 
 @pytest.mark.parametrize(("parsed", "message"), [
     ({"missing_fields": ["address"], "arrival_time": "2026-08-04T18:00:00+08:00"},
-     "還需要：address"),
+     "請說出目的地，例如：今晚九點去臺北市政府"),
     ({"missing_fields": [], "address": None, "district": None,
       "arrival_time": "2026-08-04T18:00:00+08:00"},
      "請提供臺北市地址或行政區"),
@@ -125,7 +125,7 @@ def test_chat_still_rejects_other_missing_fields_when_time_defaults():
         "arrival_time": None,
     }
 
-    with pytest.raises(ValueError, match="還需要：address"):
+    with pytest.raises(ValueError, match="請說出目的地"):
         query_service.validate_parsed_query(parsed, now=now)
 
 

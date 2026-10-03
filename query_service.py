@@ -84,6 +84,18 @@ def requires_location_confirmation(parsed):
 
 
 LABEL_RE = re.compile(r"(.+?)（(.+)）")
+DESTINATION_PROMPT = "請說出目的地，例如：今晚九點去臺北市政府"
+# Gemini 回報的欄位名稱只給程式看；畫面一律換成中文，未知名稱也不直接露出。
+MISSING_FIELD_LABELS = {"intent": "查詢目的", "arrival_time": "抵達時間"}
+
+
+def missing_fields_message(missing_fields):
+    """把缺少欄位轉成中文提示；缺地點時直接示範該怎麼說。"""
+    if {"address", "district"} & set(missing_fields):
+        return DESTINATION_PROMPT
+    labels = dict.fromkeys(
+        MISSING_FIELD_LABELS.get(name, "更多資訊") for name in missing_fields)
+    return "還需要：" + "、".join(labels)
 
 
 def destination_names(parsed, destination):
@@ -239,8 +251,7 @@ def validate_parsed_query(parsed, now=None):
     ]
     parsed["missing_fields"] = missing_fields
     if missing_fields:
-        names = "、".join(missing_fields)
-        raise ValueError(f"還需要：{names}")
+        raise ValueError(missing_fields_message(missing_fields))
     if not parsed.get("address") and not parsed.get("district") \
             and not parsed.get("coordinates"):
         raise ValueError("請提供臺北市地址或行政區")
@@ -357,11 +368,38 @@ def public_candidate(row):
     return result
 
 
+# 追問只沿用 2 小時內的目的地，避免隔天沒講地點的查詢默默套用舊目的地。
+FOLLOW_UP_WINDOW = timedelta(hours=2)
+LOCATION_FIELDS = ("address", "district", "original_destination")
+
+
+def apply_previous_destination(parsed, session_state, now=None):
+    """這句話完全沒有地點時，沿用最近一次成功查詢的目的地（規則決定，不靠 Gemini 記得）。"""
+    if any(parsed.get(field) for field in LOCATION_FIELDS) \
+            or parsed.get("location_candidates"):
+        return parsed
+    previous_at = session_state.get("destination_at")
+    if not previous_at or not (session_state.get("destination")
+                               or session_state.get("district")):
+        return parsed
+    now = now or datetime.now(timezone.utc)
+    if now - datetime.fromisoformat(previous_at) > FOLLOW_UP_WINDOW:
+        return parsed
+    parsed["address"] = session_state.get("destination")
+    parsed["district"] = session_state.get("district")
+    parsed["destination_label"] = session_state.get("destination_label")
+    parsed["missing_fields"] = [
+        name for name in parsed.get("missing_fields", [])
+        if name not in {"address", "district"}]
+    return parsed
+
+
 def parse_query_input(payload, session_state, max_chat_length):
     """把聊天或手動輸入轉成已驗證的查詢字典；錯誤以例外交給呼叫端分類。"""
     if payload.get("mode") == "chat":
         message = chat_message(payload, max_chat_length)
         parsed = parse_parking_query(message, session_state).model_dump()
+        parsed = apply_previous_destination(parsed, session_state)
     else:
         parsed = parse_manual_payload(payload)
     return validate_parsed_query(parsed)
@@ -529,6 +567,10 @@ def run_query(payload, trace, started, *, session_state, client_version,
         first = ranked[0] if ranked else None
         session_update = dict(
             destination=parsed.get("address"), district=parsed.get("district"),
+            # 標籤只在有地址時保存；座標查詢（目前位置）不留在 cookie 裡。
+            destination_label=(parsed.get("destination_label")
+                               if parsed.get("address") else None),
+            destination_at=datetime.now(timezone.utc).isoformat(),
             arrival_time=parsed["arrival_time"].isoformat(),
             lot_id=ranked[0]["lot_id"] if ranked else None)
         trace["collected_at"] = max(
