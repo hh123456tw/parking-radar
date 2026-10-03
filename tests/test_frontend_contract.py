@@ -771,3 +771,14 @@ def test_current_location_results_are_never_shared():
 
     assert "lastQueryUsedCurrentLocation" in script
     assert 'hidden = !lastDestination || lastQueryUsedCurrentLocation' in script
+
+
+def test_primary_card_shows_arrival_estimate_with_sample_size():
+    """預估一律附樣本數與「僅供參考」；資料不足時明講累積中，不顯示數字。"""
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    primary_card = script.split("function primaryCard(", 1)[1].split("\nfunction ", 1)[0]
+
+    assert "arrivalEstimateLine(lot)" in primary_card
+    assert "常見 ${estimate.low}–${estimate.high} 格" in script
+    assert "筆資料，僅供參考" in script
+    assert "抵達時段的歷史資料累積中" in script
