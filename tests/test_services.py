@@ -327,3 +327,27 @@ def test_nominatim_rate_limit_does_not_sleep_after_one_second(monkeypatch):
 
     assert sleeps == []
     assert geocoder._last_request_at == 102.1
+
+
+def test_gemini_context_never_carries_previous_arrival_time():
+    """上一輪的抵達時間不可傳給 Gemini：否則說「現在」會沿用上次的 18:00，
+    隔天沒講時間的查詢也可能用到昨天的時間。目的地仍保留以支援追問。"""
+    captured = {}
+    response = type("Response", (), {"text": valid_intent_json()})()
+
+    class RecordingModels:
+        def generate_content(self, **kwargs):
+            captured.update(kwargs)
+            return response
+
+    client = type("Client", (), {"models": RecordingModels()})()
+
+    parse_parking_query("現在去臺北車站", {
+        "destination": "臺北市政府", "district": "信義區",
+        "arrival_time": "2026-10-03T18:00:00+08:00", "lot_id": "TPE0022",
+    }, client)
+
+    contents = captured["contents"]
+    assert "2026-10-03T18:00:00" not in contents
+    assert "臺北市政府" in contents
+    assert "「現在」「馬上」" in contents

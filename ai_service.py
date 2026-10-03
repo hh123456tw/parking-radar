@@ -53,9 +53,16 @@ class ParkingIntent(BaseModel):
         return value
 
 
+# 只把目的地類欄位帶進下一輪，支援「那週末呢？」這類追問。
+# 抵達時間不沿用：否則說「現在」會套用上次的時間，隔天的查詢也可能用到昨天的時間。
+CONTEXT_KEYS = ("destination", "district")
+
+
 def _prompt(message, context):
     """建立窄範圍指令，明確禁止模型虛構停車資料。"""
     now = datetime.now(ZoneInfo("Asia/Taipei")).isoformat()
+    context = {key: value for key, value in (context or {}).items()
+               if key in CONTEXT_KEYS and value}
     return f"""你是停車查詢欄位解析器，只能判斷 recommend、history、compare。
 目前臺北時間：{now}。只接受臺北市地址與十二行政區。
 不得提供停車場、空位、距離、分數、SQL 或一般聊天答案。
@@ -70,9 +77,10 @@ location_candidates 盡量列出最多 3 個不同實體據點，不得自行假
 則回傳空陣列。
 不得虛構臺北市以外的候選，也不得把停車場當成目的地候選。
 若能辨識地標所在行政區，district 必須填入，協助地址服務排除同名地點。
-若使用者沒有提抵達時間，arrival_time 請回傳 null，且不要把 arrival_time
-列入 missing_fields；後端會自動使用 Asia/Taipei 的現在時間。
-上一輪狀態：{json.dumps(context or {}, ensure_ascii=False, default=str)}
+若使用者沒有提抵達時間，或說「現在」「馬上」等立即出發的字眼，arrival_time
+請回傳 null，且不要把 arrival_time 列入 missing_fields；後端會自動使用
+Asia/Taipei 的現在時間。抵達時間只能來自這一句話，不得沿用上一輪。
+上一輪狀態：{json.dumps(context, ensure_ascii=False, default=str)}
 使用者：{message}"""
 
 
