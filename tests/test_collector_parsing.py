@@ -154,3 +154,21 @@ def test_static_parser_treats_malformed_total_as_zero():
     lots = collector.parse_static(payload, {"001"})
 
     assert lots[0]["total_spaces"] == 0
+
+
+def test_static_parser_truncates_text_to_schema_lengths():
+    """官方文字剛好等於欄位長度時保留，超過時截斷，避免整批交易回滾。"""
+    payload = load_fixture("taipei_static.json")
+    exact = dict(payload["data"]["park"][0], name="名" * 120, area="區" * 20,
+                 address="址" * 255, type2="型" * 40)
+    over = dict(payload["data"]["park"][0], id="TPE9999", name="名" * 121,
+                area="區" * 21, address="址" * 256, type2="型" * 41)
+    payload["data"]["park"] = [exact, over]
+
+    lots = collector.parse_static(payload, set())
+
+    for lot in lots:
+        assert lot["lot_name"] == "名" * 120
+        assert lot["district"] == "區" * 20
+        assert lot["address"] == "址" * 255
+        assert lot["operator_type"] == "型" * 40

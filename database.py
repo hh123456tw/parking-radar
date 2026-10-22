@@ -1,8 +1,12 @@
 """集中管理 PyMySQL 連線與固定 SQL；所有外部值都以參數傳入。"""
 
+import logging
+
 import pymysql
 
 from config import Config
+
+logger = logging.getLogger(__name__)
 
 
 def get_connection():
@@ -86,15 +90,51 @@ def insert_snapshots(connection, snapshots):
 
 
 def fetch_latest_snapshot_time(connection):
-    """回傳資料庫最後一次成功收集時間；完全沒有快照時回傳 None。"""
+    """回傳最新快照的官方時間（UTC）；完全沒有快照時回傳 None。
+
+    新鮮度以官方 source_updated_at 判斷而非 captured_at：官方資料凍結時，
+    清理後重新寫入的舊值 captured_at 是現在，但官方時間仍是舊的。
+    """
     with connection.cursor() as cursor:
         cursor.execute(
-            "SELECT captured_at FROM parking_snapshots "
+            "SELECT source_updated_at FROM parking_snapshots "
             "ORDER BY snapshot_id DESC LIMIT 1"
         )
         rows = list(cursor.fetchall())
         row = rows[0] if rows else None
-        return row.get("captured_at") if row else None
+        return row.get("source_updated_at") if row else None
+
+
+def fetch_collector_heartbeat(connection):
+    """回傳 collector 最後成功時間（UTC）；無心跳或舊資料庫尚無此表時回傳 None。"""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT last_success_at FROM collector_heartbeat WHERE id = 1")
+            rows = list(cursor.fetchall())
+    except pymysql.err.ProgrammingError as exc:
+        # 1146 = 資料表不存在，視同沒有心跳。
+        if exc.args[0] != 1146:
+            raise
+        return None
+    return rows[0].get("last_success_at") if rows else None
+
+
+def upsert_collector_heartbeat(connection, succeeded_at):
+    """在 collector 交易內記錄最後成功時間；舊資料庫尚無此表時略過不中斷收集。"""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO collector_heartbeat (id, last_success_at) "
+                "VALUES (1, %s) "
+                "ON DUPLICATE KEY UPDATE last_success_at = VALUES(last_success_at)",
+                (succeeded_at,),
+            )
+    except pymysql.err.ProgrammingError as exc:
+        # 1146 = 資料表不存在；只回滾此陳述式，同交易的快照照常提交。
+        if exc.args[0] != 1146:
+            raise
+        logger.warning("collector_heartbeat 資料表不存在，請套用 migration")
 
 
 def fetch_oldest_snapshot_time(connection):
@@ -136,7 +176,8 @@ def fetch_current_lots(connection, district=None, freshness_minutes=45):
     params = []
     if freshness_minutes is not None:
         freshness_sql = (
-            "AND s2.captured_at >= UTC_TIMESTAMP() - INTERVAL %s MINUTE"
+            # 以官方時間判斷新鮮度，凍結資料即使剛寫入也視為過期。
+            "AND s2.source_updated_at >= UTC_TIMESTAMP() - INTERVAL %s MINUTE"
         )
         params.append(freshness_minutes)
     sql = """

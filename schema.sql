@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS parking_snapshots (
     INDEX idx_snapshots_captured_lot (captured_at, lot_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Collector 最後一次成功提交的時間；官方資料凍結時仍能判斷 Collector 存活。
+CREATE TABLE IF NOT EXISTS collector_heartbeat (
+    id TINYINT PRIMARY KEY,
+    last_success_at DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 相同正規化地址只向 Nominatim 查詢一次。
 CREATE TABLE IF NOT EXISTS geocode_cache (
     normalized_address VARCHAR(255) PRIMARY KEY,

@@ -251,6 +251,7 @@ def test_stale_snapshot_does_not_depend_on_official_api(monkeypatch):
 def test_failed_refresh_without_any_snapshot_is_unavailable(monkeypatch):
     """完全沒有可降級資料時，回傳明確錯誤而不是空白成功結果。"""
     monkeypatch.setattr(query_service, "_latest_snapshot_time", lambda: None)
+    _patch_heartbeat(monkeypatch, None)
     monkeypatch.setattr(
         query_service, "collect_once",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("official down")),
@@ -259,6 +260,68 @@ def test_failed_refresh_without_any_snapshot_is_unavailable(monkeypatch):
     with pytest.raises(query_service.ParkingDataUnavailable,
                        match="暫時無法取得官方停車資料"):
         query_service.ensure_fresh_parking_data()
+
+
+class _ClosingConnection:
+    def close(self):
+        pass
+
+
+def _patch_heartbeat(monkeypatch, heartbeat):
+    """以固定心跳時間取代資料庫讀取。"""
+    monkeypatch.setattr(database, "get_connection", _ClosingConnection)
+    monkeypatch.setattr(
+        query_service, "fetch_collector_heartbeat", lambda _conn: heartbeat)
+
+
+def _count_collects(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        query_service, "collect_once",
+        lambda **_kwargs: calls.append(1) or {"lots": 0, "snapshots": 0})
+    return calls
+
+
+def test_empty_table_with_recent_heartbeat_does_not_collect(monkeypatch):
+    """官方凍結、清理後快照表為空但排程仍存活時，查詢不得同步下載官方資料。"""
+    now = datetime(2026, 10, 28, 6, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(query_service, "_latest_snapshot_time", lambda: None)
+    # MySQL 回傳無時區 UTC 時間。
+    _patch_heartbeat(monkeypatch, (now - timedelta(minutes=5)).replace(tzinfo=None))
+    calls = _count_collects(monkeypatch)
+
+    for _ in range(2):
+        with pytest.raises(query_service.ParkingDataUnavailable,
+                           match="官方停車資料暫停更新"):
+            query_service.ensure_fresh_parking_data(now)
+
+    assert calls == []
+
+
+def test_empty_table_without_heartbeat_collects_once(monkeypatch):
+    """反例：真正首次啟動（無快照也無心跳）仍要同步補抓一次。"""
+    now = datetime(2026, 10, 28, 6, 0, tzinfo=timezone.utc)
+    latest = iter([None, None, now - timedelta(minutes=1)])
+    monkeypatch.setattr(query_service, "_latest_snapshot_time", lambda: next(latest))
+    _patch_heartbeat(monkeypatch, None)
+    calls = _count_collects(monkeypatch)
+
+    assert query_service.ensure_fresh_parking_data(now) == ("fresh", None)
+    assert calls == [1]
+
+
+def test_empty_table_with_old_heartbeat_allows_collect(monkeypatch):
+    """心跳超過 60 分鐘代表排程可能停擺，允許查詢路徑補抓。"""
+    now = datetime(2026, 10, 28, 6, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(query_service, "_latest_snapshot_time", lambda: None)
+    _patch_heartbeat(monkeypatch, now - timedelta(minutes=61))
+    calls = _count_collects(monkeypatch)
+
+    with pytest.raises(query_service.ParkingDataUnavailable,
+                       match="暫時無法取得官方停車資料"):
+        query_service.ensure_fresh_parking_data(now)
+
+    assert calls == [1]
 
 
 def test_naive_arrival_datetime_from_gemini_is_taipei_time():

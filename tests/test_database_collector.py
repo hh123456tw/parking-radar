@@ -1,7 +1,7 @@
 """資料庫與蒐集器測試：驗證 SQL 參數、資料清洗及交易邊界。"""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pymysql
@@ -221,6 +221,9 @@ def test_fetch_current_lots_supports_all_city_and_district_queries():
     assert "JOIN parking_snapshots s ON s.snapshot_id = (" in city_sql
     assert "s2.lot_id = l.lot_id" in city_sql
     assert "ORDER BY s2.captured_at DESC, s2.snapshot_id DESC" in city_sql
+    # 新鮮度以官方時間判斷，不以收集時間判斷。
+    assert "s2.source_updated_at >= UTC_TIMESTAMP() - INTERVAL %s MINUTE" in city_sql
+    assert "s2.captured_at >= UTC_TIMESTAMP()" not in city_sql
     assert "s.source_updated_at AS snapshot_updated_at" in city_sql
     assert "AND l.district = %s" not in city_sql
     assert city_params == (45,)
@@ -314,10 +317,11 @@ def test_delete_snapshot_range_batch_rejects_non_positive_batch_size(batch_size)
 
 def test_latest_snapshot_and_stale_fallback_queries():
     """新鮮度安全網可讀最後時間，降級查詢則不得保留時間門檻。"""
-    captured_at = datetime(2026, 8, 4, 6, 0)
-    time_connection = SpyConnection([{"captured_at": captured_at}])
-    assert database.fetch_latest_snapshot_time(time_connection) == captured_at
+    source_at = datetime(2026, 8, 4, 6, 0)
+    time_connection = SpyConnection([{"source_updated_at": source_at}])
+    assert database.fetch_latest_snapshot_time(time_connection) == source_at
     latest_sql = time_connection.spy_cursor.calls[0][0]
+    assert "SELECT source_updated_at FROM parking_snapshots" in latest_sql
     assert "ORDER BY snapshot_id DESC LIMIT 1" in latest_sql
     assert "MAX(captured_at)" not in latest_sql
 
@@ -381,8 +385,10 @@ def test_collect_once_rejects_available_over_its_own_total(monkeypatch):
         "id": "TPE0003", "area": "信義區", "name": "超額測試場",
         "address": "測試路3號", "totalcar": 100, "EntranceCoord": {},
     })
+    dynamic["data"]["UPDATETIME"] = datetime.now(timezone.utc).isoformat()
     connection = TransactionConnection()
     saved = []
+    monkeypatch.setattr(collector, "upsert_collector_heartbeat", lambda *_args: None)
     monkeypatch.setattr(collector, "fetch_json",
                         lambda url, timeout=15: static if "alldesc" in url else dynamic)
     monkeypatch.setattr(collector, "get_connection", lambda: connection)
@@ -403,6 +409,7 @@ def test_collect_once_rolls_back_and_closes_when_insert_fails(monkeypatch):
     static = load_fixture("taipei_static.json")
     dynamic = load_fixture("taipei_dynamic.json")
     connection = TransactionConnection()
+    monkeypatch.setattr(collector, "upsert_collector_heartbeat", lambda *_args: None)
     monkeypatch.setattr(collector, "fetch_json",
                         lambda url, timeout=15: static if "alldesc" in url else dynamic)
     monkeypatch.setattr(collector, "get_connection", lambda: connection)
@@ -418,3 +425,146 @@ def test_collect_once_rolls_back_and_closes_when_insert_fails(monkeypatch):
     assert connection.committed is False
     assert connection.rolled_back is True
     assert connection.closed is True
+
+
+def _run_collect_once(monkeypatch, source_time, events=None):
+    """以指定官方時間執行 collect_once，回傳寫入的快照與交易事件順序。"""
+    static = load_fixture("taipei_static.json")
+    dynamic = load_fixture("taipei_dynamic.json")
+    dynamic["data"]["UPDATETIME"] = source_time.isoformat()
+    events = [] if events is None else events
+    saved = []
+    connection = TransactionConnection()
+    connection.commit = lambda: events.append("commit")
+    monkeypatch.setattr(collector, "fetch_json",
+                        lambda url, timeout=15: static if "alldesc" in url else dynamic)
+    monkeypatch.setattr(collector, "get_connection", lambda: connection)
+    monkeypatch.setattr(collector, "upsert_parking_lots", lambda conn, rows: len(rows))
+    monkeypatch.setattr(collector, "insert_snapshots",
+                        lambda conn, rows: saved.extend(rows) or len(rows))
+    monkeypatch.setattr(collector, "upsert_collector_heartbeat",
+                        lambda conn, at: events.append(("heartbeat", at)))
+    result = collector.collect_once()
+    return saved, events, result
+
+
+def test_collect_once_skips_frozen_snapshots_older_than_retention(monkeypatch):
+    """官方時間 9 天前的凍結資料會被清理，不得重新寫入成看似新收集的快照。"""
+    nine_days_ago = datetime.now(timezone.utc) - timedelta(days=9)
+
+    saved, events, result = _run_collect_once(monkeypatch, nine_days_ago)
+
+    assert saved == []
+    assert result["snapshots"] == 0
+    # Collector 本身仍成功，心跳照常在 commit 前寫入。
+    assert [e[0] if isinstance(e, tuple) else e for e in events] == [
+        "heartbeat", "commit"]
+
+
+def test_collect_once_keeps_snapshots_within_retention(monkeypatch):
+    """反例：官方時間仍在保留期內（7 天前）時照常寫入。"""
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+
+    saved, _events, _result = _run_collect_once(monkeypatch, seven_days_ago)
+
+    assert [row["lot_id"] for row in saved] == ["TPE0001"]
+
+
+def test_collect_once_writes_heartbeat_with_captured_time_before_commit(monkeypatch):
+    now = datetime.now(timezone.utc)
+
+    saved, events, _result = _run_collect_once(monkeypatch, now)
+
+    assert events[-1] == "commit"
+    assert events[0][0] == "heartbeat"
+    assert events[0][1] == saved[0]["captured_at"]
+
+
+def test_frozen_data_reinserted_after_cleanup_is_reported_stale():
+    """清理清空資料表後，官方時間 9 天前、captured_at=現在的列仍必須判為過期。"""
+    import query_service
+    from config import Config
+
+    now = datetime.now(timezone.utc)
+    frozen_row = {
+        "source_updated_at": (now - timedelta(days=9)).replace(tzinfo=None),
+        "captured_at": now.replace(tzinfo=None),
+    }
+    connection = SpyConnection([frozen_row])
+
+    latest = database.fetch_latest_snapshot_time(connection)
+    age = query_service.snapshot_age_minutes(latest, now)
+
+    assert age > Config.STALE_MAX_MINUTES
+    # 反例：真正新的官方時間仍判為新鮮。
+    fresh = query_service.snapshot_age_minutes(
+        (now - timedelta(minutes=5)).replace(tzinfo=None), now)
+    assert fresh <= Config.FRESHNESS_MINUTES
+
+    current = SpyConnection([])
+    database.fetch_current_lots(current, freshness_minutes=Config.STALE_MAX_MINUTES)
+    sql, params = current.spy_cursor.calls[0]
+    assert "s2.source_updated_at >= UTC_TIMESTAMP() - INTERVAL %s MINUTE" in sql
+    assert params == (Config.STALE_MAX_MINUTES,)
+
+
+class RaisingCursor(SpyCursor):
+    """第一次 execute 拋出指定 MySQL 錯誤。"""
+
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        raise self.error
+
+
+def test_upsert_collector_heartbeat_uses_single_row_parameter():
+    connection = SpyConnection()
+    at = datetime(2026, 10, 22, 1, 0, tzinfo=timezone.utc)
+
+    database.upsert_collector_heartbeat(connection, at)
+
+    sql, params = connection.spy_cursor.calls[0]
+    assert "INSERT INTO collector_heartbeat (id, last_success_at)" in sql
+    assert "ON DUPLICATE KEY UPDATE" in sql
+    assert params == (at,)
+
+
+def test_upsert_collector_heartbeat_skips_missing_table_only():
+    """舊資料庫缺表（1146）時不中斷收集；其他錯誤必須照常拋出。"""
+    missing = SpyConnection()
+    missing.spy_cursor = RaisingCursor(
+        pymysql.err.ProgrammingError(1146, "Table doesn't exist"))
+    database.upsert_collector_heartbeat(missing, datetime.now(timezone.utc))
+
+    broken = SpyConnection()
+    broken.spy_cursor = RaisingCursor(
+        pymysql.err.ProgrammingError(1064, "syntax error"))
+    with pytest.raises(pymysql.err.ProgrammingError):
+        database.upsert_collector_heartbeat(broken, datetime.now(timezone.utc))
+
+
+def test_fetch_collector_heartbeat_reads_single_row_or_none():
+    at = datetime(2026, 10, 22, 1, 0)
+    connection = SpyConnection([{"last_success_at": at}])
+    assert database.fetch_collector_heartbeat(connection) == at
+    sql, _params = connection.spy_cursor.calls[0]
+    assert "FROM collector_heartbeat WHERE id = 1" in sql
+
+    assert database.fetch_collector_heartbeat(SpyConnection([])) is None
+
+
+def test_fetch_collector_heartbeat_tolerates_missing_table_only():
+    """缺表（1146）視同無心跳；反例：其他錯誤必須拋出。"""
+    missing = SpyConnection()
+    missing.spy_cursor = RaisingCursor(
+        pymysql.err.ProgrammingError(1146, "Table doesn't exist"))
+    assert database.fetch_collector_heartbeat(missing) is None
+
+    broken = SpyConnection()
+    broken.spy_cursor = RaisingCursor(
+        pymysql.err.ProgrammingError(1064, "syntax error"))
+    with pytest.raises(pymysql.err.ProgrammingError):
+        database.fetch_collector_heartbeat(broken)

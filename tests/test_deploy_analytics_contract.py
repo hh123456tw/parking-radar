@@ -232,3 +232,17 @@ def test_cleanup_run_cleanup_defaults_to_utc_now(monkeypatch):
     assert calls["insights_cutoff"].tzinfo is timezone.utc
     assert calls["events_cutoff"] == EXPECTED_CUTOFF
     assert calls["events_cutoff"].tzinfo is timezone.utc
+
+
+def test_snapshot_index_and_heartbeat_migrations_are_rerunnable():
+    """VM 手動重跑 migration 不得因索引或資料表已存在而失敗。"""
+    index = Path("migrations/20260912_add_snapshot_retention_index.sql").read_text(
+        encoding="utf-8")
+    assert "INFORMATION_SCHEMA.STATISTICS" in index
+    assert "INDEX_NAME = 'idx_snapshots_captured_lot'" in index
+    assert "PREPARE stmt FROM @ddl" in index
+    heartbeat = Path("migrations/20261022_add_collector_heartbeat.sql").read_text(
+        encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS collector_heartbeat" in heartbeat
+    assert "CREATE TABLE IF NOT EXISTS collector_heartbeat" in SCHEMA.read_text(
+        encoding="utf-8")

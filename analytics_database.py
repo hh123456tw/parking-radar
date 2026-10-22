@@ -2,6 +2,8 @@
 
 from datetime import timedelta
 
+import pymysql
+
 # 資料表 16 個可寫入欄位（不含自動產生的 event_id），順序即 INSERT 順序。
 EVENT_COLUMNS = (
     "event_type", "occurred_at", "request_id", "anonymous_id_hash",
@@ -126,18 +128,36 @@ def delete_expired_events(connection, cutoff_utc):
         return cursor.rowcount
 
 
+STATUS_TIMES_SQL = """
+    SELECT
+        (SELECT source_updated_at FROM parking_snapshots
+         ORDER BY snapshot_id DESC LIMIT 1) AS official_data_at,
+        {collector_sql} AS collector_at,
+        (SELECT MAX(metadata_checked_at) FROM parking_lots) AS metadata_at
+"""
+LEGACY_COLLECTOR_SQL = (
+    "(SELECT captured_at FROM parking_snapshots"
+    " ORDER BY snapshot_id DESC LIMIT 1)"
+)
+# 官方凍結時不會有新快照，Collector 是否存活改看心跳；心跳為空時退回最後快照。
+HEARTBEAT_COLLECTOR_SQL = (
+    "COALESCE((SELECT last_success_at FROM collector_heartbeat WHERE id = 1), "
+    + LEGACY_COLLECTOR_SQL + ")"
+)
+
+
 def fetch_status_times(connection):
     """一次取出儀表板需要的三個最新時間：官方資料、Collector 與後設資料。"""
-    sql = """
-        SELECT
-            (SELECT source_updated_at FROM parking_snapshots
-             ORDER BY snapshot_id DESC LIMIT 1) AS official_data_at,
-            (SELECT captured_at FROM parking_snapshots
-             ORDER BY snapshot_id DESC LIMIT 1) AS collector_at,
-            (SELECT MAX(metadata_checked_at) FROM parking_lots) AS metadata_at
-    """
     with connection.cursor() as cursor:
-        cursor.execute(sql)
+        try:
+            cursor.execute(STATUS_TIMES_SQL.format(
+                collector_sql=HEARTBEAT_COLLECTOR_SQL))
+        except pymysql.err.ProgrammingError as exc:
+            # 1146 = 尚未套用心跳 migration 的舊資料庫，沿用最後快照時間。
+            if exc.args[0] != 1146:
+                raise
+            cursor.execute(STATUS_TIMES_SQL.format(
+                collector_sql=LEGACY_COLLECTOR_SQL))
         rows = list(cursor.fetchall())
         row = rows[0] if rows else {}
         return {

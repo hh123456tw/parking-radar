@@ -63,8 +63,9 @@ def test_classify_arrival_day_requires_timezone(tmp_path):
 class FakeResponse:
     """紀錄 raise_for_status 次數的假 HTTP 回應。"""
 
-    def __init__(self, payload):
+    def __init__(self, payload, status_code=200):
         self.payload = payload
+        self.status_code = status_code
         self.raise_calls = 0
 
     def raise_for_status(self):
@@ -166,3 +167,40 @@ def test_missing_saturday_row_is_weekend_not_weekday(tmp_path):
         ("weekend", "週末", "weekday_fallback")
     assert (monday["kind"], monday["label"], monday["source"]) == \
         ("weekday", "平日", "taiwan_calendar")
+
+
+def test_sync_calendars_skips_unpublished_next_year(tmp_path, monkeypatch):
+    """明年行事曆尚未公布（404）時略過，今年照常寫入。"""
+    monkeypatch.setattr(calendar_service, "datetime", FixedNow)
+
+    def fake_get(url, **_kwargs):
+        if url.endswith("2027.json"):
+            return FakeResponse(None, status_code=404)
+        return FakeResponse([])
+
+    monkeypatch.setattr(calendar_service.requests, "get", fake_get)
+
+    written = calendar_service.sync_calendars(calendar_dir=tmp_path)
+
+    assert written == [tmp_path / "2026.json"]
+    assert not (tmp_path / "2027.json").exists()
+
+
+class NotFoundResponse(FakeResponse):
+    """raise_for_status 會拋出 404 的假回應。"""
+
+    def __init__(self):
+        super().__init__(None, status_code=404)
+
+    def raise_for_status(self):
+        raise calendar_service.requests.HTTPError("404 Not Found")
+
+
+def test_sync_calendars_current_year_404_still_raises(tmp_path, monkeypatch):
+    """反例：今年行事曆 404 必須明確失敗，不得靜默略過。"""
+    monkeypatch.setattr(calendar_service, "datetime", FixedNow)
+    monkeypatch.setattr(calendar_service.requests, "get",
+                        lambda *_args, **_kwargs: NotFoundResponse())
+
+    with pytest.raises(calendar_service.requests.HTTPError):
+        calendar_service.sync_calendars(calendar_dir=tmp_path)
