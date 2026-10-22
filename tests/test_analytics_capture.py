@@ -166,3 +166,13 @@ def test_recommendation_uses_straight_line_when_walking_incomplete():
 def test_recommendation_snapshots_accept_empty_groups():
     assert build_recommendation_snapshots(REQUEST_ID, NOW, {}) == []
     assert build_recommendation_snapshots(REQUEST_ID, NOW, {"recommendations": []}) == []
+
+
+def test_recommendation_lot_name_fits_varchar_100():
+    """推薦快照 lot_name 欄位只有 100 字；剛好 100 字保留，超過才截斷。"""
+    exact, over = "停" * 100, "車" * 101
+    groups = {"recommendations": [{"lot_id": "A", "lot_name": exact},
+                                  {"lot_id": "B", "lot_name": over}]}
+    rows = build_recommendation_snapshots(REQUEST_ID, NOW, groups)
+    assert rows[0]["lot_name"] == exact
+    assert rows[1]["lot_name"] == "車" * 100

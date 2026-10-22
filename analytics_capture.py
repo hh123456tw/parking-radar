@@ -105,7 +105,8 @@ def build_recommendation_snapshots(request_id, occurred_at, groups):
             "rank_position": rank,
             "occurred_at": _as_utc(occurred_at),
             "parking_lot_id": row.get("lot_id"),
-            "lot_name": row.get("lot_name"),
+            # analytics_recommendations.lot_name 為 VARCHAR(100)，比 parking_lots 短。
+            "lot_name": (row.get("lot_name") or "")[:100],
             "recommendation_group": "recommended"
                 if row.get("decision_status") == "recommended" else "backup",
             "available_spaces": row.get("available_spaces"),

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -11,6 +12,7 @@ import requests
 CALENDAR_DIR = Path("data/calendar")
 CALENDAR_BASE_URL = "https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data"
 TAIPEI = ZoneInfo("Asia/Taipei")
+logger = logging.getLogger(__name__)
 
 
 def _day(kind, label, is_holiday, source):
@@ -77,15 +79,19 @@ def _fallback(local):
 
 def sync_calendars(years=None, calendar_dir=CALENDAR_DIR, timeout=10):
     """下載指定年度臺灣行事曆 JSON，並以暫存檔原子換檔後回傳路徑。"""
+    current_year = datetime.now(TAIPEI).year
     if years is None:
-        now = datetime.now(TAIPEI)
-        years = [now.year, now.year + 1]
+        years = [current_year, current_year + 1]
     calendar_dir = Path(calendar_dir)
     calendar_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for year in years:
         url = f"{CALENDAR_BASE_URL}/{year}.json"
         response = requests.get(url, timeout=timeout)
+        if response.status_code == 404 and year > current_year:
+            # 明年行事曆通常年中才公布；尚未公布時略過，不讓排程中斷後續同步。
+            logger.warning("%s 年行事曆尚未公布（404），略過", year)
+            continue
         response.raise_for_status()
         rows = response.json()
         if not isinstance(rows, list):

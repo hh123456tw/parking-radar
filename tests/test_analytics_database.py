@@ -2,6 +2,9 @@
 
 from datetime import datetime, timezone
 
+import pymysql
+import pytest
+
 from analytics_database import (
     delete_expired_events,
     fetch_events,
@@ -165,3 +168,49 @@ def test_fetch_status_times_returns_three_time_keys():
     assert "ORDER BY snapshot_id DESC LIMIT 1" in sql
     assert "MAX(source_updated_at)" not in sql
     assert "MAX(captured_at)" not in sql
+    # Collector 存活改讀心跳表，心跳為空時退回最後快照時間。
+    assert "COALESCE((SELECT last_success_at FROM collector_heartbeat" in sql
+
+
+class MissingHeartbeatCursor(SpyCursor):
+    """第一次查詢模擬指定 MySQL 錯誤，之後正常回傳。"""
+
+    def __init__(self, error, rows, executions):
+        super().__init__(rows, executions=executions)
+        self.error = error
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        if len(self.executions) == 1:
+            raise self.error
+
+
+def _connection_with_first_error(error, rows):
+    connection = SpyConnection()
+    connection.cursor_instance = MissingHeartbeatCursor(
+        error, rows, connection.executions)
+    return connection
+
+
+def test_fetch_status_times_falls_back_when_heartbeat_table_missing():
+    """尚未套用 migration 的舊資料庫仍以最後快照 captured_at 顯示 Collector。"""
+    now = datetime(2026, 10, 22, 8, 0, tzinfo=timezone.utc)
+    connection = _connection_with_first_error(
+        pymysql.err.ProgrammingError(1146, "Table doesn't exist"),
+        [{"official_data_at": now, "collector_at": now, "metadata_at": None}])
+
+    assert fetch_status_times(connection)["collector_at"] == now
+    first_sql, fallback_sql = (sql for sql, _ in connection.executions)
+    assert "collector_heartbeat" in first_sql
+    assert "collector_heartbeat" not in fallback_sql
+    assert "SELECT captured_at FROM parking_snapshots" in fallback_sql
+
+
+def test_fetch_status_times_raises_other_database_errors():
+    """反例：缺表以外的錯誤不得被當成舊資料庫靜默退回。"""
+    connection = _connection_with_first_error(
+        pymysql.err.ProgrammingError(1064, "syntax error"), [])
+
+    with pytest.raises(pymysql.err.ProgrammingError):
+        fetch_status_times(connection)
+    assert len(connection.executions) == 1

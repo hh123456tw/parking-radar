@@ -39,4 +39,4 @@ def run_cleanup(now=None):
 
 
 if __name__ == "__main__":
-    run_cleanup()
+    print(run_cleanup())
