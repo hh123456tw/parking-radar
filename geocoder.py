@@ -89,6 +89,8 @@ def geocode_address(address, connection, http_get=requests.get, deadline=None):
             if remaining < 0.5:
                 raise requests.Timeout("地址查詢已超過時間預算")
             timeout = min(timeout, remaining)
+        # shortcut: deadline 只擋住新請求，timeout 只限制每次讀取的間隔而非總時間，
+        # Nominatim 回應小且快所以可接受；若改用會慢慢吐資料的上游再改成串流計時。
         response = http_get(
             NOMINATIM_URL,
             params={"q": query, "format": "jsonv2", "limit": 1,
@@ -169,8 +171,10 @@ def format_place(display_address):
         return {"name": None, "address": None}
     district = next((part for part in parts if part in TAIPEI_DISTRICTS), None)
     road_indexes = [index for index, part in enumerate(parts) if ROAD_RE.search(part)]
-    # 「台北地下街, 忠孝西路一段, …」第一段只是名稱剛好以「街」結尾，真正路名在後面。
-    if road_indexes[:1] == [0] and len(road_indexes) > 1:
+    # 「台北地下街, 忠孝西路一段, …」第一段只是名稱剛好以「街」結尾，真正路名在後面；
+    # 但「八德路四段138巷, 八德路四段」的第一段是後面路名的巷弄延伸，本身就是路名。
+    if road_indexes[:1] == [0] and len(road_indexes) > 1 \
+            and not parts[0].startswith(parts[road_indexes[1]]):
         road_indexes.pop(0)
     road_index = road_indexes[0] if road_indexes else None
     road = parts[road_index] if road_index is not None else None

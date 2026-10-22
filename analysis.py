@@ -62,8 +62,20 @@ def haversine_m(lat1, lon1, lat2, lon2):
     return earth_radius_m * 2 * asin(sqrt(value))
 
 
+def _legacy_score(current_hell, distance_m=None, radius_m=1500):
+    """舊推薦分數（不輸出），只用來讓同分場站維持原本順序；公式與兩次 round() 照舊。
+
+    沒有歷史樣本時舊版用 60/40；行政區模式沒有距離時就是空位容易度本身。
+    """
+    current_ease = 100 - current_hell
+    if distance_m is None:
+        return round(current_ease, 2)
+    nearby_ease = round(max(0.0, min(100.0, 100 * (1 - distance_m / radius_m))), 2)
+    return round(current_ease * 0.6 + nearby_ease * 0.4, 2)
+
+
 def rank_candidates(rows, destination_lat, destination_lon, radius_m=1500):
-    """排除無效或超出半徑的場站並加入分析欄位；排序交給 split_recommendation_groups。"""
+    """排除無效或超出半徑的場站並加入分析欄位，依舊推薦分數穩定排序以保留同分順序。"""
     candidates = []
     for row in rows:
         if clean_available(row.get("total_spaces"), row.get("available_spaces")) is None:
@@ -77,8 +89,10 @@ def rank_candidates(rows, destination_lat, destination_lon, radius_m=1500):
         item["distance_m"] = round(distance, 1)
         item["hell_score"] = hell_score(row["total_spaces"], row["available_spaces"])
         item["hell_label"] = hell_label(item["hell_score"])
-        candidates.append(item)
-    return candidates
+        candidates.append((_legacy_score(item["hell_score"], distance, radius_m), item))
+    # 後續 split_recommendation_groups 與 select_walking_candidates 都是穩定排序，
+    # 同分時沿用這裡的順序，結果才與移除推薦分數前完全相同。
+    return [item for _, item in sorted(candidates, key=lambda pair: pair[0], reverse=True)]
 
 
 def _pressure_label(score):
@@ -161,12 +175,8 @@ def split_recommendation_groups(ranked):
         return (1, float("inf") if distance is None else float(distance))
 
     def distance_then_spaces(item):
-        """同風險優先選步行較近場站；相同時再選剩餘格數較多者，最後沿用舊推薦分數的順序。"""
-        # 舊推薦分數 = 空位容易度 60% + 距離容易度 40%；這裡只當內部同分排序，不輸出。
-        distance = item.get("distance_m")
-        old_score_cost = 0.6 * float(item["hell_score"]) + (
-            0 if distance is None else 40 * min(float(distance), 1500) / 1500)
-        return (*proximity_key(item), -int(item["available_spaces"]), old_score_cost)
+        """同風險優先選步行較近場站；相同時再選剩餘格數較多者，再相同則保留 rank_* 的順序。"""
+        return (*proximity_key(item), -int(item["available_spaces"]))
 
     safe = sorted(
         (row for row in explained if row["decision_status"] == "recommended"),
@@ -211,7 +221,7 @@ def select_walking_candidates(ranked, limit=15):
 
 
 def rank_district_candidates(rows):
-    """手動行政區模式不計距離，只保留有效場站；排序交給 split_recommendation_groups。"""
+    """手動行政區模式不計距離，只保留有效場站，依舊推薦分數穩定排序。"""
     ranked = []
     for row in rows:
         current = hell_score(row["total_spaces"], row["available_spaces"])
@@ -219,7 +229,7 @@ def rank_district_candidates(rows):
             continue
         ranked.append(dict(row, distance_m=None, hell_score=current,
                            hell_label=hell_label(current)))
-    return ranked
+    return sorted(ranked, key=lambda item: _legacy_score(item["hell_score"]), reverse=True)
 
 
 def build_history_series(rows):

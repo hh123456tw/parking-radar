@@ -56,6 +56,14 @@ def test_format_place_name_ending_in_street_uses_the_later_road():
         "name": "台北地下街", "address": "臺北市中正區忠孝西路一段"}
 
 
+def test_format_place_lane_of_a_later_road_is_the_road_not_a_name():
+    """第一段是後面路名的巷弄延伸時，第一段本身就是路名，138巷不能被丟掉。"""
+    display = "八德路四段138巷, 八德路四段, 松山區, 臺北市"
+
+    assert format_place(display) == {
+        "name": None, "address": "臺北市松山區八德路四段138巷"}
+
+
 def test_format_place_house_number_with_hao_is_not_a_name():
     """「7號」是門牌，不能當成地名顯示，也不能重複出現「號號」。"""
     display = "7號, 市府路, 信義區, 臺北市, 110, 臺灣"

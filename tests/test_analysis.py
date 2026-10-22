@@ -1,5 +1,6 @@
 """停車分析純函式測試：驗證清洗、分數、距離、推薦分組與歷史折線。"""
 
+import math
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -171,13 +172,13 @@ def test_haversine_and_radius_filter():
 
 
 def test_district_ranking_does_not_fake_distance_and_excludes_invalid_rows():
-    """行政區模式不偽造距離，無效格數不列入；排序交給 split_recommendation_groups。"""
+    """行政區模式不偽造距離，無效格數不列入；與改版前相同，空位容易度高者在前。"""
     ranked = rank_district_candidates([
         candidate("first", 20),
         candidate("second", 50),
         candidate("invalid", -9),
     ])
-    assert [row["lot_id"] for row in ranked] == ["first", "second"]
+    assert [row["lot_id"] for row in ranked] == ["second", "first"]
     assert ranked[0]["distance_m"] is None
 
 
@@ -226,6 +227,50 @@ def test_equal_distance_address_ties_keep_old_order_lower_pressure_first():
     groups = split_recommendation_groups(rank_candidates(rows, 25.0330, 121.5654))
 
     assert [row["lot_id"] for row in groups["recommendations"]] == ["B", "A"]
+
+
+def test_walking_slots_on_distance_tie_match_pre_change_order():
+    """沿用移除推薦分數前的行為：第 15、16 座直線距離相同時，路線名額給舊分數較高
+    （空位較多）的 Y，而不是資料庫順序在前的 X。"""
+    rows = [
+        {"lot_id": f"near-{k}", "total_spaces": 100, "available_spaces": 50,
+         "latitude": 25.0330, "longitude": 121.5654 + k * 0.0005}
+        for k in range(1, 15)
+    ]
+    rows += [
+        {"lot_id": "X", "total_spaces": 100, "available_spaces": 20,
+         "latitude": 25.0330, "longitude": 121.5754},
+        {"lot_id": "Y", "total_spaces": 100, "available_spaces": 60,
+         "latitude": 25.0330, "longitude": 121.5754},
+    ]
+
+    selected = select_walking_candidates(rank_candidates(rows, 25.0330, 121.5654), limit=15)
+
+    ids = [row["lot_id"] for row in selected]
+    assert "Y" in ids
+    assert "X" not in ids
+
+
+def test_two_step_rounding_tie_keeps_database_order_like_before():
+    """沿用移除推薦分數前的行為：A 100.0 公尺、B 100.1 公尺，舊分數兩次四捨五入後同為
+    49.33，步行與空位也相同，所以維持資料庫順序 B、A，不能因直線距離差 0.1 公尺換位。"""
+    def north(meters):
+        return 25.0330 + math.degrees(meters / 6_371_000)
+
+    rows = [
+        {"lot_id": "B", "total_spaces": 100, "available_spaces": 20,
+         "latitude": north(100.1), "longitude": 121.5654},
+        {"lot_id": "A", "total_spaces": 100, "available_spaces": 20,
+         "latitude": north(100.0), "longitude": 121.5654},
+    ]
+    ranked = rank_candidates(rows, 25.0330, 121.5654)
+    for row in ranked:
+        row.update(walking_distance_m=400, walking_duration_minutes=5)
+
+    groups = split_recommendation_groups(ranked)
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == ["B", "A"]
+    assert "recommendation_score" not in groups["recommendations"][0]
 
 
 def test_recommendations_choose_safe_by_distance_before_backup():

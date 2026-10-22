@@ -354,7 +354,8 @@ def test_comma_between_clauses_is_not_a_thousands_separator():
 
 
 @pytest.mark.parametrize("text", ["小型車上限100元/次", "小型車上限100元／次",
-                                  "小型車上限 100 / 次"])
+                                  "小型車上限 100 / 次", "小型車上限100元（每次）",
+                                  "小型車上限100元(每次)", "上限100元/每次"])
 def test_per_entry_amount_after_cap_word_is_not_a_daily_cap(text):
     """「上限100元/次」是每次收費，不得當成每日上限。"""
     assert build_fee_summary(None, text, day(), "weekday")["daily_cap_label"] == "官方未標示"
@@ -364,3 +365,10 @@ def test_daily_cap_followed_by_hourly_rate_is_still_a_cap():
     """上限金額後接「元/日」不是每次收費，不能被每次收費規則誤擋。"""
     result = build_fee_summary(None, "小型車當日最高300元/日內有效", day(), "weekday")
     assert result["daily_cap_label"] == "300 元"
+
+
+def test_per_entry_words_in_next_clause_do_not_hide_daily_cap():
+    """下一句才出現的「每次」「月租」屬於別的費用，不影響前一句的每日上限。"""
+    result = build_fee_summary(
+        None, "小型車當日最高200元，機械車位每次另收50元，月租4000元", day(), "weekday")
+    assert result["daily_cap_label"] == "200 元"
