@@ -544,3 +544,27 @@ def test_upsert_collector_heartbeat_skips_missing_table_only():
         pymysql.err.ProgrammingError(1064, "syntax error"))
     with pytest.raises(pymysql.err.ProgrammingError):
         database.upsert_collector_heartbeat(broken, datetime.now(timezone.utc))
+
+
+def test_fetch_collector_heartbeat_reads_single_row_or_none():
+    at = datetime(2026, 10, 22, 1, 0)
+    connection = SpyConnection([{"last_success_at": at}])
+    assert database.fetch_collector_heartbeat(connection) == at
+    sql, _params = connection.spy_cursor.calls[0]
+    assert "FROM collector_heartbeat WHERE id = 1" in sql
+
+    assert database.fetch_collector_heartbeat(SpyConnection([])) is None
+
+
+def test_fetch_collector_heartbeat_tolerates_missing_table_only():
+    """缺表（1146）視同無心跳；反例：其他錯誤必須拋出。"""
+    missing = SpyConnection()
+    missing.spy_cursor = RaisingCursor(
+        pymysql.err.ProgrammingError(1146, "Table doesn't exist"))
+    assert database.fetch_collector_heartbeat(missing) is None
+
+    broken = SpyConnection()
+    broken.spy_cursor = RaisingCursor(
+        pymysql.err.ProgrammingError(1064, "syntax error"))
+    with pytest.raises(pymysql.err.ProgrammingError):
+        database.fetch_collector_heartbeat(broken)

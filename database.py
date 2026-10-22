@@ -105,6 +105,21 @@ def fetch_latest_snapshot_time(connection):
         return row.get("source_updated_at") if row else None
 
 
+def fetch_collector_heartbeat(connection):
+    """回傳 collector 最後成功時間（UTC）；無心跳或舊資料庫尚無此表時回傳 None。"""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT last_success_at FROM collector_heartbeat WHERE id = 1")
+            rows = list(cursor.fetchall())
+    except pymysql.err.ProgrammingError as exc:
+        # 1146 = 資料表不存在，視同沒有心跳。
+        if exc.args[0] != 1146:
+            raise
+        return None
+    return rows[0].get("last_success_at") if rows else None
+
+
 def upsert_collector_heartbeat(connection, succeeded_at):
     """在 collector 交易內記錄最後成功時間；舊資料庫尚無此表時略過不中斷收集。"""
     try:
