@@ -23,7 +23,9 @@ SKIP_CAP_TOKENS = (
 HALF_HOUR_RE = re.compile(r"每半小時\s*(\d+(?:\.\d+)?)\s*元?")
 HOUR_RE = re.compile(r"每小時\s*(\d+(?:\.\d+)?)\s*元?")
 PER_HOUR_RE = re.compile(r"(\d+(?:\.\d+)?)\s*元?\s*[／/]\s*(?:每?小)?時")
-NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+# 官方金額可能寫成「1,200」；千分位要整段吃下，否則只會讀到 1。
+NUMBER_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
+CLAUSE_SEPARATOR_RE = re.compile(r"[，,；;。\n]")
 
 UNKNOWN_LABEL = "官方未標示"
 UNPARSED_LABEL = "請查看官方費率"
@@ -89,7 +91,7 @@ def _price_from_rate(value):
     match = NUMBER_RE.search(str(value or ""))
     if not match:
         return None
-    price = round(float(match.group(0)))
+    price = round(float(match.group(0).replace(",", "")))
     return price if price > 0 else None
 
 
@@ -210,9 +212,12 @@ def _has_official_fee_description(fee_info):
 
 
 def _cap_amount(text):
-    """取上限詞後的第一個數字；後接小時、次數等非金額單位時不是每日上限。"""
+    """取上限詞後的第一個數字；數字前出現跳過字眼或後接非金額單位時不是每日上限。"""
     match = NUMBER_RE.search(text)
     if not match or text[match.end():].lstrip().startswith(NON_MONEY_UNITS):
+        return None
+    # 只看數字之前：「當日最高200元，月租4000元」後段的月租不影響前面的上限。
+    if any(token in text[:match.start()] for token in SKIP_CAP_TOKENS):
         return None
     return _price_from_rate(match.group(0))
 
@@ -220,8 +225,8 @@ def _cap_amount(text):
 def _daily_cap_from_text(fee_info):
     """只在小型車段且含認可上限詞時取上限金額；月租、計次、溢時等不得使用。
 
-    上限詞前後各掃一小段檢查跳過字眼：若「月租上限 3000」「每次停車上限 100」
-    等月租／計次詞語出現在上限詞之前，該數字屬月租或計次費用而非每日上限。
+    上限詞前只看同一句（逗號、分號後才開始），例如「月租上限 3000」「每次停車上限 100」；
+    前一句的「每小時40元，」不能讓後面的「當日最高」失效。
     """
     segment = _small_car_segment(fee_info)
     if not segment:
@@ -231,9 +236,10 @@ def _daily_cap_from_text(fee_info):
     for phrase in CAP_PHRASES:
         pos = segment.find(phrase)
         while pos != -1:
-            before = segment[max(0, pos - before_window): pos]
+            before = CLAUSE_SEPARATOR_RE.split(
+                segment[max(0, pos - before_window): pos])[-1]
             after = segment[pos + len(phrase): pos + len(phrase) + after_window]
-            if not any(token in before or token in after for token in SKIP_CAP_TOKENS):
+            if not any(token in before for token in SKIP_CAP_TOKENS):
                 cap = _cap_amount(after)
                 if cap is not None:
                     return cap
