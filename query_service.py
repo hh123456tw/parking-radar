@@ -80,7 +80,8 @@ def requires_location_confirmation(parsed):
     original = (parsed.get("original_destination") or "").strip()
     if not original or parsed.get("destination_label"):
         return False
-    return re.search(r"\d+(?:-\d+)?號", original) is None
+    # 門牌前必須是路名：「捷運市政府站2號出口」的「2號」是出口編號，不是門牌。
+    return re.search(r"(路|街|段|巷|弄)\s*\d+(?:-\d+)?號", original) is None
 
 
 LABEL_RE = re.compile(r"(.+?)（(.+)）")
@@ -230,13 +231,17 @@ def validate_parsed_query(parsed, now=None):
         if resolved_address != landmark:
             # 地圖服務可能把同一門牌顯示成建築名稱，畫面仍保留使用者熟悉的地標。
             parsed["destination_label"] = f"{landmark}（{resolved_address}）"
+            # 固定門牌已確定，Gemini 的候選不能再蓋過它。
+            parsed["location_candidates"] = []
 
     # Gemini 可能把「信義區市府路1號」拆成兩欄，地址服務需要重新組合。
     address = (parsed.get("address") or "").strip()
     district = (parsed.get("district") or "").strip()
     if address and district:
         without_city = address.removeprefix("臺北市").removeprefix("台北市")
-        if district in without_city:
+        # 地址已含任一行政區就不再補：固定地標「中正區北平西路3號」配上 Gemini 的「大同區」
+        # 會拼成兩個行政區而查不到。
+        if any(name in without_city for name in TAIPEI_DISTRICTS):
             parsed["address"] = "臺北市" + without_city
         elif without_city.endswith("號"):
             parsed["address"] = "臺北市" + district + without_city
@@ -387,11 +392,14 @@ def apply_previous_destination(parsed, session_state, now=None):
 
     兩種情況會沿用：這句話完全沒有地點；或 Gemini 自己從上一輪補回的就是同一地點，
     此時直接用已確認的結果，不再要求使用者重新確認地點。
+    只說行政區（例如「信義區現在好停嗎？」）是在問整區，不算重複上一輪的地點。
     """
     mentioned = [parsed.get(field) for field in LOCATION_FIELDS if parsed.get(field)]
-    repeats_previous = bool(mentioned) and all(
-        value in previous_place_names(session_state)
-        or value == session_state.get("district") for value in mentioned)
+    names = previous_place_names(session_state)
+    places = [parsed.get(field) for field in ("address", "original_destination")
+              if parsed.get(field)]
+    repeats_previous = bool(places) and all(value in names for value in places) and (
+        parsed.get("district") in {None, "", session_state.get("district")})
     if mentioned and not repeats_previous:
         return parsed
     if not mentioned and parsed.get("location_candidates"):

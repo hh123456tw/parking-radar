@@ -146,3 +146,48 @@ def test_gemini_repeating_the_previous_destination_reuses_confirmed_result(field
     assert result["destination_label"] == "臺北市政府（臺北市信義區市府路1號）"
     assert result["location_candidates"] == []
     assert query_service.requires_location_confirmation(result) is False
+
+
+def test_district_only_message_equal_to_previous_district_queries_the_district():
+    """「信義區現在好停嗎？」是在問整區，不能改查上一輪的臺北市政府門牌。"""
+    parsed = dict(empty_follow_up(), district="信義區", missing_fields=[])
+
+    result = query_service.apply_previous_destination(parsed, SESSION, now=NOW)
+
+    assert result["address"] is None
+    assert result["district"] == "信義區"
+    assert result.get("destination_label") is None
+
+
+def test_previous_place_with_its_own_district_still_reuses_confirmed_result():
+    """地點名稱與上一輪相同時，附帶同一個行政區仍算重複上一輪。"""
+    parsed = dict(empty_follow_up(), original_destination="臺北市政府",
+                  district="信義區", missing_fields=[])
+
+    result = query_service.apply_previous_destination(parsed, SESSION, now=NOW)
+
+    assert result["address"] == "臺北市信義區市府路1號"
+
+
+def test_known_landmark_with_a_different_gemini_district_keeps_the_fixed_address():
+    """固定地標已有行政區時，不可再補 Gemini 給的另一個行政區，也不可讓候選蓋過。"""
+    parsed = {"intent": "recommend", "original_destination": "臺北車站",
+              "address": "臺北車站", "district": "大同區", "arrival_time": None,
+              "missing_fields": [], "location_candidates": [
+                  {"name": "京站", "address": "承德路一段1號", "district": "大同區"}]}
+
+    result = query_service.validate_parsed_query(parsed, now=NOW)
+
+    assert result["address"] == "臺北市中正區北平西路3號"
+    assert result["location_candidates"] == []
+
+
+def test_address_without_district_still_gets_the_district():
+    """地址本身沒有行政區時，仍要補上 Gemini 給的行政區。"""
+    parsed = {"intent": "recommend", "original_destination": None,
+              "address": "市府路1號", "district": "信義區", "arrival_time": None,
+              "missing_fields": []}
+
+    result = query_service.validate_parsed_query(parsed, now=NOW)
+
+    assert result["address"] == "臺北市信義區市府路1號"

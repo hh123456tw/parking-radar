@@ -648,6 +648,9 @@ def test_chat_landmark_alias_replaces_gemini_district_guess():
 @pytest.mark.parametrize(("parsed", "expected"), [
     ({"original_destination": "資策會"}, True),
     ({"original_destination": "臺北市信義區市府路1號"}, False),
+    ({"original_destination": "八德路四段138巷 12-1號"}, False),
+    # 出口編號不是門牌，仍要請使用者確認地點。
+    ({"original_destination": "捷運市政府站2號出口"}, True),
     ({"original_destination": "台北車站", "destination_label": "台北車站（北平西路3號）"},
      False),
 ])
