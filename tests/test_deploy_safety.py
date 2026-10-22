@@ -114,3 +114,50 @@ def test_installer_source_check_matches_release_dirs():
         assert fnmatchcase(bad, "/opt/parking-hell*")
     for good in ("/root/parking-radar-src", "/opt/parking", "/srv/parking-hell"):
         assert not fnmatchcase(good, "/opt/parking-hell*")
+
+
+def test_global_lock_is_taken_before_stamp_and_stamp_is_unique():
+    lock = DEPLOY.index("exec 9>/run/parking-radar-deploy.lock")
+    assert DEPLOY.index('flock -n 9 || { echo "DEPLOY_BUSY" >&2; exit 75; }') > lock
+    assert lock < DEPLOY.index("STAMP=")
+    assert 'STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"' in DEPLOY
+
+
+def test_archive_is_checked_and_extracted_only_from_private_copy():
+    """檢查與解壓都用 root 私有副本，避免 /tmp 檔在檢查後被改寫。"""
+    assert 'install -m 600 -o root -g root "$ARCHIVE" "$PRIVATE"' in DEPLOY
+    assert 'PRIVATE="/root/parking-radar-incoming/' in DEPLOY
+    assert "trap 'rm -f -- \"$PRIVATE\"' EXIT" in DEPLOY
+    assert DEPLOY.index('"$ARCHIVE" "$PRIVATE"') < DEPLOY.index("tar -tzvf")
+    tar_lines = [line for line in DEPLOY.splitlines() if re.search(r"\btar -", line)]
+    assert len(tar_lines) == 3
+    for line in tar_lines:
+        assert '"$PRIVATE"' in line and '"$ARCHIVE"' not in line
+    assert 'tar -xzf - -C "$RELEASE"' in DEPLOY and '< "$PRIVATE"' in DEPLOY
+
+
+def test_release_venv_tools_run_via_release_python():
+    """venv 的 pip shebang 指向舊版 venv；必須以新版 python -m pip 安裝。"""
+    assert not re.search(r"\.venv/bin/pip\b", DEPLOY)
+    assert 'sudo -u parking "$RELEASE/.venv/bin/python" -m pip install' in DEPLOY
+
+
+def test_installers_verify_every_resolved_source_file():
+    """來源樹裡的符號連結可指回 /opt/parking-hell；每個實際來源檔都要解析後檢查。"""
+    expected = {
+        INSTALL_USER: ("parking-radar-receive", "deploy.sh"),
+        INSTALL_NGINX: ("nginx-parking-radar.conf", "nginx-parking-radar-log-format.conf"),
+    }
+    for text, names in expected.items():
+        body = _function_body(text, "verified_source")
+        assert 'file="$(realpath -e "$1")" || return 2' in body
+        assert "/opt/parking-hell*) echo" in body
+        assert 'sudo -u parking test -w "$dir"' in body
+        assert 'parent="$(dirname "$dir")"' in body
+        assert '[[ "$parent" == "$dir" ]] && break' in body
+        for name in names:
+            assert f'verified_source "$SRC/{name}")' in text
+        # install 只能使用驗證過的路徑，不能直接取 $SRC 底下的檔案。
+        for line in text.splitlines():
+            if line.startswith("install -m"):
+                assert "$SRC/" not in line

@@ -11,6 +11,9 @@
 - 部署前就失敗時不會重啟正在服務的舊版；資料庫備份失敗會刪除不完整的備份檔。
 - 部署成功後自動清理：保留最新 3 份回滾目錄，刪除 14 天前的資料庫備份、失敗目錄與部署日誌，以及已上傳的打包檔。
 - SSH 斷線不會中斷部署，完整輸出保存在 `/var/log/parking-radar-deploy-<時間>.log`。
+- 同時只允許一個部署（撞鎖直接回報 `DEPLOY_BUSY`）；打包檔先複製到 root 私有目錄，只檢查與解壓這份副本。
+- 新版套件改用新版 venv 的 `python -m pip` 安裝，不再誤裝進正在服務的舊版 venv。
+- install 腳本會逐一解析實際來源檔，位於 `/opt/parking-hell*` 或檔案、上層目錄可被 parking 寫入時拒絕安裝。
 - `install-deploy-user.sh`、`install-nginx.sh` 必須指定 parking 無法改寫的來源目錄（例如 root 的 git 工作目錄），拒絕 `/opt/parking-hell*`。
 
 ## 2026-10-03

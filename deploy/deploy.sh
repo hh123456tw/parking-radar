@@ -8,8 +8,17 @@ set -Eeuo pipefail
 APP="/opt/parking-hell"
 SHA="${1:?usage: deploy.sh <sha>}"
 [[ "$SHA" =~ ^[0-9a-f]{7,40}$ ]] || { echo "bad sha" >&2; exit 2; }
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+# 全域鎖：同時只能有一個部署，否則目錄名稱與 mv 會互相干擾，回滾找不到正確版本。
+# 用 -n 直接失敗而不排隊：CI 本身已序列化部署，撞鎖代表有人手動重複觸發，應由人判斷。
+exec 9>/run/parking-radar-deploy.lock
+flock -n 9 || { echo "DEPLOY_BUSY" >&2; exit 75; }
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 ARCHIVE="/tmp/parking-radar-${SHA}.tar.gz"
+# /tmp 的打包檔可能被同 SHA 的下一次上傳改寫；先複製到 root 私有目錄，之後只檢查與解壓這份。
+PRIVATE="/root/parking-radar-incoming/parking-radar-${SHA}-${STAMP}.tar.gz"
+trap 'rm -f -- "$PRIVATE"' EXIT
+install -d -m 700 -o root -g root /root/parking-radar-incoming
+install -m 600 -o root -g root "$ARCHIVE" "$PRIVATE"
 RELEASE="/opt/parking-hell.release-${STAMP}"
 ROLLBACK="/opt/parking-hell.rollback-${STAMP}"
 FAILED="/opt/parking-hell.failed-${STAMP}"
@@ -68,7 +77,7 @@ prune_old_releases() {
   rm -f -- "$ARCHIVE"
 }
 
-test -f "$ARCHIVE"
+test -f "$PRIVATE"
 test -d "$APP"
 test -f "$APP/.env"
 test -x "$APP/.venv/bin/python"
@@ -93,8 +102,8 @@ echo "DB_BACKUP_OK path=${DB_BACKUP}"
 
 # 打包檔只能有一般檔案與目錄：拒絕符號連結、硬連結、裝置檔，以及絕對路徑或 .. 路徑。
 # 先存成變數再比對，避免管線提早結束時 pipefail 吃掉比對結果。
-LISTING="$(tar -tzvf "$ARCHIVE")"
-NAMES="$(tar -tzf "$ARCHIVE")"
+LISTING="$(tar -tzvf "$PRIVATE")"
+NAMES="$(tar -tzf "$PRIVATE")"
 if grep -qv '^[-d]' <<<"$LISTING"; then
   echo "REJECTED: archive contains links or special files" >&2
   false
@@ -106,7 +115,8 @@ fi
 
 # 新版目錄的內容一律以 parking 身分寫入，root 不在 parking 可控的目錄裡解壓或複製。
 install -d -m 755 -o parking -g www-data "$RELEASE"
-sudo -u parking tar -xzf "$ARCHIVE" -C "$RELEASE" --no-same-owner --no-same-permissions
+# parking 讀不到 root 私有目錄，改由 stdin 串流給 tar。
+sudo -u parking tar -xzf - -C "$RELEASE" --no-same-owner --no-same-permissions < "$PRIVATE"
 sudo -u parking cp -a "$APP/.venv" "$RELEASE/.venv"
 if [[ -d "$APP/data" ]]; then
   sudo -u parking install -d -m 775 "$RELEASE/data"
@@ -120,7 +130,7 @@ done
 sudo -u parking sh -c 'umask 077; rm -f -- "$3"; { grep -v "^DEPLOY_VERSION=" "$1" || true; printf "DEPLOY_VERSION=%s\n" "$2"; } > "$3"' \
   sh "$APP/.env" "$SHA" "$RELEASE/.env"
 chown -R parking:www-data "$RELEASE"
-sudo -u parking "$RELEASE/.venv/bin/pip" install --disable-pip-version-check -q \
+sudo -u parking "$RELEASE/.venv/bin/python" -m pip install --disable-pip-version-check -q \
   -r "$RELEASE/requirements.txt"
 sudo -u parking "$RELEASE/.venv/bin/python" -m py_compile \
   "$RELEASE/app.py" "$RELEASE/query_service.py" "$RELEASE/analytics_recorder.py" \
