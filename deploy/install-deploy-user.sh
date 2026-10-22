@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# 在伺服器上以 root 執行：sudo bash install-deploy-user.sh <deploy 公鑰檔> [新版 app 目錄，預設 /opt/parking-hell]
+# 在伺服器上以 root 執行：sudo bash install-deploy-user.sh <deploy 公鑰檔> <已驗證的 git checkout 目錄>
 # 建立 GitHub Actions 專用的 deploy 使用者：SSH 只能執行 parking-radar-receive，
 # sudo 只能執行事先安裝的 deploy.sh。deploy.sh 有修改時，重新執行本腳本更新。
+# 來源必須是 root 自己 checkout 的目錄；/opt/parking-hell* 可被 parking 改寫，不能當成 root 腳本來源。
 set -Eeuo pipefail
 
-PUBKEY_FILE="${1:?usage: install-deploy-user.sh <public key file> [app dir]}"
-SRC="${2:-/opt/parking-hell}/deploy"
+PUBKEY_FILE="${1:?usage: install-deploy-user.sh <public key file> <verified git checkout>}"
+SRC_ROOT="$(realpath -e "${2:?usage: install-deploy-user.sh <public key file> <verified git checkout>}")"
+case "$SRC_ROOT" in
+  /opt/parking-hell*) echo "REJECTED: source must not be under /opt/parking-hell" >&2; exit 2 ;;
+esac
+SRC="${SRC_ROOT}/deploy"
 SUDOERS="/etc/sudoers.d/parking-radar-deploy"
 
 id deploy >/dev/null 2>&1 || useradd --create-home --shell /bin/bash deploy

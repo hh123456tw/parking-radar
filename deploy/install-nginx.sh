@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# 在伺服器上以 root 執行：sudo bash install-nginx.sh <新版 app 目錄，預設 /opt/parking-hell>
+# 在伺服器上以 root 執行：sudo bash install-nginx.sh <已驗證的 git checkout 目錄>
 # 先備份現行設定，通過 nginx -t 才 reload；檢查失敗就還原舊設定。
+# 來源必須是 root 自己 checkout 的目錄；/opt/parking-hell* 可被 parking 改寫，不能當成設定來源。
 set -Eeuo pipefail
 
-SRC="${1:-/opt/parking-hell}/deploy"
+SRC_ROOT="$(realpath -e "${1:?usage: install-nginx.sh <verified git checkout>}")"
+case "$SRC_ROOT" in
+  /opt/parking-hell*) echo "REJECTED: source must not be under /opt/parking-hell" >&2; exit 2 ;;
+esac
+SRC="${SRC_ROOT}/deploy"
 SITE="/etc/nginx/sites-available/parking-radar"
 HTTP_CONF="/etc/nginx/conf.d/nginx-parking-radar-log-format.conf"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
