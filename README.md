@@ -109,7 +109,7 @@ Gemini 負責將「我要去台北車站」等自然語言轉成結構化查詢�
 | 刪除舊快照前必須確保已完整封存 | 暫存檔驗證、`fsync`、create-only 發布與 SHA-256 完成證明；中斷後可比對資料庫自我修復（[ADR 0003](docs/adr/0003-archive-before-delete.md)） |
 | 免費 API 額度可能被惡意請求耗盡 | nginx 只信任 Cloudflare 的 `CF-Connecting-IP`，以真實 IP 對查詢限流；聊天輸入在呼叫 Gemini 前先限制長度 |
 | 官方資料格式不穩定 | 特殊值、`N/A` 與缺漏座標逐筆排除，單筆錯誤不影響整批寫入 |
-| 部署失敗不能讓網站停擺 | [deploy/deploy.sh](deploy/deploy.sh) 先備份資料庫，切換後跑健康檢查與實際查詢，任何一步失敗自動換回舊版 |
+| 部署失敗不能讓網站停擺 | [deploy/deploy.sh](deploy/deploy.sh) 先備份資料庫，切換後檢查 `/health` 與資料庫連線，任何一步失敗自動換回舊版；官方資料停擺只警告、不回滾 |
 
 ## 推薦規則摘要
 
@@ -195,10 +195,19 @@ flask --app app run --debug
 
 合併到 `master` 且 CI 全部通過後，GitHub Actions 會自動部署。部署用的 SSH 金鑰只能執行一支接收腳本：它收下該 commit 的打包檔，再以 sudo 執行 VM 上事先安裝的 `deploy.sh`。即使金鑰外洩，也無法登入 shell、轉送連線或以 root 執行打包檔內的程式。
 
-- [deploy/deploy.sh](deploy/deploy.sh)：備份資料庫、切換版本、健康檢查與冒煙測試，失敗自動回滾。
+- [deploy/deploy.sh](deploy/deploy.sh)：備份資料庫、切換版本、檢查 `/health` 與資料庫連線，失敗自動回滾（尚未切換就失敗時不重啟舊版）。`.env` 只以 parking 身分讀出 MySQL 設定、不以 root 執行；打包檔先拒絕符號連結與 `..` 路徑，再以 parking 身分解壓。成功後只保留最新 3 份回滾目錄，刪除 14 天前的資料庫備份。SSH 斷線不會中斷部署，完整輸出寫在 `/var/log/parking-radar-deploy-<時間>.log`。
 - [deploy/install-nginx.sh](deploy/install-nginx.sh)：通過 `nginx -t` 才 reload，失敗還原舊設定。
 - [deploy/install-deploy-user.sh](deploy/install-deploy-user.sh)：建立 CD 專用的 `deploy` 使用者與 sudo 白名單；`deploy.sh` 修改後需重新執行。
 - [deploy/parking-radar.crontab](deploy/parking-radar.crontab)：資料收集與每日清理排程。
+
+兩支 install 腳本以 root 安裝檔案，來源不能是 `/opt/parking-hell*`（那是 parking 可改寫的上傳內容，腳本會拒絕）。管理者先在 root 目錄取得已核對過的版本，再從那裡執行：
+
+```bash
+sudo git clone https://github.com/hh123456tw/parking-radar.git /root/parking-radar-src
+sudo git -C /root/parking-radar-src checkout <sha>
+sudo bash /root/parking-radar-src/deploy/install-deploy-user.sh <deploy 公鑰檔> /root/parking-radar-src
+sudo bash /root/parking-radar-src/deploy/install-nginx.sh /root/parking-radar-src
+```
 
 ## Documentation
 
