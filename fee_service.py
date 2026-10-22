@@ -25,6 +25,8 @@ HOUR_RE = re.compile(r"每小時\s*(\d+(?:\.\d+)?)\s*元?")
 PER_HOUR_RE = re.compile(r"(\d+(?:\.\d+)?)\s*元?\s*[／/]\s*(?:每?小)?時")
 # 官方金額可能寫成「1,200」；千分位要整段吃下，否則只會讀到 1。
 NUMBER_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
+# 「上限100元/次」是每次收費，不是每日上限。
+PER_ENTRY_RE = re.compile(r"元?\s*[/／]\s*次")
 CLAUSE_SEPARATOR_RE = re.compile(r"[，,；;。\n]")
 
 UNKNOWN_LABEL = "官方未標示"
@@ -214,7 +216,8 @@ def _has_official_fee_description(fee_info):
 def _cap_amount(text):
     """取上限詞後的第一個數字；數字前出現跳過字眼或後接非金額單位時不是每日上限。"""
     match = NUMBER_RE.search(text)
-    if not match or text[match.end():].lstrip().startswith(NON_MONEY_UNITS):
+    rest = text[match.end():].lstrip() if match else ""
+    if not match or rest.startswith(NON_MONEY_UNITS) or PER_ENTRY_RE.match(rest):
         return None
     # 只看數字之前：「當日最高200元，月租4000元」後段的月租不影響前面的上限。
     if any(token in text[:match.start()] for token in SKIP_CAP_TOKENS):

@@ -77,7 +77,7 @@ def requires_location_confirmation(parsed):
     if not original or parsed.get("destination_label"):
         return False
     # 門牌前必須是路名：「捷運市政府站2號出口」的「2號」是出口編號，不是門牌。
-    return re.search(r"(路|街|段|巷|弄)\s*\d+(?:-\d+)?號", original) is None
+    return re.search(r"(路|街|段|巷|弄)\s*\d+(?:(?:-|之)\d+)?號", original) is None
 
 
 LABEL_RE = re.compile(r"(.+?)（(.+)）")

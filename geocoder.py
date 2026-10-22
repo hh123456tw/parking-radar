@@ -45,7 +45,7 @@ def nominatim_queries(address):
     normalized = normalize_address(address)
     match = re.match(
         r"^臺北市(?P<district>.+?區)(?:(?P<village>.+?里))?"
-        r"(?P<street>.+?)(?P<number>\d+(?:-\d+)?號)$",
+        r"(?P<street>.+?)(?P<number>\d+(?:(?:-|之)\d+)?號)$",
         normalized,
     )
     if not match:
@@ -70,8 +70,12 @@ def _respect_rate_limit():
     _last_request_at = time.monotonic()
 
 
-def geocode_address(address, connection, http_get=requests.get):
-    """回傳快取或第一筆臺北市座標；查無結果時回傳 None。"""
+def geocode_address(address, connection, http_get=requests.get, deadline=None):
+    """回傳快取或第一筆臺北市座標；查無結果時回傳 None。
+
+    deadline 是 time.monotonic() 的絕對時間；剩不到 0.5 秒就不再送出請求並丟出 Timeout，
+    每個請求的逾時也不超過剩餘時間。
+    """
     key = normalize_address(address)
     cached = get_cached_geocode(connection, key)
     if cached:
@@ -79,12 +83,18 @@ def geocode_address(address, connection, http_get=requests.get):
 
     for query in nominatim_queries(address):
         _respect_rate_limit()
+        timeout = Config.GEOCODER_TIMEOUT_SECONDS
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining < 0.5:
+                raise requests.Timeout("地址查詢已超過時間預算")
+            timeout = min(timeout, remaining)
         response = http_get(
             NOMINATIM_URL,
             params={"q": query, "format": "jsonv2", "limit": 1,
                     "countrycodes": "tw"},
             headers={"User-Agent": Config.NOMINATIM_USER_AGENT},
-            timeout=Config.GEOCODER_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
         response.raise_for_status()
         items = response.json()
@@ -108,16 +118,17 @@ def geocode_candidates(candidates, connection, http_get=requests.get, limit=3,
     """驗證最多三個 Gemini 地址候選，排除查無資料、查詢失敗與重複座標。"""
     verified = []
     seen_coordinates = set()
-    started = time.monotonic()
+    deadline = time.monotonic() + deadline_seconds
     for candidate in candidates[:limit]:
         address = (candidate.get("address") or "").strip()
         if not address:
             continue
-        if time.monotonic() - started > deadline_seconds:
+        if time.monotonic() >= deadline:
             logger.warning("地址候選查詢超過 %s 秒，略過其餘候選", deadline_seconds)
             break
         try:
-            result = geocode_address(address, connection, http_get=http_get)
+            result = geocode_address(
+                address, connection, http_get=http_get, deadline=deadline)
         except requests.RequestException as exc:
             # 單一候選連線失敗只略過它，不讓整次查詢變成 503。
             logger.warning("地址候選查詢失敗，略過：%s", exc)
@@ -144,7 +155,7 @@ def geocode_candidates(candidates, connection, http_get=requests.get, limit=3,
 
 # OpenStreetMap 地址由小到大排列；路名以路、街、大道、段、巷、弄結尾，門牌如「12」「12-1」「7號」。
 ROAD_RE = re.compile(r"(路|街|大道|段|巷|弄)$")
-HOUSE_NUMBER_RE = re.compile(r"^\d+(-\d+)?號?$")
+HOUSE_NUMBER_RE = re.compile(r"^\d+(?:(?:-|之)\d+)?號?$")
 
 
 def format_place(display_address):

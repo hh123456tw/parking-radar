@@ -202,6 +202,32 @@ def test_split_groups_prioritizes_usable_lots_and_only_counts_avoid_lots():
     assert groups["excluded_count"] == 1
 
 
+def test_district_ties_keep_old_order_lower_pressure_first():
+    """行政區模式沒有距離、空位數相同時，沿用舊推薦分數：使用率較低的 B 排在 A 前。"""
+    ranked = rank_district_candidates([
+        {"lot_id": "A", "total_spaces": 100, "available_spaces": 20},
+        {"lot_id": "B", "total_spaces": 40, "available_spaces": 20},
+    ])
+
+    groups = split_recommendation_groups(ranked)
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == ["B", "A"]
+
+
+def test_equal_distance_address_ties_keep_old_order_lower_pressure_first():
+    """地址模式距離與空位數都相同時，同樣是使用率較低者在前，不受資料庫順序影響。"""
+    rows = [
+        {"lot_id": "A", "total_spaces": 100, "available_spaces": 20,
+         "latitude": 25.0330, "longitude": 121.5704},
+        {"lot_id": "B", "total_spaces": 40, "available_spaces": 20,
+         "latitude": 25.0330, "longitude": 121.5704},
+    ]
+
+    groups = split_recommendation_groups(rank_candidates(rows, 25.0330, 121.5654))
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == ["B", "A"]
+
+
 def test_recommendations_choose_safe_by_distance_before_backup():
     """首選先取低風險場站並按距離排序，不讓遠方高空位率壓過近場站。"""
     ranked = [

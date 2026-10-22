@@ -40,6 +40,14 @@ def test_format_place_keeps_lane_and_hyphenated_number():
         "name": "某某大樓", "address": "臺北市松山區八德路四段138巷12-1號"}
 
 
+def test_format_place_keeps_zhi_house_number():
+    """「12之1」門牌要原樣保留在整理後的地址，且不能被當成名稱。"""
+    display = "12之1, 八德路四段138巷, 松山區, 臺北市, 105, 臺灣"
+
+    assert format_place(display) == {
+        "name": None, "address": "臺北市松山區八德路四段138巷12之1號"}
+
+
 def test_format_place_name_ending_in_street_uses_the_later_road():
     """名稱剛好以「街」結尾時，第一段是名稱，後面那段才是路名。"""
     display = "台北地下街, 忠孝西路一段, 中正區, 臺北市, 100, 臺灣"

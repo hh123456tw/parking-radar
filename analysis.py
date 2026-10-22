@@ -161,8 +161,12 @@ def split_recommendation_groups(ranked):
         return (1, float("inf") if distance is None else float(distance))
 
     def distance_then_spaces(item):
-        """同風險優先選步行較近場站；相同時再選剩餘格數較多者。"""
-        return (*proximity_key(item), -int(item["available_spaces"]))
+        """同風險優先選步行較近場站；相同時再選剩餘格數較多者，最後沿用舊推薦分數的順序。"""
+        # 舊推薦分數 = 空位容易度 60% + 距離容易度 40%；這裡只當內部同分排序，不輸出。
+        distance = item.get("distance_m")
+        old_score_cost = 0.6 * float(item["hell_score"]) + (
+            0 if distance is None else 40 * min(float(distance), 1500) / 1500)
+        return (*proximity_key(item), -int(item["available_spaces"]), old_score_cost)
 
     safe = sorted(
         (row for row in explained if row["decision_status"] == "recommended"),
