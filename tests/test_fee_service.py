@@ -3,6 +3,8 @@
 import json
 from datetime import datetime
 
+import pytest
+
 from fee_service import build_fee_summary
 
 
@@ -324,3 +326,49 @@ def test_makeup_workday_uses_weekday_text_price():
 
     assert result["hourly_fee_label"] == "40 元／時"
     assert result["hourly_fee_value"] == 40
+
+
+def test_daily_cap_with_thousands_separator_keeps_full_amount():
+    """「每日最高1,200元」要讀成 1200 元，不能只讀到千分位前的 1。"""
+    result = build_fee_summary(
+        None, "小型車每小時60元，每日最高1,200元",
+        day(), "weekday")
+    assert result["daily_cap_label"] == "1200 元"
+
+
+def test_monthly_fee_after_daily_cap_does_not_hide_the_cap():
+    """上限金額後面才出現的月租，以及前一句的「每小時」，都不能讓每日上限消失。"""
+    result = build_fee_summary(
+        None, "小型車每小時40元，當日最高200元，月租4000元",
+        day(), "weekday")
+    assert result["daily_cap_label"] == "200 元"
+    assert result["hourly_fee_label"] == "40 元／時"
+
+
+def test_comma_between_clauses_is_not_a_thousands_separator():
+    """逗號後不是三位數時只是斷句，不能把「200,30」併成 20030。"""
+    result = build_fee_summary(
+        None, "小型車每小時40元，每日最高200,30分鐘內免費",
+        day(), "weekday")
+    assert result["daily_cap_label"] == "200 元"
+
+
+@pytest.mark.parametrize("text", ["小型車上限100元/次", "小型車上限100元／次",
+                                  "小型車上限 100 / 次", "小型車上限100元（每次）",
+                                  "小型車上限100元(每次)", "上限100元/每次"])
+def test_per_entry_amount_after_cap_word_is_not_a_daily_cap(text):
+    """「上限100元/次」是每次收費，不得當成每日上限。"""
+    assert build_fee_summary(None, text, day(), "weekday")["daily_cap_label"] == "官方未標示"
+
+
+def test_daily_cap_followed_by_hourly_rate_is_still_a_cap():
+    """上限金額後接「元/日」不是每次收費，不能被每次收費規則誤擋。"""
+    result = build_fee_summary(None, "小型車當日最高300元/日內有效", day(), "weekday")
+    assert result["daily_cap_label"] == "300 元"
+
+
+def test_per_entry_words_in_next_clause_do_not_hide_daily_cap():
+    """下一句才出現的「每次」「月租」屬於別的費用，不影響前一句的每日上限。"""
+    result = build_fee_summary(
+        None, "小型車當日最高200元，機械車位每次另收50元，月租4000元", day(), "weekday")
+    assert result["daily_cap_label"] == "200 元"

@@ -1,5 +1,6 @@
 """免費地址轉座標：先查 MySQL 快取，再以受限制的 Nominatim 請求補齊。"""
 
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -12,6 +13,9 @@ from database import get_cached_geocode, save_cached_geocode
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 _last_request_at = 0.0
+# 單一 gunicorn worker：候選查詢總時間超過這個秒數就不再開始新的查詢。
+CANDIDATE_DEADLINE_SECONDS = 8
+logger = logging.getLogger(__name__)
 
 # 期中專題只維護少量常見地標，避免發展成龐大的地標資料庫。
 LANDMARK_ALIASES = {
@@ -41,7 +45,7 @@ def nominatim_queries(address):
     normalized = normalize_address(address)
     match = re.match(
         r"^臺北市(?P<district>.+?區)(?:(?P<village>.+?里))?"
-        r"(?P<street>.+?)(?P<number>\d+(?:-\d+)?號)$",
+        r"(?P<street>.+?)(?P<number>\d+(?:(?:-|之)\d+)?號)$",
         normalized,
     )
     if not match:
@@ -66,8 +70,12 @@ def _respect_rate_limit():
     _last_request_at = time.monotonic()
 
 
-def geocode_address(address, connection, http_get=requests.get):
-    """回傳快取或第一筆臺北市座標；查無結果時回傳 None。"""
+def geocode_address(address, connection, http_get=requests.get, deadline=None):
+    """回傳快取或第一筆臺北市座標；查無結果時回傳 None。
+
+    deadline 是 time.monotonic() 的絕對時間；剩不到 0.5 秒就不再送出請求並丟出 Timeout，
+    每個請求的逾時也不超過剩餘時間。
+    """
     key = normalize_address(address)
     cached = get_cached_geocode(connection, key)
     if cached:
@@ -75,12 +83,20 @@ def geocode_address(address, connection, http_get=requests.get):
 
     for query in nominatim_queries(address):
         _respect_rate_limit()
+        timeout = Config.GEOCODER_TIMEOUT_SECONDS
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining < 0.5:
+                raise requests.Timeout("地址查詢已超過時間預算")
+            timeout = min(timeout, remaining)
+        # shortcut: deadline 只擋住新請求，timeout 只限制每次讀取的間隔而非總時間，
+        # Nominatim 回應小且快所以可接受；若改用會慢慢吐資料的上游再改成串流計時。
         response = http_get(
             NOMINATIM_URL,
             params={"q": query, "format": "jsonv2", "limit": 1,
                     "countrycodes": "tw"},
             headers={"User-Agent": Config.NOMINATIM_USER_AGENT},
-            timeout=Config.GEOCODER_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
         response.raise_for_status()
         items = response.json()
@@ -99,15 +115,26 @@ def geocode_address(address, connection, http_get=requests.get):
     return None
 
 
-def geocode_candidates(candidates, connection, http_get=requests.get, limit=3):
-    """驗證最多三個 Gemini 地址候選，排除查無資料與重複座標。"""
+def geocode_candidates(candidates, connection, http_get=requests.get, limit=3,
+                       deadline_seconds=CANDIDATE_DEADLINE_SECONDS):
+    """驗證最多三個 Gemini 地址候選，排除查無資料、查詢失敗與重複座標。"""
     verified = []
     seen_coordinates = set()
+    deadline = time.monotonic() + deadline_seconds
     for candidate in candidates[:limit]:
         address = (candidate.get("address") or "").strip()
         if not address:
             continue
-        result = geocode_address(address, connection, http_get=http_get)
+        if time.monotonic() >= deadline:
+            logger.warning("地址候選查詢超過 %s 秒，略過其餘候選", deadline_seconds)
+            break
+        try:
+            result = geocode_address(
+                address, connection, http_get=http_get, deadline=deadline)
+        except requests.RequestException as exc:
+            # 單一候選連線失敗只略過它，不讓整次查詢變成 503。
+            logger.warning("地址候選查詢失敗，略過：%s", exc)
+            continue
         if result is None:
             continue
         coordinate_key = (
@@ -128,9 +155,9 @@ def geocode_candidates(candidates, connection, http_get=requests.get, limit=3):
     return verified
 
 
-# OpenStreetMap 地址由小到大排列；路名以路、街、大道、段、巷、弄結尾，門牌為純數字或「12-1」。
+# OpenStreetMap 地址由小到大排列；路名以路、街、大道、段、巷、弄結尾，門牌如「12」「12-1」「7號」。
 ROAD_RE = re.compile(r"(路|街|大道|段|巷|弄)$")
-HOUSE_NUMBER_RE = re.compile(r"^\d+(-\d+)?$")
+HOUSE_NUMBER_RE = re.compile(r"^\d+(?:(?:-|之)\d+)?號?$")
 
 
 def format_place(display_address):
@@ -143,13 +170,18 @@ def format_place(display_address):
     if not parts:
         return {"name": None, "address": None}
     district = next((part for part in parts if part in TAIPEI_DISTRICTS), None)
-    road_index = next((index for index, part in enumerate(parts)
-                       if ROAD_RE.search(part)), None)
+    road_indexes = [index for index, part in enumerate(parts) if ROAD_RE.search(part)]
+    # 「台北地下街, 忠孝西路一段, …」第一段只是名稱剛好以「街」結尾，真正路名在後面；
+    # 但「八德路四段138巷, 八德路四段」的第一段是後面路名的巷弄延伸，本身就是路名。
+    if road_indexes[:1] == [0] and len(road_indexes) > 1 \
+            and not parts[0].startswith(parts[road_indexes[1]]):
+        road_indexes.pop(0)
+    road_index = road_indexes[0] if road_indexes else None
     road = parts[road_index] if road_index is not None else None
-    number = next((part for part in parts[:road_index or 0]
+    number = next((part.removesuffix("號") for part in parts[:road_index or 0]
                    if HOUSE_NUMBER_RE.match(part)), None)
     first = parts[0]
-    name = None if first in {road, number} else first
+    name = None if first == road or HOUSE_NUMBER_RE.match(first) else first
     if district is None and road is None:
         return {"name": first, "address": None}
     address = "臺北市" + (district or "") + (road or "") + (f"{number}號" if number else "")

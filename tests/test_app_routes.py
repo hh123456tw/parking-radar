@@ -1,7 +1,7 @@
 """Flask 路由整合測試：保留真實分析流程，只隔離 DB 與外部 API。"""
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 import pytest
@@ -139,7 +139,6 @@ def test_public_candidate_keeps_decision_card_fields():
         "decision_status": "recommended",
         "decision_label": "建議前往",
         "pressure_label": "低",
-        "recommendation_label": "高",
         "walking_distance_m": 430.2,
         "walking_duration_minutes": 5.2,
         "reasons": ["目前 20 / 100 格可停", "距目的地近，約 300 公尺"],
@@ -152,7 +151,7 @@ def test_public_candidate_keeps_decision_card_fields():
     assert result["decision_status"] == "recommended"
     assert result["decision_label"] == "建議前往"
     assert result["pressure_label"] == "低"
-    assert result["recommendation_label"] == "高"
+    assert "recommendation_label" not in result
     assert result["walking_distance_m"] == 430.2
     assert result["walking_duration_minutes"] == 5.2
     assert result["reasons"] == row["reasons"]
@@ -296,7 +295,6 @@ def test_query_enriches_every_result_with_local_decision_metadata(monkeypatch):
     # Reuse the route's existing database, geocoder, and ranking fakes.
     monkeypatch.setattr(database, "get_connection", CloseTrackingConnection)
     monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [lot_row()])
-    monkeypatch.setattr(query_service, "fetch_matching_history", lambda *_args: [])
     response = client.post("/api/query", json={
         "mode": "manual", "district": "中正區",
         "arrival_time": "2026-10-10T18:00:00+08:00",
@@ -338,7 +336,6 @@ def test_query_missing_calendar_file_uses_weekday_fallback(monkeypatch, tmp_path
     """行事曆檔案缺失時仍以本機規則分類抵達日，並標記 fallback 來源。"""
     monkeypatch.setattr(database, "get_connection", CloseTrackingConnection)
     monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [lot_row()])
-    monkeypatch.setattr(query_service, "fetch_matching_history", lambda *_args: [])
     monkeypatch.setattr(
         query_service, "classify_arrival_day",
         lambda arrival: classify_arrival_day(arrival, calendar_dir=tmp_path),
@@ -361,7 +358,6 @@ def test_query_malformed_fare_rules_shows_official_unknown(monkeypatch):
     row["fee_info"] = None
     monkeypatch.setattr(database, "get_connection", CloseTrackingConnection)
     monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [row])
-    monkeypatch.setattr(query_service, "fetch_matching_history", lambda *_args: [])
     monkeypatch.setattr(query_service, "classify_arrival_day", lambda _arrival: {
         "kind": "weekday", "label": "平日", "is_holiday": False,
         "source": "weekday_fallback"})
@@ -384,7 +380,6 @@ def test_query_null_facility_metadata_degrades_to_unknown_type(monkeypatch):
     row["facility_source"] = None
     monkeypatch.setattr(database, "get_connection", CloseTrackingConnection)
     monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [row])
-    monkeypatch.setattr(query_service, "fetch_matching_history", lambda *_args: [])
     monkeypatch.setattr(query_service, "classify_arrival_day", lambda _arrival: {
         "kind": "weekday", "label": "平日", "is_holiday": False,
         "source": "weekday_fallback"})
@@ -408,7 +403,6 @@ def test_query_path_makes_no_calendar_or_osm_network_calls(monkeypatch):
     monkeypatch.setattr(requests, "get", raise_get)
     monkeypatch.setattr(database, "get_connection", CloseTrackingConnection)
     monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [lot_row()])
-    monkeypatch.setattr(query_service, "fetch_matching_history", lambda *_args: [])
 
     response = make_client().post("/api/query", json={
         "mode": "manual", "district": "信義區",
@@ -419,12 +413,14 @@ def test_query_path_makes_no_calendar_or_osm_network_calls(monkeypatch):
     assert response.get_json()["recommendations"][0]["lot_id"] == "TPE1"
 
 
-def test_district_only_query_uses_real_history_and_district_ranking(monkeypatch):
-    """沒有地址時不得偽造距離，仍應完成行政區推薦。"""
+def test_district_only_query_uses_district_ranking_and_counts_valid_lots(monkeypatch):
+    """沒有地址時不得偽造距離，仍應完成行政區推薦；格數無效的場站不算進有效場站數。"""
     connection = CloseTrackingConnection()
+    invalid = lot_row()
+    invalid.update(lot_id="BAD", available_spaces=-9)
     monkeypatch.setattr(database, "get_connection", lambda: connection)
-    monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [lot_row()])
-    monkeypatch.setattr(query_service, "fetch_matching_history", lambda *_args: [])
+    monkeypatch.setattr(query_service, "fetch_current_lots",
+                        lambda *_args: [lot_row(), invalid])
 
     response = make_client().post("/api/query", json={
         "mode": "manual", "district": "信義區",
@@ -436,60 +432,8 @@ def test_district_only_query_uses_real_history_and_district_ranking(monkeypatch)
     assert body["destination"] is None
     assert body["recommendations"][0]["distance_m"] is None
     assert body["recommendations"][0]["lot_id"] == "TPE1"
+    assert body["current"]["valid_lot_count"] == 1
     assert connection.closed is True
-
-
-def test_regular_query_does_not_preload_history(monkeypatch):
-    """一般查詢只使用即時資料；歷史留給使用者點擊後的專用端點。"""
-    connection = CloseTrackingConnection()
-    monkeypatch.setattr(database, "get_connection", lambda: connection)
-    monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [lot_row()])
-    monkeypatch.setattr(
-        query_service,
-        "fetch_matching_history",
-        lambda *_args: (_ for _ in ()).throw(
-            AssertionError("一般查詢不應預先讀取歷史")
-        ),
-    )
-
-    response = make_client().post("/api/query", json={
-        "mode": "manual", "district": "信義區",
-        "arrival_time": "2026-08-04T18:00:00+08:00",
-    })
-
-    assert response.status_code == 200
-    assert response.get_json()["recommendations"][0]["lot_id"] == "TPE1"
-
-
-def test_history_intent_loads_history_for_only_three_candidates(monkeypatch):
-    """明確詢問歷史時保留分析，但只讀前三座，避免整區大量運算。"""
-    requested_lot_ids = []
-    requested_range = []
-    monkeypatch.setattr(database, "get_connection", CloseTrackingConnection)
-    monkeypatch.setattr(query_service, "parse_parking_query", lambda *_args: ParkingIntent(
-        intent="history", original_destination=None, address=None, district="信義區",
-        arrival_time="2026-08-04T18:00:00+08:00", missing_fields=[],
-    ))
-    rows = []
-    for index in range(4):
-        row = lot_row()
-        row["lot_id"] = f"TPE{index + 1}"
-        rows.append(row)
-    monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: rows)
-
-    def matching_history(_connection, lot_ids, start_utc, end_utc):
-        requested_lot_ids.extend(lot_ids)
-        requested_range.append(end_utc - start_utc)
-        return []
-
-    monkeypatch.setattr(query_service, "fetch_matching_history", matching_history)
-
-    response = make_client().post(
-        "/api/query", json={"mode": "chat", "message": "這區歷史上好停嗎？"})
-
-    assert response.status_code == 200
-    assert requested_lot_ids == ["TPE1", "TPE2", "TPE3"]
-    assert requested_range == [timedelta(days=7)]
 
 
 def test_query_reads_parking_data_from_connection_opened_after_refresh(monkeypatch):
@@ -516,7 +460,6 @@ def test_query_reads_parking_data_from_connection_opened_after_refresh(monkeypat
         return [row]
 
     monkeypatch.setattr(query_service, "fetch_current_lots", current_lots)
-    monkeypatch.setattr(query_service, "fetch_matching_history", lambda *_args: [])
     client = app_module.create_app({
         "TESTING": True, "SECRET_KEY": "test", "AUTO_REFRESH_ENABLED": True,
     }).test_client()
@@ -537,7 +480,6 @@ def test_query_returns_official_and_collection_times_in_taipei(monkeypatch):
     row["snapshot_updated_at"] = datetime(2026, 8, 3, 9, 55)
     monkeypatch.setattr(database, "get_connection", lambda: connection)
     monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [row])
-    monkeypatch.setattr(query_service, "fetch_matching_history", lambda *_args: [])
 
     response = make_client().post("/api/query", json={
         "mode": "manual", "district": "信義區",
@@ -557,7 +499,6 @@ def test_query_updated_at_treats_naive_database_time_as_utc(monkeypatch):
     monkeypatch.setattr(database, "get_connection", lambda: connection)
     monkeypatch.setattr(query_service, "fetch_current_lots",
                         lambda *_args: [lot_row(datetime(2026, 8, 3, 10))])
-    monkeypatch.setattr(query_service, "fetch_matching_history", lambda *_args: [])
 
     response = make_client().post("/api/query", json={
         "mode": "manual", "district": "信義區",
@@ -608,7 +549,6 @@ def test_chat_follow_up_receives_previous_session_context(monkeypatch):
     monkeypatch.setattr(query_service, "geocode_address", lambda *_args: {
         "display_address": "臺北市政府", "latitude": 25.0375, "longitude": 121.5637})
     monkeypatch.setattr(query_service, "fetch_current_lots", lambda *_args: [lot_row()])
-    monkeypatch.setattr(query_service, "fetch_matching_history", lambda *_args: [])
     client = make_client()
 
     first = client.post("/api/query", json={"mode": "chat", "message": "我要去臺北市政府"})
@@ -620,7 +560,9 @@ def test_chat_follow_up_receives_previous_session_context(monkeypatch):
     assert contexts[0] == {}
     assert contexts[1]["destination"] == "臺北市信義區市府路1號"
     assert contexts[1]["district"] == "信義區"
-    assert contexts[1]["lot_id"] == "TPE1"
+    # 抵達時間與首選場站不存進 session，也就不會送給 Gemini。
+    assert "lot_id" not in contexts[1]
+    assert "arrival_time" not in contexts[1]
 
 
 def test_chat_naive_arrival_time_is_rejected():
@@ -648,6 +590,10 @@ def test_chat_landmark_alias_replaces_gemini_district_guess():
 @pytest.mark.parametrize(("parsed", "expected"), [
     ({"original_destination": "資策會"}, True),
     ({"original_destination": "臺北市信義區市府路1號"}, False),
+    ({"original_destination": "八德路四段138巷 12-1號"}, False),
+    ({"original_destination": "八德路四段138巷12之1號"}, False),
+    # 出口編號不是門牌，仍要請使用者確認地點。
+    ({"original_destination": "捷運市政府站2號出口"}, True),
     ({"original_destination": "台北車站", "destination_label": "台北車站（北平西路3號）"},
      False),
 ])

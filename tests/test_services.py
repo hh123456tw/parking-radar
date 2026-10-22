@@ -3,6 +3,7 @@
 import json
 
 import pytest
+import requests
 
 import ai_service
 import geocoder
@@ -351,3 +352,101 @@ def test_gemini_context_never_carries_previous_arrival_time():
     assert "2026-10-03T18:00:00" not in contents
     assert "臺北市政府" in contents
     assert "「現在」「馬上」" in contents
+
+
+def test_geocode_candidates_skips_a_candidate_whose_request_times_out(monkeypatch):
+    """單一候選逾時只略過它；其他成功的候選照常回傳，不讓整次查詢失敗。"""
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
+    monkeypatch.setattr(geocoder, "save_cached_geocode", lambda *_args: None)
+    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
+
+    def fake_get(_url, **kwargs):
+        if "壞地址" in kwargs["params"]["q"]:
+            raise requests.Timeout("逾時")
+        return JsonResponse([{"display_name": "好地點, 信義區, 臺北市",
+                              "lat": "25.03", "lon": "121.56"}])
+
+    verified = geocoder.geocode_candidates([
+        {"name": "壞", "address": "壞地址", "district": "信義區"},
+        {"name": "好", "address": "好地址", "district": "信義區"},
+    ], CommitConnection(), http_get=fake_get)
+
+    assert [row["name"] for row in verified] == ["好"]
+
+
+def test_geocode_candidates_stops_starting_lookups_after_deadline(monkeypatch):
+    """總時間超過期限後不再查下一個候選，避免單一 worker 卡住數十秒。"""
+    looked_up = []
+    clock = iter([0.0, 0.0, 9.0])
+    monkeypatch.setattr(geocoder.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(geocoder, "geocode_address", lambda address, *_a, **_k: (
+        looked_up.append(address) or {"display_address": address,
+                                      "latitude": 25.0, "longitude": 121.5}))
+
+    verified = geocoder.geocode_candidates([
+        {"name": "A", "address": "地址A"}, {"name": "B", "address": "地址B"},
+    ], object(), deadline_seconds=8)
+
+    assert looked_up == ["地址A"]
+    assert [row["name"] for row in verified] == ["A"]
+
+
+class FakeClock:
+    """可手動推進的 time.monotonic；限速等待用 advance 模擬睡了一秒。"""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+def test_candidate_started_near_deadline_sends_no_request_after_rate_limit(monkeypatch):
+    """7.9 秒才開始的候選，限速睡一秒後已超過預算，不能再送出 4 秒逾時的請求。"""
+    clock = FakeClock()
+    requested = []
+    monkeypatch.setattr(geocoder.time, "monotonic", clock)
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
+    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: clock.advance(1.0))
+
+    def fake_get(_url, **kwargs):
+        requested.append(kwargs["timeout"])
+        clock.advance(7.9)
+        return JsonResponse([])
+
+    verified = geocoder.geocode_candidates([
+        {"name": "A", "address": "地址A"}, {"name": "B", "address": "地址B"},
+    ], object(), http_get=fake_get, deadline_seconds=8)
+
+    # 地址A：限速後剩 7 秒，逾時取 4 秒上限；地址B 開始時已用 8.9 秒，不再送出。
+    assert requested == [4]
+    assert verified == []
+
+
+def test_request_timeout_is_capped_to_remaining_budget(monkeypatch):
+    """剩餘預算少於固定逾時時，請求逾時要縮短到剩餘秒數；不足 0.5 秒則不送出。"""
+    clock = FakeClock()
+    requested = []
+    monkeypatch.setattr(geocoder.time, "monotonic", clock)
+    monkeypatch.setattr(geocoder, "get_cached_geocode", lambda *_args: None)
+    monkeypatch.setattr(geocoder, "_respect_rate_limit", lambda: None)
+
+    def fake_get(_url, **kwargs):
+        requested.append(kwargs["timeout"])
+        return JsonResponse([])
+
+    geocoder.geocode_address("地址", object(), http_get=fake_get, deadline=2.0)
+    assert requested == [2.0]
+
+    with pytest.raises(requests.Timeout):
+        geocoder.geocode_address("地址", object(), http_get=fake_get, deadline=0.3)
+    assert requested == [2.0]
+
+
+def test_nominatim_queries_keep_zhi_house_number():
+    """「12之1號」也是完整門牌，要拆成門牌、路名順序查詢。"""
+    assert geocoder.nominatim_queries("臺北市松山區八德路四段138巷12之1號")[0] == \
+        "12之1, 八德路四段138巷, 松山區, 臺北市"

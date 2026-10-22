@@ -1,5 +1,6 @@
-"""停車分析純函式測試：驗證清洗、分數、距離、排行與歷史統計。"""
+"""停車分析純函式測試：驗證清洗、分數、距離、推薦分組與歷史折線。"""
 
+import math
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -9,18 +10,14 @@ import analysis
 from analysis import (
     build_history_series,
     clean_available,
-    distance_ease,
     district_hell_score,
     haversine_m,
     hell_label,
     hell_score,
     rank_candidates,
     rank_district_candidates,
-    recommendation_score,
     select_walking_candidates,
     split_recommendation_groups,
-    summarize_hour_comparison,
-    summarize_matching_history,
 )
 from config import Config
 
@@ -35,12 +32,11 @@ def history_row(local_day, hour, available):
     }
 
 
-def candidate(lot_id, available, latitude=25.0330, longitude=121.5654, history=None):
+def candidate(lot_id, available, latitude=25.0330, longitude=121.5654):
     """建立排名測試使用的完整候選場站。"""
     return {
         "lot_id": lot_id, "total_spaces": 100, "available_spaces": available,
         "latitude": latitude, "longitude": longitude,
-        "historical_hell_score": history,
     }
 
 
@@ -48,9 +44,7 @@ def decision_row(**overrides):
     """建立決策說明測試所需的完整候選停車場。"""
     row = {
         "lot_id": "SAFE", "total_spaces": 20, "available_spaces": 20,
-        "hell_score": 0.0, "recommendation_score": 91.66,
-        "distance_m": 312.5, "historical_hell_score": None,
-        "history_sample_count": 1,
+        "hell_score": 0.0, "distance_m": 312.5,
     }
     row.update(overrides)
     return row
@@ -62,11 +56,9 @@ def test_explain_candidate_translates_scores_into_reasons():
     assert result["decision_status"] == "recommended"
     assert result["decision_label"] == "可以前往"
     assert result["pressure_label"] == "低"
-    assert result["recommendation_label"] == "高"
     assert result["reasons"] == [
         "目前仍有 20 格（共 20 格），空位數充足",
         "距目的地近，約 312 公尺",
-        "歷史樣本不足，未納入判斷",
     ]
 
 
@@ -89,9 +81,9 @@ def test_decision_groups_are_mutually_exclusive():
     ranked = [
         decision_row(lot_id="SAFE"),
         decision_row(lot_id="WARN", total_spaces=50, available_spaces=5,
-                     hell_score=90.0, recommendation_score=70.0),
+                     hell_score=90.0),
         decision_row(lot_id="AVOID", total_spaces=8, available_spaces=1,
-                     hell_score=87.5, recommendation_score=40.0),
+                     hell_score=87.5),
     ]
 
     groups = analysis.split_recommendation_groups(ranked)
@@ -120,7 +112,7 @@ def test_decision_uses_available_count_and_ratio(available, total, status):
     score = hell_score(total, available)
     result = analysis.explain_candidate(decision_row(
         total_spaces=total, available_spaces=available,
-        hell_score=score, recommendation_score=50.0))
+        hell_score=score))
 
     assert result["decision_status"] == status
     if available == 148:
@@ -179,23 +171,14 @@ def test_haversine_and_radius_filter():
     assert [row["lot_id"] for row in ranked] == ["near"]
 
 
-def test_recommendation_weights_and_distance_boundaries():
-    """有無歷史使用不同權重，距離容易度限制在 0 到 100。"""
-    assert recommendation_score(80, 750, 60) == 33.0
-    assert recommendation_score(80, 750, None) == 32.0
-    assert distance_ease(-10) == 100.0
-    assert distance_ease(1500) == 0.0
-    assert distance_ease(2000) == 0.0
-
-
-def test_district_ranking_uses_history_and_excludes_invalid_rows():
-    """行政區模式不偽造距離，並讓歷史容易度參與排序。"""
+def test_district_ranking_does_not_fake_distance_and_excludes_invalid_rows():
+    """行政區模式不偽造距離，無效格數不列入；與改版前相同，空位容易度高者在前。"""
     ranked = rank_district_candidates([
-        candidate("history-good", 20, history=20),
-        candidate("history-bad", 20, history=90),
+        candidate("first", 20),
+        candidate("second", 50),
         candidate("invalid", -9),
     ])
-    assert [row["lot_id"] for row in ranked] == ["history-good", "history-bad"]
+    assert [row["lot_id"] for row in ranked] == ["second", "first"]
     assert ranked[0]["distance_m"] is None
 
 
@@ -203,13 +186,13 @@ def test_split_groups_prioritizes_usable_lots_and_only_counts_avoid_lots():
     """自用結果優先列出可前往場站，避雷場站只保留排除數量。"""
     ranked = [
         {"lot_id": "safe", "total_spaces": 100, "distance_m": 800, "hell_score": 50,
-         "available_spaces": 50, "recommendation_score": 80.0},
+         "available_spaces": 50},
         {"lot_id": "warning", "total_spaces": 100, "distance_m": 200, "hell_score": 90,
-         "available_spaces": 10, "recommendation_score": 70.0},
+         "available_spaces": 10},
         {"lot_id": "avoid", "total_spaces": 100, "distance_m": 300, "hell_score": 97,
-         "available_spaces": 2, "recommendation_score": 40.0},
+         "available_spaces": 2},
         {"lot_id": "district", "total_spaces": 100, "distance_m": None, "hell_score": 40,
-         "available_spaces": 60, "recommendation_score": 75.0},
+         "available_spaces": 60},
     ]
     groups = split_recommendation_groups(ranked)
     assert [row["lot_id"] for row in groups["recommendations"]] == [
@@ -220,17 +203,87 @@ def test_split_groups_prioritizes_usable_lots_and_only_counts_avoid_lots():
     assert groups["excluded_count"] == 1
 
 
+def test_district_ties_keep_old_order_lower_pressure_first():
+    """行政區模式沒有距離、空位數相同時，沿用舊推薦分數：使用率較低的 B 排在 A 前。"""
+    ranked = rank_district_candidates([
+        {"lot_id": "A", "total_spaces": 100, "available_spaces": 20},
+        {"lot_id": "B", "total_spaces": 40, "available_spaces": 20},
+    ])
+
+    groups = split_recommendation_groups(ranked)
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == ["B", "A"]
+
+
+def test_equal_distance_address_ties_keep_old_order_lower_pressure_first():
+    """地址模式距離與空位數都相同時，同樣是使用率較低者在前，不受資料庫順序影響。"""
+    rows = [
+        {"lot_id": "A", "total_spaces": 100, "available_spaces": 20,
+         "latitude": 25.0330, "longitude": 121.5704},
+        {"lot_id": "B", "total_spaces": 40, "available_spaces": 20,
+         "latitude": 25.0330, "longitude": 121.5704},
+    ]
+
+    groups = split_recommendation_groups(rank_candidates(rows, 25.0330, 121.5654))
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == ["B", "A"]
+
+
+def test_walking_slots_on_distance_tie_match_pre_change_order():
+    """沿用移除推薦分數前的行為：第 15、16 座直線距離相同時，路線名額給舊分數較高
+    （空位較多）的 Y，而不是資料庫順序在前的 X。"""
+    rows = [
+        {"lot_id": f"near-{k}", "total_spaces": 100, "available_spaces": 50,
+         "latitude": 25.0330, "longitude": 121.5654 + k * 0.0005}
+        for k in range(1, 15)
+    ]
+    rows += [
+        {"lot_id": "X", "total_spaces": 100, "available_spaces": 20,
+         "latitude": 25.0330, "longitude": 121.5754},
+        {"lot_id": "Y", "total_spaces": 100, "available_spaces": 60,
+         "latitude": 25.0330, "longitude": 121.5754},
+    ]
+
+    selected = select_walking_candidates(rank_candidates(rows, 25.0330, 121.5654), limit=15)
+
+    ids = [row["lot_id"] for row in selected]
+    assert "Y" in ids
+    assert "X" not in ids
+
+
+def test_two_step_rounding_tie_keeps_database_order_like_before():
+    """沿用移除推薦分數前的行為：A 100.0 公尺、B 100.1 公尺，舊分數兩次四捨五入後同為
+    49.33，步行與空位也相同，所以維持資料庫順序 B、A，不能因直線距離差 0.1 公尺換位。"""
+    def north(meters):
+        return 25.0330 + math.degrees(meters / 6_371_000)
+
+    rows = [
+        {"lot_id": "B", "total_spaces": 100, "available_spaces": 20,
+         "latitude": north(100.1), "longitude": 121.5654},
+        {"lot_id": "A", "total_spaces": 100, "available_spaces": 20,
+         "latitude": north(100.0), "longitude": 121.5654},
+    ]
+    ranked = rank_candidates(rows, 25.0330, 121.5654)
+    for row in ranked:
+        row.update(walking_distance_m=400, walking_duration_minutes=5)
+
+    groups = split_recommendation_groups(ranked)
+
+    assert [row["lot_id"] for row in groups["recommendations"]] == ["B", "A"]
+    assert "recommendation_score" not in groups["recommendations"][0]
+
+
 def test_recommendations_choose_safe_by_distance_before_backup():
     """首選先取低風險場站並按距離排序，不讓遠方高空位率壓過近場站。"""
     ranked = [
         decision_row(lot_id="far-safe", available_spaces=80, total_spaces=100,
-                     distance_m=900, hell_score=20, recommendation_score=90),
+                     distance_m=900, hell_score=20),
         decision_row(lot_id="near-safe", available_spaces=20, total_spaces=100,
-                     distance_m=200, hell_score=80, recommendation_score=40),
+                     distance_m=200, hell_score=80),
         decision_row(lot_id="middle-safe", available_spaces=30, total_spaces=100,
-                     distance_m=500, hell_score=70, recommendation_score=60),
+                     distance_m=500, hell_score=70),
         decision_row(lot_id="nearest-backup", available_spaces=8, total_spaces=100,
-                     distance_m=100, hell_score=92, recommendation_score=80),
+                     distance_m=100, hell_score=92),
     ]
 
     groups = split_recommendation_groups(ranked)
@@ -350,28 +403,6 @@ def test_walking_route_candidates_fill_unused_slots_with_backups_not_avoid():
     selected = select_walking_candidates([avoid, warning, safe], limit=15)
 
     assert [row["lot_id"] for row in selected] == ["safe", "warning"]
-
-
-def test_history_requires_three_same_day_type_and_hour_samples():
-    """同日別與同小時至少三筆才顯示歷史分數。"""
-    arrival = datetime(2026, 8, 8, 18, tzinfo=ZoneInfo("Asia/Taipei"))
-    insufficient = [history_row(1, 18, 10), history_row(2, 18, 20)]
-    assert summarize_matching_history(insufficient, arrival)["hell_score"] is None
-    enough = insufficient + [history_row(8, 18, 30)]
-    assert summarize_matching_history(enough, arrival) == {
-        "hell_score": 80.0, "sample_count": 3, "day_type": "weekend", "hour": 18}
-
-
-def test_empty_history_and_weekday_weekend_comparison():
-    """空歷史回傳零樣本；比較時兩組各自套用三筆門檻。"""
-    arrival = datetime(2026, 8, 8, 18, tzinfo=ZoneInfo("Asia/Taipei"))
-    assert summarize_matching_history([], arrival) == {
-        "hell_score": None, "sample_count": 0, "day_type": "weekend", "hour": 18}
-    rows = [history_row(day, 18, 50) for day in (3, 4, 5)]
-    rows += [history_row(day, 18, 20) for day in (1, 2, 8)]
-    comparison = summarize_hour_comparison(rows, 18)
-    assert comparison["weekday"] == {"hell_score": 50.0, "sample_count": 3}
-    assert comparison["weekend"] == {"hell_score": 80.0, "sample_count": 3}
 
 
 def test_history_series_converts_naive_utc_and_skips_invalid_rows():

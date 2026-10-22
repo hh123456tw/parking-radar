@@ -59,8 +59,6 @@ def make_analytics_app(monkeypatch, **config):
     monkeypatch.setattr(
         query_service, "fetch_current_lots", lambda *_args: [lot_row()])
     monkeypatch.setattr(
-        query_service, "fetch_matching_history", lambda *_args: [])
-    monkeypatch.setattr(
         query_service, "geocode_address", lambda *_args: {
             "display_address": "臺北市政府", "latitude": 25.0375,
             "longitude": 121.5637,
@@ -278,8 +276,7 @@ def test_no_candidates_query_keeps_200_empty_groups_contract(monkeypatch):
         assert body[group] == []
     assert body["recommended_count"] == 0
     assert body["excluded_count"] == 0
-    assert body["history"] == {
-        "hell_score": None, "sample_count": 0, "comparison": None}
+    assert "history" not in body
     assert body["data_status"] == "fresh"
 
 

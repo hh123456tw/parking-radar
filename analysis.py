@@ -1,11 +1,8 @@
-"""純分析函式：負責清洗、地獄指數、距離、推薦與歷史統計。"""
+"""純分析函式：負責清洗、地獄指數、距離、推薦分組與歷史折線資料。"""
 
-import statistics
-from datetime import datetime, timezone
+from datetime import timezone
 from math import asin, cos, radians, sin, sqrt
 from zoneinfo import ZoneInfo
-
-import pandas as pd
 
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 
@@ -65,24 +62,20 @@ def haversine_m(lat1, lon1, lat2, lon2):
     return earth_radius_m * 2 * asin(sqrt(value))
 
 
-def distance_ease(distance_m, radius_m=1500):
-    """把 0 到搜尋半徑的距離線性轉成 100 到 0 的容易度。"""
-    return round(max(0.0, min(100.0, 100 * (1 - distance_m / radius_m))), 2)
+def _legacy_score(current_hell, distance_m=None, radius_m=1500):
+    """舊推薦分數（不輸出），只用來讓同分場站維持原本順序；公式與兩次 round() 照舊。
 
-
-def recommendation_score(current_hell, distance_m, historical_hell=None, radius_m=1500):
-    """依歷史樣本是否存在，套用鎖定的 50/30/20 或 60/40 權重。"""
+    沒有歷史樣本時舊版用 60/40；行政區模式沒有距離時就是空位容易度本身。
+    """
     current_ease = 100 - current_hell
-    nearby_ease = distance_ease(distance_m, radius_m)
-    if historical_hell is None:
-        score = current_ease * 0.6 + nearby_ease * 0.4
-    else:
-        score = current_ease * 0.5 + nearby_ease * 0.3 + (100 - historical_hell) * 0.2
-    return round(score, 2)
+    if distance_m is None:
+        return round(current_ease, 2)
+    nearby_ease = round(max(0.0, min(100.0, 100 * (1 - distance_m / radius_m))), 2)
+    return round(current_ease * 0.6 + nearby_ease * 0.4, 2)
 
 
 def rank_candidates(rows, destination_lat, destination_lon, radius_m=1500):
-    """排除無效或超出半徑的場站，加入分析欄位並依推薦分數排序。"""
+    """排除無效或超出半徑的場站並加入分析欄位，依舊推薦分數穩定排序以保留同分順序。"""
     candidates = []
     for row in rows:
         if clean_available(row.get("total_spaces"), row.get("available_spaces")) is None:
@@ -96,11 +89,10 @@ def rank_candidates(rows, destination_lat, destination_lon, radius_m=1500):
         item["distance_m"] = round(distance, 1)
         item["hell_score"] = hell_score(row["total_spaces"], row["available_spaces"])
         item["hell_label"] = hell_label(item["hell_score"])
-        item["recommendation_score"] = recommendation_score(
-            item["hell_score"], distance, row.get("historical_hell_score"), radius_m
-        )
-        candidates.append(item)
-    return sorted(candidates, key=lambda item: item["recommendation_score"], reverse=True)
+        candidates.append((_legacy_score(item["hell_score"], distance, radius_m), item))
+    # 後續 split_recommendation_groups 與 select_walking_candidates 都是穩定排序，
+    # 同分時沿用這裡的順序，結果才與移除推薦分數前完全相同。
+    return [item for _, item in sorted(candidates, key=lambda pair: pair[0], reverse=True)]
 
 
 def _pressure_label(score):
@@ -114,22 +106,12 @@ def _pressure_label(score):
     return "低"
 
 
-def _recommendation_label(score):
-    """把綜合推薦分數翻譯成高、中、低。"""
-    if score >= 80:
-        return "高"
-    if score >= 60:
-        return "中"
-    return "低"
-
-
-def explain_candidate(row, min_history_samples=3):
+def explain_candidate(row):
     """用固定規則產生決策狀態與最多三條白話原因。"""
     item = dict(row)
     available = int(item["available_spaces"])
     total = int(item["total_spaces"])
     pressure = float(item["hell_score"])
-    recommendation = float(item["recommendation_score"])
     free_ratio = available / total
 
     if available <= 3:
@@ -165,25 +147,17 @@ def explain_candidate(row, min_history_samples=3):
     else:
         distance_reason = f"距目的地較遠，約 {distance / 1000:.1f} 公里"
 
+    reasons = [availability_reason, distance_reason]
     if status == "avoid":
-        final_reason = "建議改看推薦前往清單"
+        reasons.append("建議改看推薦前往清單")
     elif status == "warning":
-        final_reason = "建議保留下一個選擇"
-    elif (item.get("history_sample_count") or 0) < min_history_samples:
-        final_reason = "歷史樣本不足，未納入判斷"
-    else:
-        historical = item.get("historical_hell_score")
-        final_reason = (
-            f"相同時段歷史停車壓力約 {round(historical)} 分"
-            if historical is not None else "歷史樣本不足，未納入判斷"
-        )
+        reasons.append("建議保留下一個選擇")
 
     item.update(
         decision_status=status,
         decision_label=label,
         pressure_label=_pressure_label(pressure),
-        recommendation_label=_recommendation_label(recommendation),
-        reasons=[availability_reason, distance_reason, final_reason],
+        reasons=reasons,
     )
     return item
 
@@ -201,7 +175,7 @@ def split_recommendation_groups(ranked):
         return (1, float("inf") if distance is None else float(distance))
 
     def distance_then_spaces(item):
-        """同風險優先選步行較近場站；相同時再選剩餘格數較多者。"""
+        """同風險優先選步行較近場站；相同時再選剩餘格數較多者，再相同則保留 rank_* 的順序。"""
         return (*proximity_key(item), -int(item["available_spaces"]))
 
     safe = sorted(
@@ -247,63 +221,15 @@ def select_walking_candidates(ranked, limit=15):
 
 
 def rank_district_candidates(rows):
-    """手動行政區模式不計距離，只依即時 80% 與歷史 20% 排序。"""
+    """手動行政區模式不計距離，只保留有效場站，依舊推薦分數穩定排序。"""
     ranked = []
     for row in rows:
         current = hell_score(row["total_spaces"], row["available_spaces"])
         if current is None:
             continue
-        historical = row.get("historical_hell_score")
-        score = (100 - current) if historical is None else (
-            (100 - current) * 0.8 + (100 - historical) * 0.2)
-        item = dict(row, distance_m=None, hell_score=current,
-                    hell_label=hell_label(current), recommendation_score=round(score, 2))
-        ranked.append(item)
-    return sorted(ranked, key=lambda item: item["recommendation_score"], reverse=True)
-
-
-def day_type(local_dt):
-    """星期一至五回傳 weekday，星期六日回傳 weekend。"""
-    return "weekday" if local_dt.weekday() < 5 else "weekend"
-
-
-def summarize_matching_history(rows, arrival_time, min_samples=3):
-    """計算與抵達時間同日別、同整點小時的平均地獄指數。"""
-    local_arrival = arrival_time.astimezone(TAIPEI_TZ)
-    target_type = day_type(local_arrival)
-    target_hour = local_arrival.hour
-    frame = pd.DataFrame(rows)
-    if frame.empty:
-        return {"hell_score": None, "sample_count": 0,
-                "day_type": target_type, "hour": target_hour}
-    frame["local_time"] = pd.to_datetime(
-        frame["captured_at"], utc=True).dt.tz_convert("Asia/Taipei")
-    frame["day_type"] = frame["local_time"].dt.weekday.map(
-        lambda value: "weekday" if value < 5 else "weekend")
-    frame["hour"] = frame["local_time"].dt.hour
-    frame["hell_score"] = frame.apply(
-        lambda row: hell_score(row["total_spaces"], row["available_spaces"]), axis=1)
-    matched = frame[(frame["day_type"] == target_type) &
-                    (frame["hour"] == target_hour)]["hell_score"].dropna()
-    result = {"hell_score": None, "sample_count": int(len(matched)),
-              "day_type": target_type, "hour": target_hour}
-    if len(matched) >= min_samples:
-        result["hell_score"] = round(float(matched.mean()), 2)
-    return result
-
-
-def summarize_hour_comparison(rows, hour, min_samples=3):
-    """比較指定整點的平日與週末平均分數；各組都獨立套用三筆門檻。"""
-    results = {kind: {"hell_score": None, "sample_count": 0}
-               for kind in ("weekday", "weekend")}
-    for kind, target in (
-        ("weekday", datetime(2024, 1, 1, hour, tzinfo=TAIPEI_TZ)),
-        ("weekend", datetime(2024, 1, 6, hour, tzinfo=TAIPEI_TZ)),
-    ):
-        summary = summarize_matching_history(rows, target, min_samples)
-        results[kind] = {"hell_score": summary["hell_score"],
-                         "sample_count": summary["sample_count"]}
-    return results
+        ranked.append(dict(row, distance_m=None, hell_score=current,
+                           hell_label=hell_label(current)))
+    return sorted(ranked, key=lambda item: _legacy_score(item["hell_score"]), reverse=True)
 
 
 def build_history_series(rows):
@@ -321,46 +247,3 @@ def build_history_series(rows):
             "available_spaces": int(row["available_spaces"]),
         })
     return points
-
-
-def _minutes_apart(first, second):
-    """兩個一天內時刻的分鐘差，跨午夜時取較短的一邊。"""
-    gap = abs((first.hour * 60 + first.minute) - (second.hour * 60 + second.minute))
-    return min(gap, 24 * 60 - gap)
-
-
-def estimate_arrival_availability(rows, arrival_time, day_group_of, *,
-                                  window_minutes=30, min_samples=8, min_days=2):
-    """以同日別、抵達時刻前後 window_minutes 的歷史空位估計抵達時的常見狀況。
-
-    day_group_of(date) 回傳 "weekday" 或 "weekend"，由呼叫端依臺灣行事曆決定，
-    國定假日因此歸入假日組。樣本少於 min_samples 筆或不足 min_days 天時不給數字，
-    避免單一天的偶然狀況誤導使用者。
-    """
-    local_arrival = arrival_time.astimezone(TAIPEI_TZ)
-    target_group = day_group_of(local_arrival.date())
-    base = {"day_group": target_group,
-            "time_label": local_arrival.strftime("%H:%M")}
-    values = []
-    days = set()
-    for row in rows:
-        available = clean_available(row.get("total_spaces"), row.get("available_spaces"))
-        if available is None:
-            continue
-        captured = row["captured_at"]
-        if captured.tzinfo is None:
-            captured = captured.replace(tzinfo=timezone.utc)
-        local = captured.astimezone(TAIPEI_TZ)
-        if _minutes_apart(local, local_arrival) > window_minutes:
-            continue
-        if day_group_of(local.date()) != target_group:
-            continue
-        values.append(available)
-        days.add(local.date())
-    if len(values) < min_samples or len(days) < min_days:
-        return {**base, "status": "insufficient", "sample_count": len(values),
-                "day_count": len(days)}
-    low, _, high = statistics.quantiles(values, n=4, method="inclusive")
-    return {**base, "status": "ok", "sample_count": len(values),
-            "day_count": len(days), "median": round(statistics.median(values)),
-            "low": round(low), "high": round(high)}
