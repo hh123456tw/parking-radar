@@ -21,7 +21,11 @@ from analytics_capture import infer_destination_district
 from calendar_service import classify_arrival_day
 from collector import collect_once
 from config import Config
-from database import fetch_current_lots, fetch_latest_snapshot_time
+from database import (
+    fetch_collector_heartbeat,
+    fetch_current_lots,
+    fetch_latest_snapshot_time,
+)
 from fee_service import build_fee_summary
 from geocoder import format_place, geocode_address, geocode_candidates, resolve_known_landmark
 from walking_service import WalkingRouteError, fetch_walking_routes
@@ -151,6 +155,16 @@ def ensure_fresh_parking_data(now=None):
             return "fresh", None
         if latest is not None:
             return "stale", f"資料更新排程尚未完成，目前顯示 {age} 分鐘前資料"
+        # 排程 collector 近期仍成功卻沒有快照，代表官方資料凍結；不在查詢路徑重複下載。
+        connection = database.get_connection()
+        try:
+            heartbeat = fetch_collector_heartbeat(connection)
+        finally:
+            connection.close()
+        heartbeat_age = snapshot_age_minutes(heartbeat, now)
+        if heartbeat_age is not None and heartbeat_age <= 60:
+            raise ParkingDataUnavailable(
+                "官方停車資料暫停更新，請稍後等待排程更新")
         try:
             collect_once(timeout=Config.ON_DEMAND_FETCH_TIMEOUT_SECONDS)
             refreshed = _latest_snapshot_time()

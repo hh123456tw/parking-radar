@@ -2,14 +2,20 @@
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
 
 from analysis import clean_available
-from database import get_connection, insert_snapshots, upsert_parking_lots
+from database import (
+    get_connection,
+    insert_snapshots,
+    upsert_collector_heartbeat,
+    upsert_parking_lots,
+)
 from parking_metadata import infer_official_facility_type
+from snapshot_cleanup import SNAPSHOT_RETENTION_DAYS
 
 STATIC_URL = "https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_alldesc.json"
 DYNAMIC_URL = "https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_allavailable.json"
@@ -60,9 +66,12 @@ def parse_static(payload, realtime_ids):
         facility_type, facility_source = infer_official_facility_type(
             raw.get("name", ""), raw.get("summary", ""))
         lots.append({
-            "lot_id": str(raw["id"]), "lot_name": raw.get("name", "未命名停車場"),
-            "district": raw.get("area", "未知"), "address": raw.get("address", ""),
-            "operator_type": raw.get("type2", "未標示"),
+            # 依 schema.sql 欄位長度截斷，單一過長官方值不致讓整批交易回滾。
+            "lot_id": str(raw["id"]),
+            "lot_name": (raw.get("name") or "未命名停車場")[:120],
+            "district": (raw.get("area") or "未知")[:20],
+            "address": (raw.get("address") or "")[:255],
+            "operator_type": (raw.get("type2") or "未標示")[:40],
             # 無法解析的總格數記為 0，後續 clean_available 會排除該場站。
             "total_spaces": _to_int(raw.get("totalcar")) or 0,
             "fee_info": raw.get("payex", ""), "service_time": raw.get("serviceTime", ""),
@@ -116,12 +125,17 @@ def collect_once(timeout=15):
     realtime_ids = {str(row["id"]) for row in dynamic_payload["data"]["park"]}
     lots = parse_static(static_payload, realtime_ids)
     totals = {row["lot_id"]: row["total_spaces"] for row in lots}
+    # 官方時間已超過保留期的快照隔天就會被清理，寫入只會讓凍結資料看似新收集。
+    retention_cutoff = captured_at - timedelta(days=SNAPSHOT_RETENTION_DAYS)
     snapshots = [row for row in raw_snapshots
-                 if clean_available(totals.get(row["lot_id"]), row["available_spaces"]) is not None]
+                 if row["source_updated_at"] >= retention_cutoff
+                 and clean_available(totals.get(row["lot_id"]),
+                                     row["available_spaces"]) is not None]
     connection = get_connection()
     try:
         upsert_parking_lots(connection, lots)
         inserted = insert_snapshots(connection, snapshots)
+        upsert_collector_heartbeat(connection, captured_at)
         connection.commit()
         return {"lots": len(lots), "snapshots": inserted}
     except Exception:
