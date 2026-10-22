@@ -142,7 +142,7 @@ def geocode_candidates(candidates, connection, http_get=requests.get, limit=3,
     return verified
 
 
-# OpenStreetMap 地址由小到大排列；路名以路、街、大道、段、巷、弄結尾，門牌為「12」「12-1」或「7號」。
+# OpenStreetMap 地址由小到大排列；路名以路、街、大道、段、巷、弄結尾，門牌如「12」「12-1」「7號」。
 ROAD_RE = re.compile(r"(路|街|大道|段|巷|弄)$")
 HOUSE_NUMBER_RE = re.compile(r"^\d+(-\d+)?號?$")
 
