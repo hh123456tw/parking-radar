@@ -117,6 +117,15 @@ def sample_lot():
     }
 
 
+
+@pytest.fixture(autouse=True)
+def json_feed_only(monkeypatch):
+    """這些測試只驗證 JSON 路徑；XML 下載一律失敗，避免測試連到真實網路。"""
+    def no_xml(*_args, **_kwargs):
+        raise ConnectionError("XML 在此測試中不可用")
+    monkeypatch.setattr(collector, "fetch_xml", no_xml)
+
+
 def test_get_connection_uses_locked_mysql_options(monkeypatch):
     """連線必須使用 DictCursor、utf8mb4 與手動交易。"""
     captured = {}
