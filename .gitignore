@@ -17,3 +17,4 @@ deploy-artifacts/
 output/
 data/calendar/*.json
 data/calendar/*.tmp
+.claude/worktrees/
